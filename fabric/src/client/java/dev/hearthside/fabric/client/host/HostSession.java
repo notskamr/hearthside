@@ -355,7 +355,8 @@ public final class HostSession {
 			return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, false, "rejected", ""), null);
 		}
 		UUID guest = GuestUuids.forProfile(slot.profile.id());
-		return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, true, "", tokens.issue(guest)),
+		String token = tokens.issue(guest);
+		return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, true, "", token),
 				connection -> {
 					slot.connection = connection;
 					connection.onMessage(message -> {
@@ -377,7 +378,7 @@ public final class HostSession {
 					HostInput currentInput = input;
 					send(connection, new ControlMessage.SetPadStyle(
 							currentInput == null ? PadStyle.GENERIC : currentInput.styleFor(slot.index)));
-					send(connection, new ControlMessage.JoinWorld(gamePort));
+					send(connection, new ControlMessage.JoinWorld(gamePort, token, slot.profile.name()));
 					minecraft.execute(this::afterGuestsChanged);
 				});
 	}

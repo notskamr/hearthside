@@ -109,9 +109,11 @@ public final class SatelliteBoot {
 					WindowPlacer.place(minecraft.getWindow(), m.rect());
 				}
 			});
-			case ControlMessage.JoinWorld m -> minecraft.execute(() -> ConnectScreen.startConnecting(new TitleScreen(), minecraft,
-					new ServerAddress("127.0.0.1", m.port()),
-					new ServerData("Hearthside", "127.0.0.1:" + m.port(), ServerData.Type.LAN), false, null));
+			case ControlMessage.JoinWorld m -> minecraft.execute(() -> {
+				loginToken = m.loginToken();
+				ConnectScreen.startConnecting(new TitleScreen(), minecraft, new ServerAddress("127.0.0.1", m.port()),
+						new ServerData("Hearthside", "127.0.0.1:" + m.port(), ServerData.Type.LAN), false, null);
+			});
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.QUIT -> minecraft.execute(minecraft::stop);
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.PAUSE -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite paused (controller disconnected)");

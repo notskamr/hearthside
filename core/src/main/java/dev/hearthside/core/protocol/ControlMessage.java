@@ -4,6 +4,7 @@ import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
+import dev.hearthside.core.profile.GuestNames;
 import java.util.Objects;
 
 /** Messages on the host↔satellite control channel. Type ids are listed on each record. */
@@ -50,12 +51,17 @@ public sealed interface ControlMessage {
 		}
 	}
 
-	/** Type 6, host → satellite: join the host's world at {@code 127.0.0.1:<port>}. */
-	record JoinWorld(int port) implements ControlMessage {
+	/**
+	 * Type 6, host → satellite: join the host's world at {@code 127.0.0.1:<port>} as {@code playerName}, proving it
+	 * with {@code loginToken}. Satellites start idle; this is what sends them in.
+	 */
+	record JoinWorld(int port, String loginToken, String playerName) implements ControlMessage {
 		public JoinWorld {
 			if (port < 1 || port > 65535) {
 				throw new IllegalArgumentException("Port out of range: " + port);
 			}
+			Objects.requireNonNull(loginToken, "loginToken");
+			GuestNames.requireValid(playerName);
 		}
 	}
 
