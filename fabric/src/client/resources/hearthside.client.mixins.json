@@ -3,6 +3,10 @@
 	"package": "dev.hearthside.fabric.client.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"ContainerScreenAccessor",
+		"FrameHookMixin",
+		"KeyboardInputMixin",
+		"KeyMappingAccessor",
 		"SatelliteGrabMixin",
 		"SatelliteInputMixin",
 		"UnpublishMixin"
