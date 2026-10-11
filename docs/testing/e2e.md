@@ -132,7 +132,7 @@ failing on the code before its fix.
 | W1 | The picker puts the last co-op world first and focused, with "Last played with Ember and Birch" | PASS |
 | W2 | A on it opens the world; the guests come in by name; the co-op record has them | PASS (15 s) |
 | R1 | X on a ready card opens More (nothing in the lobby looks selected; the footer has only Back and Start); Controls is that seat's: A then Y makes Y Jump (Inventory takes A); RB to Southpaw (sticks swapped) and LB back to the edit; Menu saves to the profile, the seat and the guest's game; RB from Custom is Bedrock again | PASS (8 s) |
-| M1 | More → Profiles: holding Y on a profile in use is refused with a reason; a Y still held while moving to another card deletes nothing; letting go early keeps a profile; holding 1.5 s deletes it (and nothing else) | PASS (11 s) — the held-over Y FAILED before (it deleted the next card) |
+| L11 | More → Profiles: holding Y on a profile in use is refused with a reason; a Y still held while moving to another card deletes nothing; letting go early keeps a profile; holding 1.5 s deletes it (and nothing else) | PASS (11 s) — the held-over Y FAILED before (it deleted the next card) |
 
 Screenshots: `title`, `title-focus`, `worlds`, `new-world`, `controls`, `manage-profiles`, `lobby-ready`, `lobby-more`.
 

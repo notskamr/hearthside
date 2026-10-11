@@ -97,15 +97,14 @@ public final class E2eDriver {
 	 * Every step in run order: its id, then the earlier steps whose effects its body relies on (the party's player
 	 * count, an open screen, a seated profile, a session). {@code -Dhearthside.e2e.only=<ids>} runs the named steps and
 	 * what they need, transitively; every other step is reported as SKIP. A step that works from its section's starting
-	 * state (the title screen; the world with the host alone) needs nothing. Both M1 steps share one id (it runs both),
-	 * listed where the second one runs, so nothing in the lobby can need it.
+	 * state (the title screen; the world with the host alone) needs nothing.
 	 */
 	private static final String[][] NEEDS = {
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
 			{"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
 			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"}, {"W9", "L5"}, {"L6", "W9"},
-			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"},
+			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"L11", "R1"},
 			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"},
 			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
 			// The in-world session: the world opens with the host alone.
@@ -116,7 +115,7 @@ public final class E2eDriver {
 			// The in-world pad block (fake pads).
 			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "R1", "W2", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
 			{"P8", "P1"}, {"P9", "P1"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
@@ -193,7 +192,7 @@ public final class E2eDriver {
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
 						this::controlsRemap);
-				step("M1 holding Y deletes an unused profile; a profile in use is refused; letting go early cancels",
+				step("L11 holding Y deletes an unused profile; a profile in use is refused; letting go early cancels",
 						this::manageProfiles);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
