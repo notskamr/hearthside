@@ -270,6 +270,84 @@ def controller_icon():
     return save(img, "hearth/controller")
 
 
+# ---- The party map ----
+
+MAP_ARROW = [
+    "00000100000",
+    "00001110000",
+    "00001110000",
+    "00011111000",
+    "00011111000",
+    "00111111100",
+    "00111111100",
+    "01111111110",
+    "01111111110",
+    "11111111111",
+    "11111111111",
+    "11110001111",
+]
+
+
+def erode(mask):
+    h, w = len(mask), len(mask[0])
+    inside = lambda x, y: 0 <= x < w and 0 <= y < h and mask[y][x] == "1"
+    return ["".join("1" if inside(x, y) and all(inside(x + dx, y + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+                    else "0" for x in range(w)) for y in range(h)]
+
+
+def map_arrows():
+    """A player's arrow on the party map, pointing up: a dark outline and a cream rim (drawn as is), and the inside
+    (drawn tinted with the player's colour), so every colour reads on any ground."""
+    rim = erode(MAP_ARROW)
+    fill = erode(rim)
+    h, w = len(MAP_ARROW), len(MAP_ARROW[0])
+    outline = canvas(w, h)
+    inner = canvas(w, h)
+    for y in range(h):
+        for x in range(w):
+            if fill[y][x] == "1":
+                inner.putpixel((x, y), (255, 255, 255, 255))
+                outline.putpixel((x, y), (0, 0, 0, 0))
+            elif rim[y][x] == "1":
+                outline.putpixel((x, y), rgb("f6e8cc"))
+            elif MAP_ARROW[y][x] == "1":
+                outline.putpixel((x, y), rgb("1b120b"))
+    return save(outline, "hearth/map_arrow_rim") + save(inner, "hearth/map_arrow_fill")
+
+
+SUN = [
+    "000000000",
+    "000000000",
+    "000111000",
+    "001111100",
+    "001111100",
+    "001111100",
+    "000111000",
+    "000000000",
+    "000000000",
+]
+SUN_RAYS = [(4, 0), (1, 1), (7, 1), (0, 4), (8, 4), (1, 7), (7, 7), (4, 8)]
+
+MOON = [
+    "001111000",
+    "011100000",
+    "111000000",
+    "111000000",
+    "111000000",
+    "111000000",
+    "011100000",
+    "001111000",
+]
+
+
+def sky_icons():
+    """The time of day on the party panel: a sun by day, a moon by night."""
+    sun = shape(SUN, rgb("ffd25a"))
+    for x, y in SUN_RAYS:
+        sun.putpixel((x, y), rgb("ffc040"))
+    return save(sun, "hearth/sun") + save(shape(MOON, rgb("e8e4d0")), "hearth/moon")
+
+
 def pill():
     """A small wooden pill for the title and labels."""
     img = canvas(24, 14)
@@ -490,6 +568,8 @@ def main():
     count += pill()
     count += tag()
     count += controller_icon()
+    count += map_arrows()
+    count += sky_icons()
     count += button("button", OAK_LIGHT, OAK_HI, OAK, OUTLINE)
     count += button("button_highlighted", rgb("9a5a2c"), rgb("c07a40"), OAK_LIGHT, EMBER, GLOW)
     count += button("button_disabled", rgb("4a3a30"), rgb("5a4a40"), rgb("2e241e"), rgb("1a1410"))

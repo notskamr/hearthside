@@ -168,7 +168,9 @@ public final class E2eDriver {
 			step("C5 copy transport works", this::copyTransportWorks);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
-			step("C7 a third player and back re-lays out without GL errors", () -> sampleGaps(this::thirdPlayerAndBack));
+			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
+			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
+			step("C7b a fourth player, then back to two, re-lays out without GL errors", () -> sampleGaps(this::fourthAndBack));
 			step("G1 no gap or brown shows inside a view while a player joins and leaves", this::noGapsSampled);
 			step("C9 the host's mouse works only inside its own view", this::hostMouseConfined);
 			step("C11 in the world, the host's clicks count wherever the cursor drifted", this::hostWorldClicksAnywhere);
@@ -454,26 +456,43 @@ public final class E2eDriver {
 		Thread.sleep(100);
 	}
 
-	private void thirdPlayerAndBack() throws Exception {
-		long mark = hostLogLength();
-		joinMark = mark;
+	private long sevenMark;
+
+	/** C7: a third player joins (and a fresh pad's join toast over split play). */
+	private void thirdPlayerJoins() throws Exception {
+		sevenMark = hostLogLength();
+		joinMark = sevenMark;
 		onRender(() -> {
 			Party.current().join("Guest3");
 			return null;
 		});
+		waitFor("3 players", Duration.ofSeconds(180), () -> playerCount() == 3);
+		waitInWorld(2);
+		waitForProbe(3, sevenMark, Duration.ofSeconds(30));
+		waitForProbe(2, sevenMark, Duration.ofSeconds(10));
+		// The join toast over split play (a pad nobody uses yet presses A once).
+		PADS.plug(110, "fake-toast-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		press(110, PadButton.A);
+		Thread.sleep(400);
+		windowShot("toast-split");
+		PADS.unplug(110);
+	}
+
+	/** D4: with three players the free quarter shows the party panel and its live map. */
+	private void partyPanelShows() throws Exception {
+		waitFor("the party map filled in", Duration.ofSeconds(5), () -> onRender(() -> Party.current().mapFilled()) >= 0.4f);
+		check(hostLogSince(sevenMark).contains("hearthside party map markers=3"), "an arrow for each of the three players");
+		Rect panel = dev.hearthside.fabric.client.ui.PartyPanel.lastPanel;
+		Rect bounds = dev.hearthside.fabric.client.ui.PartyPanel.lastBounds;
+		check(panel != null && bounds != null && panel.contains(bounds), "everything on the panel stays inside its quarter");
+		Thread.sleep(4500); // past the name tags, for a calm picture
+		windowShot("three-players");
+	}
+
+	/** C7b: a fourth player for the four-view layout, then back to two. */
+	private void fourthAndBack() throws Exception {
 		try {
-			waitFor("3 players", Duration.ofSeconds(180), () -> playerCount() == 3);
-			waitInWorld(2);
-			waitForProbe(3, mark, Duration.ofSeconds(30));
-			waitForProbe(2, mark, Duration.ofSeconds(10));
-			// The join toast over split play (a pad nobody uses yet presses A once).
-			PADS.plug(110, "fake-toast-pad", PadStyle.XBOX);
-			Thread.sleep(300);
-			press(110, PadButton.A);
-			Thread.sleep(400);
-			windowShot("toast-split");
-			PADS.unplug(110);
-			// A fourth player, for the four-view layout, then back to three.
 			onRender(() -> {
 				Party.current().join("Guest4");
 				return null;
@@ -482,18 +501,14 @@ public final class E2eDriver {
 			waitInWorld(3);
 			Thread.sleep(1200);
 			windowShot("four-players");
-			onRender(() -> {
-				Party.current().leave("Guest4");
-				return null;
-			});
-			waitFor("3 players again", Duration.ofSeconds(30), () -> playerCount() == 3);
 		} finally {
 			onRender(() -> {
-				Party.current().leave("Guest3");
-				try {
-					Party.current().leave("Guest4");
-				} catch (IllegalArgumentException alreadyGone) {
-					// it left above (or never came)
+				for (String guest : List.of("Guest4", "Guest3")) {
+					try {
+						Party.current().leave(guest);
+					} catch (IllegalArgumentException alreadyGone) {
+						// it never came, or left already
+					}
 				}
 				return null;
 			});
@@ -501,7 +516,10 @@ public final class E2eDriver {
 		long back = hostLogLength();
 		waitFor("back to 2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
 		waitForProbe(2, back, Duration.ofSeconds(10));
-		check(!hostLogSince(mark).contains("gl error"), "no GL errors while re-laying out");
+		// The E2E's own report lines mention "GL errors": look only at the game's lines.
+		boolean glErrors = hostLogSince(sevenMark).lines().filter(l -> !l.contains("[e2e]") && !l.contains("e2e step failed"))
+				.anyMatch(l -> l.contains("gl error"));
+		check(!glErrors, "no GL errors while re-laying out");
 	}
 
 	private int generationBeforeCrash = -1;

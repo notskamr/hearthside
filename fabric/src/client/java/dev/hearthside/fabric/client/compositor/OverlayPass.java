@@ -124,6 +124,13 @@ public final class OverlayPass {
 		return scale;
 	}
 
+	/** A window-pixel rect in the overlay's GUI units (covering every pixel it touched). */
+	public static Rect inGui(Rect r, int scale) {
+		int x = Math.floorDiv(r.x(), scale);
+		int y = Math.floorDiv(r.y(), scale);
+		return new Rect(x, y, Math.ceilDiv(r.x() + r.width(), scale) - x, Math.ceilDiv(r.y() + r.height(), scale) - y);
+	}
+
 	private static List<ViewFrame> inGuiUnits(List<ViewFrame> views, int scale) {
 		List<ViewFrame> out = new ArrayList<>(views.size());
 		for (ViewFrame view : views) {

@@ -38,10 +38,15 @@ public final class HearthSprites {
 	public static final Identifier TAG = id("hearth/tag");
 	/** A small controller icon, for counts. */
 	public static final Identifier CONTROLLER = id("hearth/controller");
+	/** A player's arrow on the party map: outline and rim as drawn, and the inside to tint with their colour. */
+	public static final Identifier MAP_ARROW_RIM = id("hearth/map_arrow_rim"), MAP_ARROW_FILL = id("hearth/map_arrow_fill");
+	/** The time of day on the party panel. */
+	public static final Identifier SUN = id("hearth/sun"), MOON = id("hearth/moon");
 
 	/** Every non-glyph sprite, for checks. */
 	public static final List<Identifier> PANELS = List.of(WOOD_PANEL, PARCHMENT_CARD, CARD_FRAME, BUTTON,
-			BUTTON_HIGHLIGHTED, BUTTON_DISABLED, GLASS_PANEL, GLASS_CHIP, BOARD, FIRELIGHT, GHOST_CARD, PILL, TAG, CONTROLLER);
+			BUTTON_HIGHLIGHTED, BUTTON_DISABLED, GLASS_PANEL, GLASS_CHIP, BOARD, FIRELIGHT, GHOST_CARD, PILL, TAG, CONTROLLER,
+			MAP_ARROW_RIM, MAP_ARROW_FILL, SUN, MOON);
 
 	private HearthSprites() {}
 

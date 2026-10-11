@@ -109,6 +109,10 @@ public final class Party {
 	/** What each guest's view shows: their card while they join, then their game (fresh for each split-screen run). */
 	private ViewPhases phases = new ViewPhases();
 	private final ViewOverlay viewOverlay = new ViewOverlay(this);
+	/** The party panel's live map: sampled on the server thread, drawn from a texture. */
+	private final MapSampler mapSampler;
+	private final PartyMapTexture mapTexture = new PartyMapTexture();
+	private int lastMarkerCount = -1;
 	/** Whether guests render hidden and this window composites them (decided on the render thread at session start). */
 	private volatile boolean composite;
 	/** Player 1's colour, from the host profile. */
@@ -144,6 +148,7 @@ public final class Party {
 		this.minecraft = minecraft;
 		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
+		this.mapSampler = new MapSampler(minecraft.getUser().getName());
 		this.controlServer = ControlServer.start(this::verifyHello);
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
 		minecraft.execute(this::choosePresentation);
@@ -270,6 +275,12 @@ public final class Party {
 	}
 
 	public static void register() {
+		net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
+			Party party = current;
+			if (party != null) {
+				party.mapSampler.tick(server);
+			}
+		});
 		// When player 1 plays alone there is no overlay pass: the join toast draws on their HUD instead.
 		net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry.attachElementAfter(
 				net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements.CHAT,
@@ -1008,6 +1019,85 @@ public final class Party {
 		return phases.cardCover(seat, now, reduceMotion);
 	}
 
+	// ---- The party panel (three players) ----
+
+	/** Where the party panel goes (the free quarter with three players), in window pixels. */
+	java.util.Optional<Rect> panelRect() {
+		return views.panel();
+	}
+
+	/** How much of the party map has ground on it. For the E2E. */
+	public float mapFilled() {
+		return mapTexture.filled();
+	}
+
+	/** What the party panel shows this frame (and asks the sampler for its area). Render thread. */
+	dev.hearthside.fabric.client.ui.PartyPanel.State panelState() {
+		MapSampler.Snapshot snap = mapSampler.snapshot;
+		String host = minecraft.getUser().getName();
+		List<dev.hearthside.core.map.PartyMapView.Player> players = new ArrayList<>();
+		Map<String, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>> elsewhere = new HashMap<>();
+		if (snap != null) {
+			for (MapSampler.PlayerAt p : snap.players()) {
+				if (!p.dimension().equals(snap.hostDimension())) {
+					elsewhere.put(p.name(), p.dimension());
+					continue;
+				}
+				var player = new dev.hearthside.core.map.PartyMapView.Player(p.name(), colourOfPlayer(p.name()), p.x(), p.z(), p.yaw());
+				if (p.name().equals(host)) {
+					players.addFirst(player);
+				} else {
+					players.add(player);
+				}
+			}
+		}
+		var view = dev.hearthside.core.map.PartyMapView.frame(players);
+		mapSampler.want(view, snap != null ? snap.hostDimension() : net.minecraft.world.level.Level.OVERWORLD);
+		mapTexture.drain(mapSampler.rows);
+		var markers = players.stream().map(view::marker).toList();
+		if (markers.size() != lastMarkerCount) {
+			lastMarkerCount = markers.size();
+			HearthsideMod.LOGGER.info("Hearthside party map markers={}", markers.size());
+		}
+		List<dev.hearthside.fabric.client.ui.PartyPanel.Seat> seats = new ArrayList<>();
+		seats.add(new dev.hearthside.fabric.client.ui.PartyPanel.Seat(host, colorOf(0), placeOf(elsewhere.get(host))));
+		new java.util.TreeMap<>(slots).forEach((index, slot) -> {
+			String name = slot.profile != null ? slot.profile.name() : slot.displayName();
+			String status = switch (viewPhase(index)) {
+				case PICKING -> "picking…";
+				case JOINING, RECONNECTING -> "joining…";
+				case LIVE, LEAVING -> placeOf(elsewhere.get(name));
+			};
+			seats.add(new dev.hearthside.fabric.client.ui.PartyPanel.Seat(name, colorOf(index), status));
+		});
+		var weather = snap == null || !snap.raining() ? dev.hearthside.fabric.client.ui.PartyPanel.Weather.CLEAR
+				: snap.thundering() ? dev.hearthside.fabric.client.ui.PartyPanel.Weather.THUNDER
+				: dev.hearthside.fabric.client.ui.PartyPanel.Weather.RAIN;
+		return new dev.hearthside.fabric.client.ui.PartyPanel.State(mapTexture.ready() ? PartyMapTexture.ID : null, markers,
+				seats, snap == null ? 0 : snap.dayTime(), weather, freeControllers() > 0, joinStyle());
+	}
+
+	/** "in the Nether" or "in the End" for a player away from player 1's dimension, else null. */
+	private static String placeOf(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+		if (dimension == null) {
+			return null;
+		}
+		return dimension.equals(net.minecraft.world.level.Level.NETHER) ? "in the Nether"
+				: dimension.equals(net.minecraft.world.level.Level.END) ? "in the End" : "elsewhere";
+	}
+
+	private int colourOfPlayer(String name) {
+		if (name.equals(minecraft.getUser().getName())) {
+			return colorOf(0);
+		}
+		for (Slot slot : slots.values()) {
+			if (slot.profile != null && slot.profile.name().equalsIgnoreCase(name)) {
+				return colorOf(slot.index);
+			}
+		}
+		return 0x8A7A6A;
+	}
+
 	/** When the views were last laid out anew. */
 	long layoutChangedAt() {
 		return views.changedAt();
@@ -1307,6 +1397,7 @@ public final class Party {
 		splitScreen = false;
 		views = new Views();
 		phases = new ViewPhases();
+		mapTexture.close();
 		OverlayPass.unregister(viewOverlay);
 		if (Compositor.active() != null) {
 			Compositor.deactivate(minecraft);

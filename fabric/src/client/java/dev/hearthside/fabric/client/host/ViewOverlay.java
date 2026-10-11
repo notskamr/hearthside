@@ -135,6 +135,9 @@ final class ViewOverlay implements OverlayLayer {
 			return;
 		}
 		var font = Minecraft.getInstance().font;
+		// The free quarter with three players: the party panel and its live map.
+		party.panelRect().ifPresent(panel -> dev.hearthside.fabric.client.ui.PartyPanel.draw(g, font,
+				dev.hearthside.fabric.client.compositor.OverlayPass.inGui(panel, context.guiScale()), party.panelState()));
 		for (ViewFrame view : context.views()) {
 			Rect r = view.rect();
 			int seat = view.seat();
