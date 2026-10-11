@@ -310,6 +310,11 @@ public final class Compositor {
 			// Hearthside's GUI over every view: cards, toasts, name tags, the party panel.
 			overlayBlitter.draw(overlay, swapWidth, swapHeight);
 		}
+		Path capture = e2eCapture;
+		if (capture != null) {
+			e2eCapture = null;
+			capture(capture, swapWidth, swapHeight);
+		}
 		List<Import> live = new java.util.ArrayList<>(imports.values());
 		live.addAll(incoming.values());
 		for (Import imp : live) {
@@ -431,6 +436,9 @@ public final class Compositor {
 		costWindowStart = now;
 	}
 
+	/** E2E: where to save the next composited window as a PNG (what the players see), or null. */
+	public static volatile Path e2eCapture;
+
 	/** E2E: while set, every view's centre is read each frame and a bare divider colour is logged as a gap. */
 	public static volatile boolean e2eGapSampling;
 
@@ -438,6 +446,30 @@ public final class Compositor {
 	public static volatile int[] e2eProbePoint;
 
 	private final Map<Integer, Long> lastGapLog = new HashMap<>();
+
+	/** E2E: saves the window's back buffer as drawn so far this frame (every view and the overlay). */
+	private static void capture(Path file, int width, int height) {
+		ByteBuffer pixels = org.lwjgl.system.MemoryUtil.memAlloc(width * height * 4);
+		try {
+			int previousRead = glGetInteger(GL_READ_FRAMEBUFFER_BINDING);
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+			glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
+			var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+			for (int y = 0; y < height; y++) {
+				for (int x = 0; x < width; x++) {
+					int i = ((height - 1 - y) * width + x) * 4; // GL rows run bottom-up
+					image.setRGB(x, y, (pixels.get(i) & 0xFF) << 16 | (pixels.get(i + 1) & 0xFF) << 8 | pixels.get(i + 2) & 0xFF);
+				}
+			}
+			java.nio.file.Files.createDirectories(file.toAbsolutePath().getParent());
+			javax.imageio.ImageIO.write(image, "png", file.toFile());
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.warn("Could not save the window capture {}", file, e);
+		} finally {
+			org.lwjgl.system.MemoryUtil.memFree(pixels);
+		}
+	}
 
 	/** E2E: reads the centre of every view this frame; the bare divider colour there is a gap (logged at most 4×/s). */
 	private void sampleGaps(int swapHeight) {

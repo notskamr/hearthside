@@ -34,6 +34,7 @@ import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
 import dev.hearthside.core.session.JoinFlow;
 import dev.hearthside.core.session.SatelliteDirectories;
+import dev.hearthside.core.session.ViewPhases;
 import dev.hearthside.core.supervise.RestartPolicy;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
@@ -105,7 +106,9 @@ public final class Party {
 	private Rect workArea;
 	/** Where every player's view is drawn in the one window while compositing (fresh for each split-screen run). */
 	private Views views = new Views();
-	private final ViewOverlay viewOverlay = new ViewOverlay();
+	/** What each guest's view shows: their card while they join, then their game (fresh for each split-screen run). */
+	private ViewPhases phases = new ViewPhases();
+	private final ViewOverlay viewOverlay = new ViewOverlay(this);
 	/** Whether guests render hidden and this window composites them (decided on the render thread at session start). */
 	private volatile boolean composite;
 	/** Player 1's colour, from the host profile. */
@@ -972,9 +975,34 @@ public final class Party {
 	}
 
 	/** Once a second: expire join prompts, offer take-overs, and record co-op worlds guests reached. Render thread. */
+	// ---- What a guest's view shows (for ViewOverlay) ----
+
+	/** How much a seat's card covers their view: 1 = only the card, 0 = only their game. */
+	float cardCover(int seat, long now, boolean reduceMotion) {
+		return phases.cardCover(seat, now, reduceMotion);
+	}
+
+	dev.hearthside.core.session.ViewPhase viewPhase(int seat) {
+		return phases.phase(seat).orElse(dev.hearthside.core.session.ViewPhase.JOINING);
+	}
+
+	boolean joiningStuck(int seat, long now) {
+		return phases.stuck(seat, now);
+	}
+
+	/** Who a seat is, for their card: name, skin, colour and controller family. */
+	dev.hearthside.fabric.client.ui.CardPainter.Who who(int seat) {
+		Slot slot = slots.get(seat);
+		GuestProfile profile = slot == null ? null : slot.profile;
+		String name = profile != null ? profile.name() : slot != null ? slot.displayName() : "Player " + (seat + 1);
+		return new dev.hearthside.fabric.client.ui.CardPainter.Who(name, LobbyScreen.skin(profile == null ? null : profile.skin()),
+				colorOf(seat), padStyleOf(seat));
+	}
+
 	/** A guest's game says it is in the world (past its loading screens). Render thread. */
 	private void guestInWorld(int index) {
 		HearthsideMod.LOGGER.info("Hearthside seat {} in world", index);
+		phases.inWorld(index, System.nanoTime());
 		String controller = controllerOfSlot.get(index);
 		if (controller != null) {
 			apply(flow.loaded(controller));
@@ -1105,6 +1133,7 @@ public final class Party {
 
 	private void removeSlot(Slot slot) {
 		slots.remove(slot.index, slot);
+		minecraft.execute(() -> phases.remove(slot.index));
 		cards.remove(slot.index);
 		String controller = controllerOfSlot.remove(slot.index);
 		if (controller != null) {
@@ -1205,6 +1234,7 @@ public final class Party {
 		}
 		splitScreen = false;
 		views = new Views();
+		phases = new ViewPhases();
 		OverlayPass.unregister(viewOverlay);
 		if (Compositor.active() != null) {
 			Compositor.deactivate(minecraft);
@@ -1233,8 +1263,15 @@ public final class Party {
 			// One window: lay every player out inside this window's framebuffer; the window itself stays put.
 			// Spec A's layouts; views glide to them (or jump, when the window itself changed size).
 			Window.FramebufferSize size = minecraft.getWindow().queryFramebufferSize();
-			views.update(guests.stream().map(g -> g.index).toList(), new Rect(0, 0, size.width(), size.height()),
-					System.nanoTime(), hostReduceMotion);
+			long now = System.nanoTime();
+			views.update(guests.stream().map(g -> g.index).toList(), new Rect(0, 0, size.width(), size.height()), now,
+					hostReduceMotion);
+			for (Slot guest : guests) {
+				if (phases.phase(guest.index).isEmpty()) {
+					// Their card shows until their game says it is in the world, never its loading screens.
+					phases.joining(guest.index, now);
+				}
+			}
 			Compositor.activate(minecraft, this::afterGuestsChanged,
 					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), views, size.width(), size.height());
 			OverlayPass.unregister(viewOverlay);
@@ -1308,6 +1345,7 @@ public final class Party {
 		@Override
 		public void restarting(int consecutiveFailures, Duration delay) {
 			HearthsideMod.LOGGER.warn("Satellite for {} stopped; restarting in {}s", slot.displayName(), delay.toSeconds());
+			minecraft.execute(() -> phases.reconnecting(slot.index, System.nanoTime()));
 			chat(Component.literal(slot.displayName() + "'s game stopped; restarting in " + delay.toSeconds() + "s")
 					.withStyle(ChatFormatting.YELLOW));
 		}

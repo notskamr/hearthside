@@ -183,6 +183,7 @@ public final class E2eDriver {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
 				step("B3 the join prompt expires after 5 s", this::joinPromptExpires);
+				step("D1 a joining guest's view shows the card, never its loading screens, until it is in the world", this::joiningShowsTheCard);
 				step("P1 A, A on a new controller adds Player2", this::startJoins);
 				step("P2 left stick moves the guest", this::stickMoves);
 				step("P3 right stick turns the guest", this::stickTurns);
@@ -226,12 +227,23 @@ public final class E2eDriver {
 				() -> hostLogSince(joinMark).contains("hearthside seat " + seat + " in world"));
 	}
 
+	/** Saves the whole window as players see it (every view and Hearthside's overlay), unlike a game screenshot. */
+	private void windowShot(String name) throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("screenshots").resolve(name + ".png");
+		Files.deleteIfExists(file);
+		Compositor.e2eCapture = file;
+		waitFor("window capture " + name, Duration.ofSeconds(5), () -> Files.exists(file) && Files.size(file) > 0);
+		Thread.sleep(200);
+	}
+
 	private void guestJoins() throws Exception {
 		joinMark = hostLogLength();
 		onRender(() -> {
 			Party.current().join(GUEST);
 			return null;
 		});
+		Thread.sleep(3000);
+		windowShot("joining");
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
 	}
 
@@ -437,12 +449,14 @@ public final class E2eDriver {
 
 	private void thirdPlayerAndBack() throws Exception {
 		long mark = hostLogLength();
+		joinMark = mark;
 		onRender(() -> {
 			Party.current().join("Guest3");
 			return null;
 		});
 		try {
 			waitFor("3 players", Duration.ofSeconds(180), () -> playerCount() == 3);
+			waitInWorld(2);
 			waitForProbe(3, mark, Duration.ofSeconds(30));
 			waitForProbe(2, mark, Duration.ofSeconds(10));
 		} finally {
@@ -1578,11 +1592,33 @@ public final class E2eDriver {
 		check(guest("Player2") == null && satellites().isEmpty(), "an A after the prompt expired only asks again");
 	}
 
-	private void startJoins() throws Exception {
+	/** The latest composited colour logged at a guest's view corner ("" if none). */
+	private String lastProbeRgb(int player) throws IOException {
+		Matcher m = Pattern.compile("hearthside compositor probe player=" + player + " gen=[0-9]+ rgb=([0-9a-f]{6})")
+				.matcher(hostLogSince(0));
+		String last = "";
+		while (m.find()) {
+			last = m.group(1);
+		}
+		return last;
+	}
+
+	private void joiningShowsTheCard() throws Exception {
 		Thread.sleep(5500); // let B3's prompt expire
 		joinMark = hostLogLength();
 		press(101, PadButton.A);
 		press(101, PadButton.A);
+		Thread.sleep(2500);
+		windowShot("drop-in-joining");
+		waitInWorld(1);
+		String log = hostLogSince(joinMark);
+		String beforeIn = log.substring(0, log.indexOf("hearthside seat 1 in world"));
+		check(!Pattern.compile("probe player=2 gen=[0-9]+ rgb=ff00ff").matcher(beforeIn).find(),
+				"while joining, the view showed the card, never the guest's own frames (its loading screens)");
+		waitFor("the guest's world in their view", Duration.ofSeconds(5), () -> lastProbeRgb(2).equals("ff00ff"));
+	}
+
+	private void startJoins() throws Exception {
 		waitFor("Player2 in the world", Duration.ofSeconds(180), () -> guest("Player2") != null);
 		waitInWorld(1);
 		// The server counts the guest as joined while its client still shows the terrain-loading

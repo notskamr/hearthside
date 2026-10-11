@@ -84,9 +84,13 @@ public final class OverlayPass {
 		WindowRenderState window = gameRenderer.gameRenderState().windowRenderState;
 		int ownWidth = window.width;
 		int ownHeight = window.height;
-		int scale = Math.max(1, window.guiScale);
+		int ownScale = window.guiScale;
+		// The scale Minecraft would pick for the whole window (player 1's own, at their split view's size, is smaller).
+		// The overlay draws no items, so changing it for this pass never rebuilds the item atlas.
+		int scale = scaleFor(width, height, minecraft.options.guiScale().get());
 		window.width = width;
 		window.height = height;
+		window.guiScale = scale;
 		active = true;
 		try {
 			var graphics = new GuiGraphicsExtractor(minecraft, gameRenderer.gameRenderState().guiRenderState, -1, -1);
@@ -107,7 +111,17 @@ public final class OverlayPass {
 			active = false;
 			window.width = ownWidth;
 			window.height = ownHeight;
+			window.guiScale = ownScale;
 		}
+	}
+
+	/** Minecraft's GUI scale for a framebuffer this size: the largest fitting 320×240, capped by the setting (0 = auto). */
+	static int scaleFor(int width, int height, int setting) {
+		int scale = 1;
+		while (scale != setting && scale < width && scale < height && width / (scale + 1) >= 320 && height / (scale + 1) >= 240) {
+			scale++;
+		}
+		return scale;
 	}
 
 	private static List<ViewFrame> inGuiUnits(List<ViewFrame> views, int scale) {
