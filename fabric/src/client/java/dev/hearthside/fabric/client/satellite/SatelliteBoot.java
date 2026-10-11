@@ -11,6 +11,7 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.compositor.FrameExporter;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
+import dev.hearthside.fabric.client.mixin.MinecraftUserAccessor;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
@@ -18,10 +19,13 @@ import dev.hearthside.fabric.client.window.WindowPlacer;
 import dev.hearthside.fabric.server.GuestLoginHooks;
 import io.netty.buffer.Unpooled;
 import java.io.IOException;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientLoginNetworking;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -109,9 +113,17 @@ public final class SatelliteBoot {
 					WindowPlacer.place(minecraft.getWindow(), m.rect());
 				}
 			});
-			case ControlMessage.JoinWorld m -> minecraft.execute(() -> ConnectScreen.startConnecting(new TitleScreen(), minecraft,
-					new ServerAddress("127.0.0.1", m.port()),
-					new ServerData("Hearthside", "127.0.0.1:" + m.port(), ServerData.Type.LAN), false, null));
+			case ControlMessage.JoinWorld m -> minecraft.execute(() -> {
+				loginToken = m.loginToken();
+				if (!minecraft.getUser().getName().equals(m.playerName())) {
+					// Started under a placeholder (pre-warmed before a profile was chosen): join as the player.
+					((MinecraftUserAccessor) minecraft).hearthside$setUser(new User(m.playerName(),
+							UUIDUtil.createOfflinePlayerUUID(m.playerName()), "0", Optional.empty(), Optional.empty()));
+					HearthsideMod.LOGGER.info("Hearthside satellite joins as {}", m.playerName());
+				}
+				ConnectScreen.startConnecting(new TitleScreen(), minecraft, new ServerAddress("127.0.0.1", m.port()),
+						new ServerData("Hearthside", "127.0.0.1:" + m.port(), ServerData.Type.LAN), false, null);
+			});
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.QUIT -> minecraft.execute(minecraft::stop);
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.PAUSE -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite paused (controller disconnected)");

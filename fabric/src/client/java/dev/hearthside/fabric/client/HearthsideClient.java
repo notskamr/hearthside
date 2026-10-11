@@ -4,7 +4,8 @@ import dev.hearthside.core.Role;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.E2eDriver;
 import dev.hearthside.fabric.client.host.HostCommands;
-import dev.hearthside.fabric.client.host.HostSession;
+import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.TitleCoopButton;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.satellite.SatelliteBoot;
 import dev.hearthside.fabric.client.window.FocusLog;
@@ -24,8 +25,9 @@ public final class HearthsideClient implements ClientModInitializer {
 		HearthsideMod.LOGGER.info("Hearthside client starting as {}", role);
 		FrameHook.register(new FocusLog());
 		if (role == Role.HOST) {
-			HostSession.register();
+			Party.register();
 			HostCommands.register();
+			TitleCoopButton.register();
 			E2eDriver.registerIfEnabled();
 		} else {
 			SatelliteBoot.register();

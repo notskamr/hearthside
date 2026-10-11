@@ -53,7 +53,9 @@ class ControlCodecProperties {
 				.as(ControlMessage.FrameSlotsReady::new);
 		Arbitrary<ControlMessage> lifecycle = Arbitraries.of(LifecycleCommand.class).map(ControlMessage.Lifecycle::new);
 
-		Arbitrary<ControlMessage> joinWorld = Arbitraries.integers().between(1, 65535).map(ControlMessage.JoinWorld::new);
+		Arbitrary<ControlMessage> joinWorld = Combinators.combine(Arbitraries.integers().between(1, 65535), text,
+				Arbitraries.strings().withCharRange('a', 'z').ofMinLength(3).ofMaxLength(16))
+				.as(ControlMessage.JoinWorld::new);
 
 		Arbitrary<ControlMessage> setControls = Arbitraries.oneOf(
 				Arbitraries.just(ControlSchemeJson.toJson(ControlScheme.BEDROCK)), text).map(ControlMessage.SetControls::new);

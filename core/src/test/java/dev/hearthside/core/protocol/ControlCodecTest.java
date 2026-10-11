@@ -129,8 +129,20 @@ class ControlCodecTest {
 	}
 
 	@Test
-	void protocolVersionIsTwo() {
-		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(2);
+	void protocolVersionIsThree() {
+		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(3);
+	}
+
+	@Test
+	void joinWorldCarriesTokenAndName() throws IOException {
+		var message = new ControlMessage.JoinWorld(51234, "token-abc", "Alex");
+		assertThat(roundTrip(message)).isEqualTo(message);
+	}
+
+	@Test
+	void joinWorldRejectsInvalidName() {
+		assertThatThrownBy(() -> new ControlMessage.JoinWorld(51234, "t", "not a name!"))
+				.isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test

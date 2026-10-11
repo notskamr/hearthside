@@ -6,7 +6,9 @@ import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.ControlSchemeJson;
+import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.GamepadSource;
+import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.launch.HostJvm;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
@@ -20,14 +22,13 @@ import dev.hearthside.core.process.RunningProcess;
 import dev.hearthside.core.process.SatelliteSupervisor;
 import dev.hearthside.core.profile.GuestNames;
 import dev.hearthside.core.profile.GuestProfile;
-import dev.hearthside.core.profile.GuestUuids;
 import dev.hearthside.core.profile.PlayerColors;
 import dev.hearthside.core.profile.ProfileStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.core.protocol.ControlCodec;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
-import dev.hearthside.core.session.GuestRoster;
+import dev.hearthside.core.session.JoinFlow;
 import dev.hearthside.core.session.SatelliteDirectories;
 import dev.hearthside.core.supervise.RestartPolicy;
 import dev.hearthside.fabric.HearthsideMod;
@@ -40,10 +41,8 @@ import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.compositor.GlInterop;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.window.WindowPlacer;
-import dev.hearthside.fabric.server.HostServerBridge;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -57,6 +56,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -66,33 +66,29 @@ import net.fabricmc.loader.api.FabricLoader;
 import com.mojang.blaze3d.platform.Window;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.util.HttpUtil;
 
 /**
- * One split-screen session, alive while the host has a singleplayer world open: the guest roster,
- * the control channel, one supervisor per satellite and, once the first guest joins, a loopback-only
- * game listener for guests. The host's window and pause-on-focus-loss setting are changed only while
- * at least one guest is present.
+ * The co-op party: controllers, the control channel and one supervised game per guest seat. It can exist before a
+ * world does (a lobby) and attaches to each world's {@link WorldLink} when it opens, sending every ready guest in.
+ * The host's pause-on-focus-loss setting is changed only while at least one guest is present.
  */
-public final class HostSession {
+public final class Party {
 	private static final SecureRandom RANDOM = new SecureRandom();
-	private static volatile HostSession current;
+	private static volatile Party current;
 
 	private final Minecraft minecraft;
-	private final MinecraftServer server;
 	private final Path gameDir;
 	private final GuestTokenAuthority tokens = GuestTokenAuthority.withRandomSecret(Clock.systemUTC());
-	private final GuestRoster roster;
+	/** The open world guests join, or null before one opens (a lobby) and after it closes. */
+	private volatile WorldLink world;
 	private final ControlServer controlServer;
 	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
 			Thread.ofPlatform().daemon().name("hearthside-restarts").factory());
 	private final Map<Integer, Slot> slots = new ConcurrentSkipListMap<>();
 	private final Thread shutdownHook = new Thread(this::stopAllSatellites, "hearthside-shutdown");
-	/** Loopback port guests join on; 0 until the first guest needs it. */
-	private volatile int gamePort;
 	/** The controller loop; created and used on the render thread. */
 	private volatile HostInput input;
 
@@ -119,13 +115,11 @@ public final class HostSession {
 		}
 	}
 
-	private HostSession(Minecraft minecraft, MinecraftServer server) throws IOException {
+	private Party(Minecraft minecraft, JoinFlow.Mode mode) throws IOException {
 		this.minecraft = minecraft;
-		this.server = server;
+		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
-		this.roster = new GuestRoster(server.getSingleplayerProfile().name());
 		this.controlServer = ControlServer.start(this::verifyHello);
-		HostServerBridge.activate(new HostServerBridge.Active(roster, tokens, this::reopenGuestListener));
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
 		minecraft.execute(this::choosePresentation);
 		minecraft.execute(this::startInput);
@@ -171,9 +165,37 @@ public final class HostSession {
 		}
 	}
 
-	/** Lowest free guest slot, or -1. */
+	/** Lowest free guest slot (1-3), or -1. */
 	public int nextFreeIndex() {
-		return roster.freeIndex().orElse(-1);
+		for (int index = 1; index <= 3; index++) {
+			if (!slots.containsKey(index)) {
+				return index;
+			}
+		}
+		return -1;
+	}
+
+	/** A world opened: let every guest whose game is ready log in to it. */
+	private void attach(WorldLink link) {
+		world = link;
+		// The lobby is over: seats stay, and from now on new controllers join with A, A. (The flow is render-thread
+		// only; this runs on the server thread.)
+		minecraft.execute(flow::enterGame);
+		minecraft.execute(this::afterGuestsChanged);
+		for (Slot slot : slots.values()) {
+			ControlConnection connection = slot.connection;
+			if (connection != null) {
+				sendIn(link, slot, connection);
+			}
+		}
+	}
+
+	private void sendIn(WorldLink link, Slot slot, ControlConnection connection) {
+		try {
+			link.sendIn(slot.index, slot.profile, connection);
+		} catch (IOException | IllegalArgumentException e) {
+			HearthsideMod.LOGGER.error("Could not send {} into the world", slot.profile.name(), e);
+		}
 	}
 
 	/** {@code /hearthside pad}: the next controller to press A becomes the host's. Render thread. */
@@ -192,22 +214,30 @@ public final class HostSession {
 		}
 	}
 
+	/** Whether a world is open (otherwise the party is on shared screens: the lobby, world select). */
+	public boolean inWorld() {
+		return world != null;
+	}
+
 	private ProfileStore profileStore() {
 		return new ProfileStore(gameDir.resolve("hearthside").resolve("profiles.json"));
 	}
 
 	public static void register() {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-			if (server instanceof IntegratedServer && current == null) {
+			if (server instanceof IntegratedServer) {
 				try {
-					current = new HostSession(Minecraft.getInstance(), server);
+					if (current == null) {
+						current = new Party(Minecraft.getInstance(), JoinFlow.Mode.IN_GAME);
+					}
+					current.attach(new WorldLink(server, current.tokens));
 				} catch (IOException e) {
 					HearthsideMod.LOGGER.error("Could not open a Hearthside session", e);
 				}
 			}
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
-			HostSession session = current;
+			Party session = current;
 			current = null;
 			if (session != null) {
 				session.close();
@@ -215,18 +245,73 @@ public final class HostSession {
 		});
 	}
 
-	public static HostSession current() {
+	/** The party for the co-op lobby: the current one, or a new one waiting for a world. Render thread. */
+	public static Party openLobby(Minecraft minecraft) throws IOException {
+		if (current == null) {
+			current = new Party(minecraft, JoinFlow.Mode.LOBBY);
+		}
+		return current;
+	}
+
+	/** Ends the party: every guest's game stops. */
+	public void disband() {
+		if (current == this) {
+			current = null;
+		}
+		close();
+	}
+
+	/** Every guest leaves (their games stop); the party stays. Render thread. */
+	public void leaveAll() {
+		for (Slot slot : List.copyOf(slots.values())) {
+			endSlot(slot);
+			removeSlot(slot);
+		}
+	}
+
+	/** What a lobby card shows for a guest seat. */
+	public record SeatView(String name, String status, int color, boolean taken) {}
+
+	/** The lobby card for player {@code index} (1-3). */
+	public SeatView seatView(int index) {
+		Slot slot = slots.get(index);
+		if (slot == null) {
+			return new SeatView("Press A to join", "", 0x555555, false);
+		}
+		String controller = controllerOfSlot.get(index);
+		dev.hearthside.core.session.SeatState state = controller == null ? null : flow.seats().get(controller);
+		String status = state instanceof dev.hearthside.core.session.SeatState.Disconnected ? "Controller disconnected"
+				: slot.connection == null ? "Getting ready" : "Ready";
+		return new SeatView(slot.profile.name(), status, slot.profile.color(), true);
+	}
+
+	public int seatedCount() {
+		return slots.size();
+	}
+
+	public static Party current() {
 		return current;
 	}
 
 	/** Adds a guest and starts their satellite; returns their player index. Runs on the render thread. */
 	public int join(String name) throws IOException, UnsupportedLauncherException {
 		GuestNames.requireValid(name);
+		if (name.equalsIgnoreCase(minecraft.getUser().getName())) {
+			throw new IllegalArgumentException("A guest can't use the host's name (" + minecraft.getUser().getName() + ")");
+		}
+		if (slots.values().stream().anyMatch(s -> s.profile.name().equalsIgnoreCase(name))) {
+			throw new IllegalArgumentException(name + " is already playing");
+		}
+		return startGuest(loadOrCreateProfile(name));
+	}
+
+	/** Starts a guest's game in the lowest free slot, as {@code profile}; returns their player index. Render thread. */
+	private int startGuest(GuestProfile profile) throws IOException, UnsupportedLauncherException {
 		HostJvm host = HostJvm.capture(HostLaunchFacts.read());
-		ensureGuestListener();
-		GuestProfile profile = loadOrCreateProfile(name);
-		int index = roster.freeIndex().orElseThrow(() -> new IllegalStateException("All 3 guest slots are taken"));
-		roster.register(index, profile);
+		int index = nextFreeIndex();
+		if (index < 0) {
+			throw new IllegalStateException("All 3 guest slots are taken");
+		}
 
 		Slot slot = new Slot(index, profile);
 		Path satelliteDir = gameDir.resolve("hearthside").resolve("satellite-" + index);
@@ -273,7 +358,11 @@ public final class HostSession {
 		slots.clear();
 		controlServer.close();
 		scheduler.shutdownNow();
-		HostServerBridge.deactivate();
+		WorldLink link = world;
+		world = null;
+		if (link != null) {
+			link.close();
+		}
 		try {
 			Runtime.getRuntime().removeShutdownHook(shutdownHook);
 		} catch (IllegalStateException alreadyShuttingDown) {
@@ -290,30 +379,6 @@ public final class HostSession {
 		HearthsideMod.LOGGER.info("Hearthside session closed");
 	}
 
-	private void ensureGuestListener() throws IOException {
-		if (gamePort == 0) {
-			int port = HttpUtil.getAvailablePort();
-			server.getConnection().startTcpServerListener(InetAddress.getLoopbackAddress(), port);
-			gamePort = port;
-			HearthsideMod.LOGGER.info("Hearthside guests join on 127.0.0.1:{}", port);
-		}
-	}
-
-	/** Vanilla's Stop Sharing closed every TCP listener, including the guests'; open it again. */
-	private void reopenGuestListener() {
-		int port = gamePort;
-		if (port == 0) {
-			return;
-		}
-		try {
-			server.getConnection().startTcpServerListener(InetAddress.getLoopbackAddress(), port);
-			HearthsideMod.LOGGER.info("Reopened the Hearthside guest listener on 127.0.0.1:{}", port);
-		} catch (IOException e) {
-			gamePort = 0;
-			HearthsideMod.LOGGER.error("Could not reopen the Hearthside guest listener", e);
-		}
-	}
-
 	private void endSlot(Slot slot) {
 		ControlConnection connection = slot.connection;
 		if (connection != null) {
@@ -326,9 +391,173 @@ public final class HostSession {
 		slot.supervisor.stop();
 	}
 
+	// ---- Join flow: controllers joining with A, A (Spec A section 3.2) ----
+
+	private final JoinFlow flow;
+	/** Join-flow controller id ("pad-<SDL id>") of each guest slot. */
+	private final Map<Integer, String> controllerOfSlot = new ConcurrentHashMap<>();
+	private final Map<String, Integer> instanceOf = new HashMap<>();
+	private final Map<String, String> guidOf = new HashMap<>();
+	private final Map<String, GuestProfile> chosen = new HashMap<>();
+
+	private static String controllerId(int instanceId) {
+		return "pad-" + instanceId;
+	}
+
+	/** An unassigned controller pressed A or B. Render thread. */
+	void onUnassignedPress(int instanceId, PadButton button, String guid) {
+		String controller = controllerId(instanceId);
+		instanceOf.put(controller, instanceId);
+		guidOf.put(controller, guid);
+		apply(flow.press(controller, button == PadButton.A ? Control.A : Control.B));
+	}
+
+	/** B on a seated controller before the world: that player gives up their seat (Spec A section 3.1). Render thread. */
+	void onSeatedB(int player) {
+		String controller = controllerOfSlot.get(player);
+		if (controller != null) {
+			apply(flow.press(controller, Control.B));
+		}
+	}
+
+	/** A guest's controller dropped: their seat is kept. Render thread. */
+	void onPadLost(int player) {
+		String controller = controllerOfSlot.get(player);
+		if (controller != null) {
+			apply(flow.disconnected(controller));
+		}
+	}
+
+	/** A guest's controller came back under a new SDL id. Render thread. */
+	void onPadRestored(int player, int newInstanceId) {
+		String old = controllerOfSlot.get(player);
+		String now = controllerId(newInstanceId);
+		if (old != null && !old.equals(now)) {
+			apply(flow.reassign(old, now));
+			controllerOfSlot.put(player, now);
+			instanceOf.put(now, newInstanceId);
+			guidOf.put(now, guidOf.remove(old));
+		} else if (old != null) {
+			apply(flow.reconnected(old));
+		}
+	}
+
+	/** Once a second: expire join prompts, offer take-overs, and mark guests who reached the world. Render thread. */
+	void tickFlow() {
+		WorldLink link = world;
+		controllerOfSlot.forEach((index, controller) -> {
+			Slot slot = slots.get(index);
+			if (link != null && slot != null && link.hasPlayer(slot.profile.name())) {
+				flow.loaded(controller);
+			}
+		});
+		apply(flow.tick());
+	}
+
+	private void apply(JoinFlow.Result result) {
+		for (JoinFlow.Effect effect : result.effects()) {
+			switch (effect) {
+				case JoinFlow.Effect.ShowJoinPrompt prompt -> minecraft.gui.toastManager().addToast(new SystemToast(
+						SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal("New controller"),
+						Component.literal("Press A again to join")));
+				case JoinFlow.Effect.OpenProfilePicker pick -> {
+					// The full picker is Plan 5b2; for now, the profile last used on this controller, or a new one.
+					GuestProfile profile = profileFor(guidOf.get(pick.controller()));
+					if (profile != null) {
+						chosen.put(pick.controller(), profile);
+						flow.profileChosen(pick.controller(), profile.id());
+					}
+				}
+				case JoinFlow.Effect.StartGuestGame start -> startForController(start.controller());
+				case JoinFlow.Effect.StopGuestGame stop -> {
+					Integer index = slotOfController(stop.controller());
+					Slot slot = index == null ? null : slots.get(index);
+					controllerOfSlot.values().remove(stop.controller());
+					if (slot != null) {
+						endSlot(slot);
+						removeSlot(slot);
+					}
+				}
+				case JoinFlow.Effect.OfferTakeover offer -> chat(Component.literal(
+						"A player's controller is still disconnected. Plug it back in to carry on.")
+						.withStyle(ChatFormatting.YELLOW));
+				case JoinFlow.Effect.HideJoinPrompt hide -> { }
+				case JoinFlow.Effect.ClaimSeat claim -> { }
+			}
+		}
+	}
+
+	private void startForController(String controller) {
+		GuestProfile profile = chosen.remove(controller);
+		Integer instanceId = instanceOf.get(controller);
+		if (profile == null || instanceId == null) {
+			apply(flow.leave(controller));
+			return;
+		}
+		try {
+			int index = startGuest(profile);
+			controllerOfSlot.put(index, controller);
+			HostInput currentInput = input;
+			if (currentInput != null) {
+				currentInput.assignPad(instanceId, index);
+			}
+		} catch (Exception e) {
+			HearthsideMod.LOGGER.error("Could not add a player for {}", controller, e);
+			chat(Component.literal("Couldn't add a player: " + e.getMessage()).withStyle(ChatFormatting.RED));
+			apply(flow.leave(controller));
+		}
+	}
+
+	private Integer slotOfController(String controller) {
+		return controllerOfSlot.entrySet().stream().filter(e -> e.getValue().equals(controller))
+				.map(Map.Entry::getKey).findFirst().orElse(null);
+	}
+
+	/** The profile last used on this controller, else "Player N" (made if needed); remembers the controller. */
+	private GuestProfile profileFor(String guid) {
+		try {
+			ProfileStore store = profileStore();
+			List<GuestProfile> profiles = new ArrayList<>(store.load());
+			java.util.Set<String> playing = new java.util.HashSet<>();
+			slots.values().forEach(s -> playing.add(s.profile.name().toLowerCase(Locale.ROOT)));
+			for (GuestProfile p : profiles) {
+				if (guid != null && guid.equals(p.preferredControllerGuid()) && !playing.contains(p.name().toLowerCase(Locale.ROOT))) {
+					return p;
+				}
+			}
+			int index = nextFreeIndex();
+			for (String prefix : new String[] {"Player", "Guest"}) {
+				String name = prefix + (index + 1);
+				if (!name.equalsIgnoreCase(minecraft.getUser().getName()) && !playing.contains(name.toLowerCase(Locale.ROOT))) {
+					GuestProfile profile = loadOrCreateProfile(name);
+					if (guid != null && !guid.equals(profile.preferredControllerGuid())) {
+						List<GuestProfile> updated = new ArrayList<>(store.load());
+						updated.replaceAll(p -> p.id().equals(profile.id()) ? p.withController(guid) : p);
+						store.save(updated);
+					}
+					return profile;
+				}
+			}
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+		}
+		return null;
+	}
+
+	private void chat(Component message) {
+		minecraft.gui.chatListener().handleSystemMessage(message, false);
+	}
+
 	private void removeSlot(Slot slot) {
 		slots.remove(slot.index, slot);
-		roster.remove(slot.index);
+		String controller = controllerOfSlot.remove(slot.index);
+		if (controller != null) {
+			minecraft.execute(() -> flow.leave(controller));
+		}
+		WorldLink link = world;
+		if (link != null) {
+			link.remove(slot.index);
+		}
 		minecraft.execute(() -> {
 			if (input != null) {
 				input.release(slot.index);
@@ -354,8 +583,8 @@ public final class HostSession {
 			HearthsideMod.LOGGER.warn("Rejected a control connection claiming player slot {}", hello.playerIndex());
 			return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, false, "rejected", ""), null);
 		}
-		UUID guest = GuestUuids.forProfile(slot.profile.id());
-		return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, true, "", tokens.issue(guest)),
+		// The login token travels in JoinWorld, once a world is open.
+		return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, true, "", ""),
 				connection -> {
 					slot.connection = connection;
 					connection.onMessage(message -> {
@@ -377,7 +606,10 @@ public final class HostSession {
 					HostInput currentInput = input;
 					send(connection, new ControlMessage.SetPadStyle(
 							currentInput == null ? PadStyle.GENERIC : currentInput.styleFor(slot.index)));
-					send(connection, new ControlMessage.JoinWorld(gamePort));
+					WorldLink link = world;
+					if (link != null) {
+						sendIn(link, slot, connection);
+					}
 					minecraft.execute(this::afterGuestsChanged);
 				});
 	}
@@ -421,6 +653,13 @@ public final class HostSession {
 	/** Re-lays out the views, or leaves split-screen mode when the last guest has gone. Render thread. */
 	private void afterGuestsChanged() {
 		List<Slot> guests = new ArrayList<>(slots.values());
+		if (world == null) {
+			// In the lobby guests' games wait hidden; views are laid out once a world is open.
+			if (Compositor.active() != null) {
+				Compositor.deactivate(minecraft);
+			}
+			return;
+		}
 		if (guests.isEmpty()) {
 			leaveSplitScreen();
 			return;

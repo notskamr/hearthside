@@ -4,8 +4,11 @@ import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.GamepadSource;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.InputRouter;
+import dev.hearthside.core.input.PadButton;
+import dev.hearthside.core.input.PadSnapshot;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.input.RouterEvent;
+import dev.hearthside.core.input.SharedScreenInput;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
 import dev.hearthside.fabric.HearthsideMod;
@@ -13,23 +16,26 @@ import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConfirmScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 /**
  * The host's controller loop, run once per rendered frame: read every pad, route each to its
  * player, forward guests' input to their satellites, drive the host's own pad, and react to
- * START-to-join, claims, unplugs and replugs. Render thread only, except {@link #styleFor}.
+ * A/B presses from unused controllers (the join flow), claims, unplugs and replugs. Render thread only, except {@link #styleFor}.
  */
 final class HostInput implements Runnable {
 	private static final long RESEND_NANOS = 100_000_000L;
 
 	private final Minecraft minecraft;
-	private final HostSession session;
+	private final Party session;
 	private final GamepadSource source;
 	private final InputRouter router = new InputRouter();
 	private final InputApplier hostApplier;
@@ -41,8 +47,15 @@ final class HostInput implements Runnable {
 	private Boolean savedToggleCrouch;
 	private Boolean savedAutoJump;
 	private boolean closed;
+	// Each controller's model id, for remembering which controller a profile last used.
+	private final Map<Integer, String> guids = new HashMap<>();
+	private long lastFlowTick;
+	/** Each controller's buttons last frame on shared screens, for press edges. */
+	private final Map<Integer, Integer> sharedButtons = new HashMap<>();
+	/** Whether a guest's controller is driving the host's shared screen (the host has no pad of its own). */
+	private boolean sharedDriving;
 
-	HostInput(Minecraft minecraft, HostSession session, GamepadSource source, ControlScheme hostScheme) {
+	HostInput(Minecraft minecraft, Party session, GamepadSource source, ControlScheme hostScheme) {
 		this.minecraft = minecraft;
 		this.session = session;
 		this.source = source;
@@ -55,7 +68,20 @@ final class HostInput implements Runnable {
 		if (closed) {
 			return;
 		}
-		InputRouter.Update update = router.update(source.poll());
+		List<PadSnapshot> pads = source.poll();
+		for (PadSnapshot pad : pads) {
+			guids.put(pad.instanceId(), pad.guid());
+		}
+		InputRouter.Update update = router.update(pads);
+		long tickNow = System.nanoTime();
+		if (tickNow - lastFlowTick >= 1_000_000_000L) {
+			lastFlowTick = tickNow;
+			try {
+				session.tickFlow();
+			} catch (RuntimeException e) {
+				HearthsideMod.LOGGER.error("Hearthside join-flow tick failed", e);
+			}
+		}
 		for (RouterEvent event : update.events()) {
 			try {
 				handle(event);
@@ -64,6 +90,19 @@ final class HostInput implements Runnable {
 			}
 		}
 		refreshStyles();
+		if (!session.inWorld()) {
+			// No world yet (lobby, world select): guests' games are idle on their title screens and must not be
+			// driven. Every controller drives the host's shared screen instead (Spec A sections 7.1, 8.2).
+			driveSharedScreen(update.frames());
+			return;
+		}
+		if (sharedDriving) {
+			sharedDriving = false;
+			if (!update.frames().containsKey(0)) {
+				hostApplier.release();
+			}
+		}
+		sharedButtons.clear();
 		long now = System.nanoTime();
 		update.frames().forEach((player, frame) -> {
 			if (player == 0) {
@@ -76,6 +115,50 @@ final class HostInput implements Runnable {
 			}
 		});
 		hostApplier.onFrame();
+	}
+
+	/**
+	 * Shared screens: Menu on any seated controller continues from the lobby, B on a seated controller in the lobby
+	 * gives up its seat, and otherwise whoever is using a controller moves the host's cursor.
+	 */
+	private void driveSharedScreen(Map<Integer, InputFrame> frames) {
+		Screen screen = minecraft.gui.screen();
+		LobbyScreen lobby = screen instanceof LobbyScreen l ? l : null;
+		int start = InputFrame.buttons(PadButton.START);
+		int b = InputFrame.buttons(PadButton.B);
+		for (Map.Entry<Integer, InputFrame> entry : frames.entrySet()) {
+			int player = entry.getKey();
+			int buttons = entry.getValue().buttons();
+			int pressed = buttons & ~sharedButtons.getOrDefault(player, 0);
+			sharedButtons.put(player, buttons);
+			if (player == 0 || lobby == null) {
+				continue;
+			}
+			if ((pressed & start) != 0) {
+				lobby.continueToWorlds();
+			} else if ((pressed & b) != 0) {
+				session.onSeatedB(player);
+			}
+		}
+		sharedButtons.keySet().retainAll(frames.keySet());
+		// Ending the party is player 1's call (Spec A section 7.1): guests don't drive its confirmation.
+		Map<Integer, InputFrame> drivers = screen instanceof ConfirmScreen
+				? (frames.containsKey(0) ? Map.of(0, frames.get(0)) : Map.of()) : frames;
+		InputFrame drive = SharedScreenInput.drive(drivers, lobby != null ? start | b : start);
+		if (drivers.containsKey(0)) {
+			hostApplier.accept(drive);
+			hostApplier.onFrame();
+		} else if (screen != null && SharedScreenInput.isActive(drive)) {
+			hostApplier.accept(drive);
+			hostApplier.onFrame();
+			sharedDriving = true;
+		} else if (sharedDriving) {
+			// Let go (releasing anything held), then hand the screen back to the mouse.
+			hostApplier.accept(InputFrame.NEUTRAL);
+			hostApplier.onFrame();
+			hostApplier.release();
+			sharedDriving = false;
+		}
 	}
 
 	void armClaim() {
@@ -112,7 +195,8 @@ final class HostInput implements Runnable {
 
 	private void handle(RouterEvent event) {
 		switch (event) {
-			case RouterEvent.JoinRequest join -> addGuest(join.instanceId());
+			case RouterEvent.UnassignedPress press -> session.onUnassignedPress(press.instanceId(), press.button(),
+					guids.get(press.instanceId()));
 			case RouterEvent.ClaimRequest claim -> claimForHost(claim.instanceId());
 			case RouterEvent.PadLost lost -> {
 				if (lost.player() == 0) {
@@ -120,11 +204,13 @@ final class HostInput implements Runnable {
 					minecraft.pauseGame(false);
 				} else {
 					session.sendToGuest(lost.player(), new ControlMessage.Lifecycle(LifecycleCommand.PAUSE));
+					session.onPadLost(lost.player());
 				}
 				chat(Component.literal("Player " + (lost.player() + 1) + "'s controller disconnected.").withStyle(ChatFormatting.YELLOW));
 			}
 			case RouterEvent.PadRestored restored -> {
 				if (restored.player() != 0) {
+					session.onPadRestored(restored.player(), restored.instanceId());
 					session.sendToGuest(restored.player(), new ControlMessage.SetPadStyle(router.styleOf(restored.player()).orElse(PadStyle.GENERIC)));
 					session.sendToGuest(restored.player(), new ControlMessage.Lifecycle(LifecycleCommand.RESUME));
 				}
@@ -160,34 +246,13 @@ final class HostInput implements Runnable {
 		}
 	}
 
-	private void addGuest(int instanceId) {
-		int joined = -1;
-		for (String prefix : new String[] {"Player", "Guest"}) {
-			int index = session.nextFreeIndex();
-			if (index < 0) {
-				chat(Component.literal("All 3 guest slots are taken.").withStyle(ChatFormatting.RED));
-				return;
-			}
-			try {
-				joined = session.join(prefix + (index + 1));
-				break;
-			} catch (IllegalArgumentException refusedName) {
-				// e.g. the host is called Player2; try the next naming scheme
-			} catch (Exception e) {
-				HearthsideMod.LOGGER.error("Could not add a player for controller {}", instanceId, e);
-				chat(Component.literal("Couldn't add a player: " + e.getMessage()).withStyle(ChatFormatting.RED));
-				return;
-			}
-		}
-		if (joined < 0) {
-			chat(Component.literal("Couldn't find a free name for a new player.").withStyle(ChatFormatting.RED));
-			return;
-		}
+	/** Gives a controller to a guest who just joined. Render thread. */
+	void assignPad(int instanceId, int player) {
 		// A guest who just left may still own this slot in the router until their release runs.
-		if (router.hasPad(joined)) {
-			router.release(joined);
+		if (router.hasPad(player)) {
+			router.release(player);
 		}
-		router.assign(instanceId, joined);
+		router.assign(instanceId, player);
 	}
 
 	private void refreshStyles() {

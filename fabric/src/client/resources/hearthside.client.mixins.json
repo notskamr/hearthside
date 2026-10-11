@@ -9,6 +9,7 @@
 		"FrameHookMixin",
 		"KeyboardInputMixin",
 		"KeyMappingAccessor",
+		"MinecraftUserAccessor",
 		"SatelliteGrabMixin",
 		"HostMouseMixin",
 		"PresentMixin",

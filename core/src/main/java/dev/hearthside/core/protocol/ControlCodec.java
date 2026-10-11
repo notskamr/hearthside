@@ -19,7 +19,7 @@ import java.io.UTFDataFormatException;
  * add messages.
  */
 public final class ControlCodec {
-	public static final int PROTOCOL_VERSION = 2;
+	public static final int PROTOCOL_VERSION = 3;
 	public static final int MAX_FRAME_BYTES = 65_536;
 
 	private static final int HELLO = 1;
@@ -88,6 +88,8 @@ public final class ControlCodec {
 			}
 			case ControlMessage.JoinWorld m -> {
 				p.writeInt(m.port());
+				p.writeUTF(m.loginToken());
+				p.writeUTF(m.playerName());
 				yield JOIN_WORLD;
 			}
 			case ControlMessage.SetControls m -> {
@@ -134,7 +136,7 @@ public final class ControlCodec {
 				case FRAME_SLOTS_READY -> new ControlMessage.FrameSlotsReady(transport(p.readUnsignedByte()), p.readInt(),
 						p.readInt(), p.readInt(), p.readUTF());
 				case LIFECYCLE -> new ControlMessage.Lifecycle(lifecycle(p.readUnsignedByte()));
-				case JOIN_WORLD -> new ControlMessage.JoinWorld(p.readInt());
+				case JOIN_WORLD -> new ControlMessage.JoinWorld(p.readInt(), p.readUTF(), p.readUTF());
 				case SET_CONTROLS -> new ControlMessage.SetControls(p.readUTF());
 				case SET_PAD_STYLE -> new ControlMessage.SetPadStyle(padStyle(p.readUnsignedByte()));
 				default -> {

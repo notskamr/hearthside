@@ -15,7 +15,9 @@ import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.fabric.client.compositor.Compositor;
-import dev.hearthside.fabric.client.host.HostSession;
+import dev.hearthside.fabric.client.host.LobbyScreen;
+import dev.hearthside.fabric.client.input.VirtualCursor;
+import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
@@ -32,8 +34,13 @@ import java.util.concurrent.Callable;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.gui.screens.ConfirmScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
@@ -89,8 +96,19 @@ public final class E2eDriver {
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
 
-			openWorld();
-			waitFor("host session", Duration.ofSeconds(180), () -> HostSession.current() != null);
+			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
+				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
+				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
+				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
+				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
+				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
+				step("B5 Menu on a seated controller continues; the world brings the guest in", this::lobbyIntoWorld);
+			}
+			if (onRender(() -> minecraft.level == null)) {
+				openWorld();
+			}
+			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
@@ -113,7 +131,9 @@ public final class E2eDriver {
 			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
-				step("P1 START on a new controller adds Player2", this::startJoins);
+				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
+				step("B3 the join prompt expires after 5 s", this::joinPromptExpires);
+				step("P1 A, A on a new controller adds Player2", this::startJoins);
 				step("P2 left stick moves the guest", this::stickMoves);
 				step("P3 right stick turns the guest", this::stickTurns);
 				step("P4 RB advances the guest's hotbar", this::bumperSteps);
@@ -132,9 +152,9 @@ public final class E2eDriver {
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
 			openWorld();
-			waitFor("host session", Duration.ofSeconds(180), () -> HostSession.current() != null);
+			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			onRender(() -> {
-				HostSession.current().join(GUEST);
+				Party.current().join(GUEST);
 				return null;
 			});
 			waitFor("guest rejoin for host-kill step", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -148,7 +168,7 @@ public final class E2eDriver {
 
 	private void guestJoins() throws Exception {
 		onRender(() -> {
-			HostSession.current().join(GUEST);
+			Party.current().join(GUEST);
 			return null;
 		});
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -194,13 +214,13 @@ public final class E2eDriver {
 		System.setProperty("hearthside.forceCopy", "true");
 		try {
 			onRender(() -> {
-				HostSession.current().leave(GUEST);
+				Party.current().leave(GUEST);
 				return null;
 			});
 			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
 			long mark = hostLogLength();
 			onRender(() -> {
-				HostSession.current().join(GUEST);
+				Party.current().join(GUEST);
 				return null;
 			});
 			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -248,12 +268,12 @@ public final class E2eDriver {
 	private void failedImportFallsBackToCopy() throws Exception {
 		// Start from a guest on GPU sharing (C5 left it on copy).
 		onRender(() -> {
-			HostSession.current().leave(GUEST);
+			Party.current().leave(GUEST);
 			return null;
 		});
 		waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
 		onRender(() -> {
-			HostSession.current().join(GUEST);
+			Party.current().join(GUEST);
 			return null;
 		});
 		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -310,7 +330,7 @@ public final class E2eDriver {
 	private void thirdPlayerAndBack() throws Exception {
 		long mark = hostLogLength();
 		onRender(() -> {
-			HostSession.current().join("Guest3");
+			Party.current().join("Guest3");
 			return null;
 		});
 		try {
@@ -319,7 +339,7 @@ public final class E2eDriver {
 			waitForProbe(2, mark, Duration.ofSeconds(10));
 		} finally {
 			onRender(() -> {
-				HostSession.current().leave("Guest3");
+				Party.current().leave("Guest3");
 				return null;
 			});
 		}
@@ -469,7 +489,7 @@ public final class E2eDriver {
 		String hostName = minecraft.getUser().getName();
 		try {
 			onRender(() -> {
-				HostSession.current().join(hostName);
+				Party.current().join(hostName);
 				return null;
 			});
 		} catch (IllegalArgumentException expected) {
@@ -480,7 +500,7 @@ public final class E2eDriver {
 
 	private void leaveClosesSatellite() throws Exception {
 		onRender(() -> {
-			HostSession.current().leave(GUEST);
+			Party.current().leave(GUEST);
 			return null;
 		});
 		waitFor("1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
@@ -492,7 +512,7 @@ public final class E2eDriver {
 
 	private void closingWorldClosesSatellites() throws Exception {
 		onRender(() -> {
-			HostSession.current().join(GUEST);
+			Party.current().join(GUEST);
 			return null;
 		});
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -521,10 +541,159 @@ public final class E2eDriver {
 		store.save(profiles);
 	}
 
-	private void startJoins() throws Exception {
+	// ---- Lobby steps (before any world) ----
+
+	private static final int LOBBY_PAD = 103;
+
+	/** Opens the lobby the way a player does: Co-op on the title screen. */
+	private LobbyScreen openLobby() throws Exception {
+		return onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			coopButton().onPress(new KeyEvent(0, 0, 0));
+			return (LobbyScreen) minecraft.gui.screen();
+		});
+	}
+
+	/** The title screen's Co-op button, or null. Render thread. */
+	private AbstractButton coopButton() {
+		return Screens.getWidgets(minecraft.gui.screen()).stream()
+				.filter(w -> w instanceof AbstractButton && w.getMessage().getString().startsWith("Co-op"))
+				.map(w -> (AbstractButton) w).findFirst().orElse(null);
+	}
+
+	private void titleCoopOpensLobby() throws Exception {
+		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		AbstractButton coop = onRender(this::coopButton);
+		check(coop != null, "the title screen has a Co-op button");
+		String offScreen = onRender(() -> {
+			Screen title = minecraft.gui.screen();
+			return Screens.getWidgets(title).stream()
+					.filter(w -> w.getY() < 0 || w.getY() + w.getHeight() > title.height)
+					.map(w -> w.getMessage().getString() + "@" + w.getY()).toList().toString();
+		});
+		check(offScreen.equals("[]"), "every title-screen widget is on screen (off: " + offScreen + ")");
+		waitFor("the Co-op button counts the controller", Duration.ofSeconds(5),
+				() -> onRender(() -> coop.getMessage().getString().equals("Co-op (1 controller)")));
+		onRender(() -> {
+			coop.onPress(new KeyEvent(0, 0, 0));
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen), "Co-op opens the lobby");
+		onRender(() -> {
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() instanceof TitleScreen) && Party.current() == null,
+				"Back returns to the title screen with no party");
+		PADS.unplug(LOBBY_PAD);
+	}
+
+	private void lobbyCancelStopsGuests() throws Exception {
+		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		LobbyScreen lobby = openLobby();
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a guest game warming up in the lobby", Duration.ofSeconds(30), () -> !satellites().isEmpty());
+		onRender(() -> {
+			lobby.onClose();
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() instanceof ConfirmScreen), "leaving the lobby asks first");
+		check(Party.current() != null && !satellites().isEmpty(), "nothing has stopped before the answer");
+		onRender(() -> {
+			Screens.getWidgets(minecraft.gui.screen()).stream()
+					.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("End party"))
+					.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+			return null;
+		});
+		waitFor("every guest game stopped", Duration.ofSeconds(30), () -> satellites().isEmpty());
+		check(Party.current() == null, "the party is gone");
+	}
+
+	private void lobbySharedCursor() throws Exception {
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen), "in the lobby");
+		PADS.set(LOBBY_PAD, new InputFrame(0, 0, 1, 0, 0, 0, 0, 0));
+		Thread.sleep(600);
+		PADS.set(LOBBY_PAD, InputFrame.NEUTRAL);
+		Thread.sleep(300);
+		double x = onRender(VirtualCursor::x);
+		int centre = onRender(() -> minecraft.getWindow().getScreenWidth() / 2);
+		check(x > centre + 20, "the stick moved the host's cursor right (x " + x + ", centre " + centre + ")");
+		check(!satelliteLog().contains("hearthside controller: menu mode"),
+				"the guest's game, idle on its title screen, got no controller input");
+	}
+
+	private void orphanedTitleReturnsToLobby() throws Exception {
+		// What Minecraft does when a world fails to open: it shows the title screen.
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		waitFor("back in the lobby", Duration.ofSeconds(5),
+				() -> onRender(() -> minecraft.gui.screen() instanceof LobbyScreen));
+		check(Party.current() != null && Party.current().seatedCount() == 1 && !satellites().isEmpty(),
+				"the seat and its game are kept");
+	}
+
+	private void seatedBLeaves() throws Exception {
+		press(LOBBY_PAD, PadButton.B);
+		waitFor("the seat's game stopped", Duration.ofSeconds(30), () -> satellites().isEmpty());
+		check(onRender(() -> Party.current().seatedCount()) == 0, "the seat is free");
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen), "the lobby stays open");
+		// The next game in this seat writes a new log; don't let B5 read this one's "connected" line.
+		Files.deleteIfExists(minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/logs/latest.log"));
+	}
+
+	private void lobbySeatsAndPrewarms() throws Exception {
+		openLobby();
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a guest game warming up", Duration.ofSeconds(30), () -> !satellites().isEmpty());
+		check(onRender(() -> minecraft.level == null), "no world is open yet");
+		waitFor("the guest's game connected to the party", Duration.ofSeconds(120),
+				() -> satelliteLog().contains("hearthside satellite connected as player"));
+	}
+
+	private void lobbyIntoWorld() throws Exception {
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("the guest's game connected again", Duration.ofSeconds(120),
+				() -> !satellites().isEmpty() && satelliteLog().contains("hearthside satellite connected as player"));
+		press(LOBBY_PAD, PadButton.START);
+		check(onRender(() -> minecraft.gui.screen() instanceof SelectWorldScreen), "Menu continues to world select");
+		openWorld();
+		waitFor("the lobby guest in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+		// Back to the starting point for the rest of the run: the lobby guest leaves.
+		onRender(() -> {
+			Party party = Party.current();
+			party.leaveAll();
+			return null;
+		});
+		PADS.unplug(LOBBY_PAD);
+		waitFor("lobby guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+	}
+
+	private void oneADoesNotJoin() throws Exception {
 		PADS.plug(101, PAD_GUID, PadStyle.PLAYSTATION);
 		Thread.sleep(300);
-		press(101, PadButton.START);
+		press(101, PadButton.A);
+		Thread.sleep(2500);
+		check(guest("Player2") == null && satellites().isEmpty(), "one A only asks; nobody joined");
+	}
+
+	private void joinPromptExpires() throws Exception {
+		Thread.sleep(3500); // past the 5 s window of B2's press
+		press(101, PadButton.A); // a fresh prompt, not a confirmation
+		Thread.sleep(2500);
+		check(guest("Player2") == null && satellites().isEmpty(), "an A after the prompt expired only asks again");
+	}
+
+	private void startJoins() throws Exception {
+		Thread.sleep(5500); // let B3's prompt expire
+		press(101, PadButton.A);
+		press(101, PadButton.A);
 		waitFor("Player2 in the world", Duration.ofSeconds(180), () -> guest("Player2") != null);
 		// The server counts the guest as joined while its client still shows the terrain-loading
 		// screen; controller input only drives the player once that screen is gone.
@@ -755,7 +924,7 @@ public final class E2eDriver {
 
 	private void player2Leaves() throws Exception {
 		onRender(() -> {
-			HostSession.current().leave("Player2");
+			Party.current().leave("Player2");
 			return null;
 		});
 		PADS.unplug(102);

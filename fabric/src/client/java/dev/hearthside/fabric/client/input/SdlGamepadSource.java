@@ -63,6 +63,30 @@ public final class SdlGamepadSource implements GamepadSource, AutoCloseable {
 		return new SdlGamepadSource();
 	}
 
+	private static boolean countingStarted;
+
+	/**
+	 * How many controllers are connected, without opening them (for the title screen). Render thread. SDL counts
+	 * subsystem starts, so this one start outlives any party's {@link #close}.
+	 */
+	public static int connectedCount() {
+		if (!countingStarted) {
+			countingStarted = SDLInit.SDL_InitSubSystem(SDLInit.SDL_INIT_GAMEPAD);
+			if (!countingStarted) {
+				return 0;
+			}
+		}
+		IntBuffer ids = SDL_GetGamepads();
+		if (ids == null) {
+			return 0;
+		}
+		try {
+			return ids.remaining();
+		} finally {
+			SDLStdinc.SDL_free(ids);
+		}
+	}
+
 	@Override
 	public List<PadSnapshot> poll() {
 		Map<Integer, Boolean> seen = new HashMap<>();
