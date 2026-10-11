@@ -1,5 +1,6 @@
 package dev.hearthside.core.compositor;
 
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLongArray;
 
@@ -9,6 +10,8 @@ public final class ArraySlotTable implements SlotTable {
 	private final AtomicIntegerArray states;
 	private final AtomicLongArray frames;
 	private final AtomicLongArray sizes;
+	private final AtomicIntegerArray memoryTypes;
+	private volatile ImageDescription description;
 
 	public ArraySlotTable(int slots, int generation) {
 		if (slots < 1) {
@@ -18,6 +21,7 @@ public final class ArraySlotTable implements SlotTable {
 		this.states = new AtomicIntegerArray(slots);
 		this.frames = new AtomicLongArray(slots);
 		this.sizes = new AtomicLongArray(slots);
+		this.memoryTypes = new AtomicIntegerArray(slots);
 	}
 
 	@Override
@@ -58,5 +62,28 @@ public final class ArraySlotTable implements SlotTable {
 	@Override
 	public void setMemorySize(int slot, long size) {
 		sizes.set(slot, size);
+	}
+
+	@Override
+	public int memoryType(int slot) {
+		return memoryTypes.get(slot);
+	}
+
+	@Override
+	public void setMemoryType(int slot, int type) {
+		memoryTypes.set(slot, type);
+	}
+
+	@Override
+	public Optional<ImageDescription> description() {
+		return Optional.ofNullable(description);
+	}
+
+	@Override
+	public void setDescription(ImageDescription description) {
+		if (description.width() < 1) { // as SegmentSlotTable, which reads a width of 0 as "no description"
+			throw new IllegalArgumentException("An image is at least 1 pixel wide, was " + description.width());
+		}
+		this.description = description;
 	}
 }
