@@ -20,8 +20,11 @@ public final class GamepadMapping {
 
 	public static GameplayIntent gameplay(ControlScheme scheme, InputFrame previous, InputFrame current, float dtSeconds) {
 		float dt = clampDt(dtSeconds);
-		float[] move = deadZone(current.leftX(), current.leftY(), scheme.deadZone());
-		float[] look = deadZone(current.rightX(), current.rightY(), scheme.deadZone());
+		boolean swap = scheme.swapSticks();
+		float[] move = swap ? deadZone(current.rightX(), current.rightY(), scheme.deadZone())
+				: deadZone(current.leftX(), current.leftY(), scheme.deadZone());
+		float[] look = swap ? deadZone(current.leftX(), current.leftY(), scheme.deadZone())
+				: deadZone(current.rightX(), current.rightY(), scheme.deadZone());
 		float yaw = curve(look[0]) * YAW_DEG_PER_SEC * scheme.lookSensitivity() * dt;
 		float pitch = curve(look[1]) * PITCH_DEG_PER_SEC * scheme.lookSensitivity() * dt;
 		if (scheme.invertY()) {
@@ -45,8 +48,11 @@ public final class GamepadMapping {
 
 	public static MenuIntent menu(ControlScheme scheme, InputFrame previous, InputFrame current, float dtSeconds) {
 		float dt = clampDt(dtSeconds);
-		float[] cursor = deadZone(current.leftX(), current.leftY(), scheme.deadZone());
-		float[] scroll = deadZone(current.rightX(), current.rightY(), scheme.deadZone());
+		boolean swap = scheme.swapSticks();
+		float[] cursor = swap ? deadZone(current.rightX(), current.rightY(), scheme.deadZone())
+				: deadZone(current.leftX(), current.leftY(), scheme.deadZone());
+		float[] scroll = swap ? deadZone(current.leftX(), current.leftY(), scheme.deadZone())
+				: deadZone(current.rightX(), current.rightY(), scheme.deadZone());
 
 		Set<MenuAction> down = EnumSet.noneOf(MenuAction.class);
 		Set<MenuAction> up = EnumSet.noneOf(MenuAction.class);

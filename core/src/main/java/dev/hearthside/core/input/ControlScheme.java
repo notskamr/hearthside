@@ -3,15 +3,18 @@ package dev.hearthside.core.input;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 /**
- * One player's controller bindings and settings. Sticks are fixed (left moves, right looks); every
- * other control can be bound to at most one in-world action and at most one menu action.
+ * One player's controller bindings and settings. The left stick moves and the right looks, or the other way round
+ * with {@code swapSticks} (Southpaw); every other control can be bound to at most one in-world action and at most one
+ * menu action.
  */
 public record ControlScheme(Map<Action, Control> gameplay, Map<MenuAction, Control> menu, float lookSensitivity,
-		boolean invertY, float deadZone, boolean toggleSneak, boolean autoJump, boolean showButtonGuide) {
+		boolean invertY, float deadZone, boolean toggleSneak, boolean autoJump, boolean showButtonGuide,
+		boolean swapSticks) {
 	public static final float MIN_SENSITIVITY = 0.1f, MAX_SENSITIVITY = 3.0f;
 	public static final float MIN_DEAD_ZONE = 0.05f, MAX_DEAD_ZONE = 0.5f;
 
@@ -40,6 +43,32 @@ public record ControlScheme(Map<Action, Control> gameplay, Map<MenuAction, Contr
 					MenuAction.CLOSE, Control.B),
 			1.0f, false, 0.15f, false, true, true);
 
+	/** Java-like: the off-hand on X and pick block on the D-pad's left, as Java players expect; no recipe button. */
+	public static final ControlScheme JAVA_LIKE = BEDROCK.withGameplay(map -> {
+		map.remove(Action.CRAFTING);
+		map.put(Action.SWAP_OFFHAND, Control.X);
+		map.put(Action.PICK_BLOCK, Control.DPAD_LEFT);
+	}, false);
+
+	/** Southpaw: the sticks swapped (right moves, left looks), and the triggers and bumpers mirrored. */
+	public static final ControlScheme SOUTHPAW = BEDROCK.withGameplay(map -> {
+		map.put(Action.ATTACK, Control.LEFT_TRIGGER);
+		map.put(Action.USE, Control.RIGHT_TRIGGER);
+		map.put(Action.HOTBAR_PREV, Control.RIGHT_BUMPER);
+		map.put(Action.HOTBAR_NEXT, Control.LEFT_BUMPER);
+	}, true);
+
+	/** A preset with the name players see. */
+	public record Named(String name, ControlScheme scheme) {}
+
+	public static final List<Named> PRESETS = List.of(new Named("Bedrock", BEDROCK), new Named("Java-like", JAVA_LIKE),
+			new Named("Southpaw", SOUTHPAW));
+
+	public ControlScheme(Map<Action, Control> gameplay, Map<MenuAction, Control> menu, float lookSensitivity,
+			boolean invertY, float deadZone, boolean toggleSneak, boolean autoJump, boolean showButtonGuide) {
+		this(gameplay, menu, lookSensitivity, invertY, deadZone, toggleSneak, autoJump, showButtonGuide, false);
+	}
+
 	public ControlScheme {
 		gameplay = copy(gameplay, Action.class);
 		menu = copy(menu, MenuAction.class);
@@ -63,7 +92,39 @@ public record ControlScheme(Map<Action, Control> gameplay, Map<MenuAction, Contr
 		next.putAll(gameplay);
 		next.values().removeIf(control::equals);
 		next.put(action, control);
-		return new ControlScheme(next, menu, lookSensitivity, invertY, deadZone, toggleSneak, autoJump, showButtonGuide);
+		return new ControlScheme(next, menu, lookSensitivity, invertY, deadZone, toggleSneak, autoJump, showButtonGuide,
+				swapSticks);
+	}
+
+	/**
+	 * Binds {@code control} to {@code action} by swapping: the action that had the control takes this action's old one
+	 * (or none, if it had none), so nothing is lost by accident and no control serves two actions.
+	 */
+	public ControlScheme withSwap(Action action, Control control) {
+		Control old = gameplay.get(action);
+		Map<Action, Control> next = new EnumMap<>(Action.class);
+		next.putAll(gameplay);
+		for (Map.Entry<Action, Control> entry : gameplay.entrySet()) {
+			if (entry.getValue() == control && entry.getKey() != action) {
+				if (old != null) {
+					next.put(entry.getKey(), old);
+				} else {
+					next.remove(entry.getKey());
+				}
+			}
+		}
+		next.put(action, control);
+		return new ControlScheme(next, menu, lookSensitivity, invertY, deadZone, toggleSneak, autoJump, showButtonGuide,
+				swapSticks);
+	}
+
+	/** This scheme's settings with its in-world bindings changed by {@code change}, sticks as given. */
+	private ControlScheme withGameplay(java.util.function.Consumer<Map<Action, Control>> change, boolean sticksSwapped) {
+		Map<Action, Control> next = new EnumMap<>(Action.class);
+		next.putAll(gameplay);
+		change.accept(next);
+		return new ControlScheme(next, menu, lookSensitivity, invertY, deadZone, toggleSneak, autoJump, showButtonGuide,
+				sticksSwapped);
 	}
 
 	private static <K extends Enum<K>> Map<K, Control> copy(Map<K, Control> source, Class<K> type) {

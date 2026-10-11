@@ -52,6 +52,7 @@ public final class ControlSchemeJson {
 		root.addProperty("toggleSneak", scheme.toggleSneak());
 		root.addProperty("autoJump", scheme.autoJump());
 		root.addProperty("showButtonGuide", scheme.showButtonGuide());
+		root.addProperty("swapSticks", scheme.swapSticks());
 		return root;
 	}
 
@@ -77,7 +78,8 @@ public final class ControlSchemeJson {
 					number(root.get("deadZone"), DEFAULTS.deadZone()),
 					flag(root.get("toggleSneak"), DEFAULTS.toggleSneak()),
 					flag(root.get("autoJump"), DEFAULTS.autoJump()),
-					flag(root.get("showButtonGuide"), DEFAULTS.showButtonGuide()));
+					flag(root.get("showButtonGuide"), DEFAULTS.showButtonGuide()),
+					flag(root.get("swapSticks"), DEFAULTS.swapSticks()));
 		} catch (RuntimeException e) {
 			return DEFAULTS;
 		}
