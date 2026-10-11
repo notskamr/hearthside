@@ -4,6 +4,7 @@ import static org.lwjgl.opengl.GL45C.*;
 import static org.lwjgl.system.MemoryUtil.memAddress;
 import static org.lwjgl.system.MemoryUtil.memCopy;
 
+import com.mojang.renderpearl.backend.opengl.GlStateManager;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -83,8 +84,21 @@ public final class CopyTransport implements FrameTransport {
 		return textures[slot];
 	}
 
+	/**
+	 * Minecraft leaves its last upload's row length and skips in the pixel-store state; our transfers are tightly
+	 * packed whole images. Set through {@link GlStateManager} so its state cache stays right; Minecraft sets these
+	 * again before each of its own transfers.
+	 */
+	private static void tightlyPacked(int rowLength, int skipRows, int skipPixels, int alignment) {
+		GlStateManager._pixelStore(rowLength, 0);
+		GlStateManager._pixelStore(skipRows, 0);
+		GlStateManager._pixelStore(skipPixels, 0);
+		GlStateManager._pixelStore(alignment, 4);
+	}
+
 	@Override
 	public void afterDraw(int slot) {
+		tightlyPacked(GL_PACK_ROW_LENGTH, GL_PACK_SKIP_ROWS, GL_PACK_SKIP_PIXELS, GL_PACK_ALIGNMENT);
 		int previous = glGetInteger(GL_PIXEL_PACK_BUFFER_BINDING);
 		glBindBuffer(GL_PIXEL_PACK_BUFFER, pixelBuffers[slot]);
 		glGetTextureImage(textures[slot], 0, GL_RGBA, GL_UNSIGNED_BYTE, (int) bytesPerSlot, 0L);
@@ -106,6 +120,8 @@ public final class CopyTransport implements FrameTransport {
 
 	@Override
 	public void beforeRead(int slot) {
+		tightlyPacked(GL_UNPACK_ROW_LENGTH, GL_UNPACK_SKIP_ROWS, GL_UNPACK_SKIP_PIXELS, GL_UNPACK_ALIGNMENT);
+		GlStateManager._pixelStore(GL_UNPACK_IMAGE_HEIGHT, 0);
 		int previous = glGetInteger(GL_PIXEL_UNPACK_BUFFER_BINDING);
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 		glTextureSubImage2D(textures[slot], 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE,

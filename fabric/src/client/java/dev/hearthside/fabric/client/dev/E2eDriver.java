@@ -13,7 +13,10 @@ import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.ProfileStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
+import com.mojang.blaze3d.platform.InputConstants;
+import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.HostSession;
+import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +32,8 @@ import java.util.concurrent.Callable;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
@@ -92,10 +97,16 @@ public final class E2eDriver {
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
 			step("C5 copy transport works", this::copyTransportWorks);
+			step("C6 maximise and restore keep the guest composited", this::maximiseAndRestore);
+			step("C7 a third player and back re-lays out without GL errors", this::thirdPlayerAndBack);
+			step("C9 the host's mouse works only inside its own view", this::hostMouseConfined);
 			step("3 crashed satellite is restarted", this::crashedSatelliteRestarts);
+			step("C8 the restarted guest's frames come back", this::restartedGuestComposited);
 			step("4 guest named like the host is refused", this::hostNameRefused);
 			step("4b opening and closing LAN keeps the guest", this::lanToggleKeepsGuest);
+			long beforeLastLeave = hostLogLength();
 			step("5 leave closes the satellite and leaves the host window as it was", this::leaveClosesSatellite);
+			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				step("P1 START on a new controller adds Player2", this::startJoins);
@@ -192,6 +203,109 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.forceCopy");
 		}
+	}
+
+	private void maximiseAndRestore() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> SDLVideo.SDL_MaximizeWindow(minecraft.getWindow().handle()));
+		try {
+			waitFor("window maximised", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) > hostWindowBefore.width());
+			waitForProbe(2, mark, Duration.ofSeconds(10));
+		} finally {
+			onRender(() -> SDLVideo.SDL_RestoreWindow(minecraft.getWindow().handle()));
+		}
+		long restored = hostLogLength();
+		waitFor("window restored", Duration.ofSeconds(5),
+				() -> onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) == hostWindowBefore.width());
+		waitForProbe(2, restored, Duration.ofSeconds(10));
+	}
+
+	private void thirdPlayerAndBack() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> {
+			HostSession.current().join("Guest3");
+			return null;
+		});
+		try {
+			waitFor("3 players", Duration.ofSeconds(180), () -> playerCount() == 3);
+			waitForProbe(3, mark, Duration.ofSeconds(30));
+			waitForProbe(2, mark, Duration.ofSeconds(10));
+		} finally {
+			onRender(() -> {
+				HostSession.current().leave("Guest3");
+				return null;
+			});
+		}
+		long back = hostLogLength();
+		waitFor("back to 2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
+		waitForProbe(2, back, Duration.ofSeconds(10));
+		check(!hostLogSince(mark).contains("gl error"), "no GL errors while re-laying out");
+	}
+
+	private void restartedGuestComposited() throws Exception {
+		waitForProbe(2, 0, Duration.ofSeconds(30));
+		long mark = hostLogLength();
+		waitForProbe(2, mark, Duration.ofSeconds(30));
+	}
+
+	/** Clicks through MouseHandler as the OS would, in window coordinates: inside the host's view, then over the guest's. */
+	private void hostMouseConfined() throws Exception {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		String host = minecraft.getUser().getName();
+		server(("gamemode survival " + host), ("item replace entity " + host + " container.9 with minecraft:stone 10"));
+		onRender(() -> {
+			minecraft.gui.setScreen(new InventoryScreen(minecraft.player));
+			return null;
+		});
+		Thread.sleep(500);
+		ServerPlayer hostPlayer = server.getPlayerList().getPlayerByName(host);
+		try {
+			// Slot 9 is the first main-inventory slot; find where it is drawn, in window coordinates.
+			double[] slotWindow = onRender(() -> {
+				var screen = (InventoryScreen) minecraft.gui.screen();
+				var accessor = (ContainerScreenAccessor) screen;
+				var slot = screen.getMenu().slots.stream().filter(s -> s.getContainerSlot() == 9 && s.container == minecraft.player.getInventory())
+						.findFirst().orElseThrow();
+				double guiX = accessor.hearthside$leftPos() + slot.x + 8, guiY = accessor.hearthside$topPos() + slot.y + 8;
+				var window = minecraft.getWindow();
+				double toScreen = (double) window.getScreenWidth() / window.getGuiScaledWidth();
+				return new double[] {guiX * toScreen, guiY * toScreen};
+			});
+			osClick(slotWindow[0], slotWindow[1]);
+			waitFor("stone on the host's cursor", Duration.ofSeconds(5), () -> !hostPlayer.containerMenu.getCarried().isEmpty());
+			osClick(slotWindow[0], slotWindow[1]);
+			waitFor("stone put back", Duration.ofSeconds(5), () -> hostPlayer.containerMenu.getCarried().isEmpty());
+			// Over the guest's view (the right half of the window), the same click must do nothing.
+			double guestX = onRender(() -> minecraft.getWindow().queryFramebufferSize().width() * 0.75 * Compositor.active().screenPerFramebuffer());
+			osClick(guestX, slotWindow[1]);
+			Thread.sleep(500);
+			check(hostPlayer.containerMenu.getCarried().isEmpty(), "a click over the guest's view did nothing");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			server("gamemode creative " + host);
+		}
+	}
+
+	private void osClick(double windowX, double windowY) throws Exception {
+		onRender(() -> {
+			long handle = minecraft.getWindow().handle();
+			minecraft.mouseHandler.onMove(handle, windowX, windowY, 0, 0);
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 1);
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 0);
+			return null;
+		});
+		Thread.sleep(300);
+	}
+
+	private void fullWindowAgain(long fromOffset) throws Exception {
+		waitFor("virtual size cleared", Duration.ofSeconds(10), () -> hostLogSince(fromOffset).contains("virtual size cleared"));
+		boolean full = onRender(() -> minecraft.getWindow().getWidth() == minecraft.getWindow().queryFramebufferSize().width()
+				&& minecraft.getWindow().getHeight() == minecraft.getWindow().queryFramebufferSize().height());
+		check(full, "the host renders at its full window size");
 	}
 
 	private void waitForProbe(int player, long fromOffset, Duration timeout) throws Exception {

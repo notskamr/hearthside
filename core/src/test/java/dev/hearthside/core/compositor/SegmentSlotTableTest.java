@@ -32,6 +32,24 @@ class SegmentSlotTableTest {
 	}
 
 	@Test
+	void aNewGenerationStartsWithEverySlotFree() throws IOException {
+		// A guest that crashed mid-frame leaves WRITING/READING states behind; its successor writes a new generation's
+		// table, which must not inherit them, even if it reuses the file.
+		Path file = dir.resolve("frames.slots");
+		try (SegmentSlotTable old = SegmentSlotTable.create(file, 4, 1)) {
+			old.compareAndSet(0, SlotState.FREE, SlotState.WRITING);
+			old.compareAndSet(1, SlotState.FREE, SlotState.READING);
+		}
+		try (SegmentSlotTable next = SegmentSlotTable.create(file, 4, 2)) {
+			assertThat(next.generation()).isEqualTo(2);
+			for (int slot = 0; slot < 4; slot++) {
+				assertThat(next.state(slot)).isEqualTo(SlotState.FREE);
+				assertThat(next.frame(slot)).isZero();
+			}
+		}
+	}
+
+	@Test
 	void openRejectsWrongMagic() throws IOException {
 		Path file = dir.resolve("junk.slots");
 		Files.write(file, new byte[256]);
