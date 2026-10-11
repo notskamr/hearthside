@@ -193,6 +193,7 @@ public final class E2eDriver {
 			step("5 leave closes the satellite and leaves the host window as it was", this::leaveClosesSatellite);
 			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
 			step("D7 a guest whose game gives up is shown, then removed", this::gaveUpShownThenRemoved);
+			step("D8 a guest whose game dies while joining keeps their card on the plank wall", this::gaveUpWhileJoining);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				long dropInSounds = System.nanoTime();
@@ -221,8 +222,15 @@ public final class E2eDriver {
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
+			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				// The last session tiles real windows, as on a machine that can't composite (D9 and step 7 run in it).
+				System.setProperty("hearthside.e2e.forceTiled", "true");
+			}
 			openWorld();
 			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
+			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("D9 with tiled windows, a drop-in joins as its controller's profile, with no card", this::tiledDropIn);
+			}
 			onRender(() -> {
 				Party.current().join(GUEST);
 				return null;
@@ -776,6 +784,61 @@ public final class E2eDriver {
 		Rect after = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 		log("   host window " + after + ", before split-screen " + hostWindowBefore);
 		check(after.equals(hostWindowBefore), "host window restored");
+	}
+
+	/**
+	 * D8: a guest's game dies while it is still starting and the supervisor gives up: there is no picture of theirs
+	 * to show, so their card says "Couldn't start" on the plank wall (never over their loading screens), then fades.
+	 */
+	private void gaveUpWhileJoining() throws Exception {
+		System.setProperty("hearthside.e2e.failRestarts", "true");
+		try {
+			long mark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("its game starting", Duration.ofSeconds(30), () -> !satellites().isEmpty());
+			Thread.sleep(2000); // still starting up: nowhere near the world
+			check(onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.JOINING,
+					"still joining");
+			satellites().forEach(ProcessHandle::destroyForcibly);
+			waitFor("the card says the game couldn't start", Duration.ofSeconds(30),
+					() -> onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.FAILED);
+			check(!onRender(() -> Party.current().cardOverLastFrame(1)),
+					"the card stays on the plank wall: they have no picture from the world to show");
+			Thread.sleep(300);
+			windowShot("couldnt-start-joining");
+			waitForSettle(mark);
+			check(onRender(() -> Party.current().seatedCount()) == 0, "the seat is free");
+			waitFor("split-screen over", Duration.ofSeconds(10), () -> hostLogSince(mark).contains("virtual size cleared"));
+		} finally {
+			System.clearProperty("hearthside.e2e.failRestarts");
+		}
+	}
+
+	private static final int TILED_PAD = 130;
+
+	/** D9: with tiled windows nothing would draw a card, so A, A joins straight away as that controller's profile. */
+	private void tiledDropIn() throws Exception {
+		check(onRender(() -> Compositor.active() == null), "windows are tiled in this session");
+		PADS.plug(TILED_PAD, "fake-tiled-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			press(TILED_PAD, PadButton.A);
+			press(TILED_PAD, PadButton.A);
+			waitFor("a seat taken", Duration.ofSeconds(10), () -> onRender(() -> Party.current().seatedCount()) == 1);
+			check(onRender(() -> Party.current().seatCard(1)) == null, "no card: nothing would draw it");
+			check(onRender(() -> Party.current().profileOf(1)) != null, "a profile was picked for the controller");
+			waitFor("the newcomer in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+		} finally {
+			onRender(() -> {
+				Party.current().leaveAll();
+				return null;
+			});
+			PADS.unplug(TILED_PAD);
+			waitFor("back to 1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
+		}
 	}
 
 	/** D7: a guest's game crashes and its supervisor gives up: their card says so, then their view fades out. */

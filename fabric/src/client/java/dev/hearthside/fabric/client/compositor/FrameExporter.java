@@ -86,7 +86,9 @@ public final class FrameExporter {
 	/** Copies the finished frame into the next free slot. Called instead of Minecraft's blit to the window. */
 	public void export(int sourceTexture, int sourceWidth, int sourceHeight) {
 		publishFinished();
-		if (world.observeLeft(minecraft.getConnection() != null)) {
+		// A server reconfiguring this player drops Minecraft's player (its connection reads as gone) behind this screen.
+		boolean reconfiguring = minecraft.gui.screen() instanceof net.minecraft.client.gui.screens.multiplayer.ServerReconfigScreen;
+		if (world.observeLeft(minecraft.getConnection() != null, reconfiguring)) {
 			HearthsideMod.LOGGER.info("Hearthside left the world");
 			tell(new ControlMessage.LeftWorld());
 			leftWorld = true;

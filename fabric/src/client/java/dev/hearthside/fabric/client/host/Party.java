@@ -168,7 +168,8 @@ public final class Party {
 	/** Composite into this window when the GL context supports it; otherwise tile real windows. Render thread. */
 	private void choosePresentation() {
 		try {
-			composite = Presentation.glSupportsCompositing();
+			// E2E: tiled windows, as on a GL without the compositor's extensions or on Vulkan.
+			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Presentation.glSupportsCompositing();
 			if (composite) {
 				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5).
 				hostTransport = TransportChoice.choose(GlInterop.probe(false));
@@ -507,7 +508,6 @@ public final class Party {
 	private final Map<String, PadStyle> styleOfController = new HashMap<>();
 	/** The drop-in prompt (over the views, or on player 1's HUD when they play alone). */
 	final dev.hearthside.fabric.client.ui.JoinToast joinToast = new dev.hearthside.fabric.client.ui.JoinToast();
-	private final Map<String, GuestProfile> chosen = new HashMap<>();
 	/** Controllers whose lobby card opens once their seat's game has started. */
 	private final java.util.Set<String> pendingCards = new java.util.HashSet<>();
 	/** Lobby cards of seats still choosing a profile, by player index. */
@@ -1206,13 +1206,19 @@ public final class Party {
 		return phases.stuck(seat, now);
 	}
 
+	/** Whether a seat's card sits over their last picture (dimmed) rather than on the plank wall. For the E2E. */
+	public boolean cardOverLastFrame(int seat) {
+		return cardStatus(seat, System.nanoTime()).overLastFrame();
+	}
+
 	/** What a seat's card says while their game joins, restarts or gives up. */
 	dev.hearthside.fabric.client.ui.CardPainter.Status cardStatus(int seat, long now) {
 		boolean stuck = phases.stuck(seat, now);
 		return switch (viewPhase(seat)) {
 			case RECONNECTING -> stuck ? dev.hearthside.fabric.client.ui.CardPainter.Status.STILL_RECONNECTING
 					: dev.hearthside.fabric.client.ui.CardPainter.Status.RECONNECTING;
-			case FAILED -> dev.hearthside.fabric.client.ui.CardPainter.Status.COULDNT_START;
+			case FAILED -> phases.overLastFrame(seat) ? dev.hearthside.fabric.client.ui.CardPainter.Status.COULDNT_START
+					: dev.hearthside.fabric.client.ui.CardPainter.Status.COULDNT_START_JOINING;
 			case PICKING, JOINING, LIVE -> stuck ? dev.hearthside.fabric.client.ui.CardPainter.Status.STILL_JOINING
 					: dev.hearthside.fabric.client.ui.CardPainter.Status.JOINING;
 		};
@@ -1250,6 +1256,11 @@ public final class Party {
 			if (link != null && profile != null && link.hasPlayer(profile.name())) {
 				if (recordedInWorld.add(profile.id())) {
 					recordCoopWorld(link);
+				}
+				if (!composite) {
+					// With tiled windows no game reports being in the world (that comes with its frames): the server
+					// having them is enough.
+					apply(flow.loaded(controller));
 				}
 			}
 		});
@@ -1289,8 +1300,14 @@ public final class Party {
 	}
 
 	private void startForController(String controller) {
-		GuestProfile profile = chosen.remove(controller);
 		boolean card = pendingCards.remove(controller);
+		GuestProfile profile = null;
+		if (world != null && !composite) {
+			// Tiled windows: nothing draws a card over a guest's own window, so they come in as their controller's
+			// profile straight away (as before Plan 5c1).
+			card = false;
+			profile = profileFor(guidOf.get(controller));
+		}
 		Integer instanceId = instanceOf.get(controller);
 		if ((profile == null && !card) || instanceId == null) {
 			apply(flow.leave(controller));
@@ -1299,6 +1316,9 @@ public final class Party {
 		try {
 			int index = startGuest(profile);
 			controllerOfSlot.put(index, controller);
+			if (profile != null) {
+				apply(flow.profileChosen(controller, profile.id()));
+			}
 			if (card) {
 				SeatCard newCard = newCard(index, controller, null);
 				cards.put(index, newCard);
@@ -1663,7 +1683,8 @@ public final class Party {
 			HearthsideMod.LOGGER.warn("Satellite for {} stopped; restarting in {}s", slot.displayName(), delay.toSeconds());
 			minecraft.execute(() -> {
 				if (slots.get(slot.index) == slot) {
-					// Their card comes back over the last picture from their game, which stays until the new one is in.
+					// Their card comes back over the last picture from their game, which stays until the new one is in (a
+					// player still joining keeps their card as it is).
 					phases.reconnecting(slot.index, System.nanoTime());
 					holdLastFrame(slot.index, true);
 				}

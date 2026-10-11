@@ -194,13 +194,15 @@ composited window, so they show every view and the overlay; the small magenta sq
 | G1 | No bare divider colour inside a settled view while players join and leave (views fading on purpose are skipped) | PASS — FAILED before the overlay (47 gaps) |
 | 3, C8 | A crashed guest's card says "Reconnecting…" over their last frame, dimmed, never their restarting game's screens; their frames come back | PASS |
 | D7 | A guest whose game gives up: their card says "Couldn't start", then their view fades out and the seat is free | PASS — FAILED before (the seat stayed) |
+| D8 | A guest whose game dies while it is still joining: their card says "Couldn't start" on the plank wall (never dimmed over their loading screens), then fades | PASS — FAILED before (from the final review: dimmed over a loading-screen frame) |
 | S1 | Since the lobby cards: page turns, key taps (and the lower delete tap), ticks, knocks, a crackle and a snuff, and never vanilla's click on Hearthside's screens; six moves in 90 ms tick twice (at most three) | PASS — FAILED before |
 | S2 | In the world: the join prompt slides in and out, a drop-in crackles, a leave snuffs | PASS — FAILED before |
-| 7 | Force-killing the host: the guest's game exits by itself | PASS (828 ms) |
+| D9 | The last session forces tiled windows, as on a machine that can't composite: A, A joins straight away as the controller's profile, with no card (nothing would draw it) | PASS — FAILED before (from the final review: the newcomer got a card that nothing drew) |
+| 7 | Force-killing the host (in the tiled session): the guest's game exits by itself | PASS (858 ms) |
 
-All 83 steps pass in one run with fake pads, plus step 7. Screenshots are in `docs/screenshots/5c1/`: `joining`,
+All 85 steps pass in one run with fake pads, plus step 7. Screenshots are in `docs/screenshots/5c1/`: `joining`,
 `drop-in-picker`, `drop-in-joining`, `toast` (player 1 alone), `toast-split`, `two-players`, `three-players`,
-`four-players`, `leaving` (mid-fade), `quit-fading`, `reconnecting` and `couldnt-start`.
+`four-players`, `leaving` (mid-fade), `quit-fading`, `reconnecting`, `couldnt-start` and `couldnt-start-joining`.
 
 Found while building this:
 - A guest's game could still be drawing Minecraft's loading overlay (the Mojang screen) for a moment after it joined:

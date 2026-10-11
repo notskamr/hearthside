@@ -30,9 +30,13 @@ public final class InWorldSignal {
 		return in;
 	}
 
-	/** True once when a game that was in the world has lost its connection to it (it quit or was disconnected). */
-	public boolean observeLeft(boolean connected) {
-		if (in && !connected) {
+	/**
+	 * True once when a game that was in the world has lost its connection to it (it quit or was disconnected). A server
+	 * reconfiguring it ({@code reconfiguring}) drops its player for a while, so its connection reads as gone; it hasn't
+	 * left.
+	 */
+	public boolean observeLeft(boolean connected, boolean reconfiguring) {
+		if (in && !connected && !reconfiguring) {
 			in = false;
 			return true;
 		}

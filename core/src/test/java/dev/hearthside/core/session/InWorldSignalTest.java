@@ -32,13 +32,13 @@ class InWorldSignalTest {
 	@Test
 	void leftWorldAfterBeingIn() {
 		var signal = new InWorldSignal();
-		assertThat(signal.observeLeft(false)).as("never in").isFalse();
+		assertThat(signal.observeLeft(false, false)).as("never in").isFalse();
 		signal.joinRequested();
-		assertThat(signal.observeLeft(false)).as("joining, not yet connected").isFalse();
+		assertThat(signal.observeLeft(false, false)).as("joining, not yet connected").isFalse();
 		signal.observe(true, false, true);
-		assertThat(signal.observeLeft(true)).isFalse();
-		assertThat(signal.observeLeft(false)).isTrue();
-		assertThat(signal.observeLeft(false)).isFalse();
+		assertThat(signal.observeLeft(true, false)).isFalse();
+		assertThat(signal.observeLeft(false, false)).isTrue();
+		assertThat(signal.observeLeft(false, false)).isFalse();
 	}
 
 	@Test
@@ -48,7 +48,19 @@ class InWorldSignalTest {
 		assertThat(signal.inWorld()).isFalse();
 		signal.observe(true, false, true);
 		assertThat(signal.inWorld()).isTrue();
-		signal.observeLeft(false);
+		signal.observeLeft(false, false);
 		assertThat(signal.inWorld()).isFalse();
+	}
+
+	@Test
+	void aServerReconfigurationIsNotLeaving() {
+		// Minecraft drops its player (so its connection reads as gone) while the server reconfigures it.
+		var signal = new InWorldSignal();
+		signal.joinRequested();
+		signal.observe(true, false, true);
+		assertThat(signal.observeLeft(false, true)).isFalse();
+		assertThat(signal.inWorld()).as("still in the world").isTrue();
+		assertThat(signal.observeLeft(true, false)).isFalse();
+		assertThat(signal.observeLeft(false, false)).as("a real disconnect afterwards still counts").isTrue();
 	}
 }

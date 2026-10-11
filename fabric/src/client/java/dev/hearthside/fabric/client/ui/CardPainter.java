@@ -48,7 +48,9 @@ public final class CardPainter {
 				STILL_JOINING = new Status("Still joining…", "Joining…", false, false, true),
 				RECONNECTING = new Status("Reconnecting…", "Reconnecting…", true, false, false),
 				STILL_RECONNECTING = new Status("Still reconnecting…", "Reconnecting…", true, false, true),
-				COULDNT_START = new Status("Couldn't start", "Can't start", true, true, false);
+				COULDNT_START = new Status("Couldn't start", "Can't start", true, true, false),
+				// Never in the world: on the plank wall, as joining was (nothing of theirs to show but loading screens).
+				COULDNT_START_JOINING = new Status("Couldn't start", "Can't start", false, true, false);
 	}
 
 	/** A joining (or reconnecting) player's card filling their view. */
