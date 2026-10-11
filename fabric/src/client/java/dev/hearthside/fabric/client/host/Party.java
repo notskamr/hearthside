@@ -105,6 +105,11 @@ public final class Party {
 	private volatile boolean composite;
 	/** Player 1's colour, from the host profile. */
 	private volatile int hostColor = PlayerColors.DEFAULTS[0];
+	private volatile boolean hostReduceMotion;
+	/** The controller model player 1 last took in the lobby; taken again automatically there. */
+	private volatile String hostControllerGuid;
+	/** "Use a controller" was pressed: the next A on a free controller becomes player 1's. */
+	private volatile boolean hostClaimArmed;
 	/** GPU sharing or copying, as this machine's probe decided at session start. */
 	private volatile Transport hostTransport = Transport.COPY;
 
@@ -166,6 +171,8 @@ public final class Party {
 			ProfileFile file = profileStore().loadFile();
 			hostScheme = file.hostControls();
 			hostColor = file.host().color();
+			hostReduceMotion = file.host().settings().reduceMotion();
+			hostControllerGuid = file.host().preferredControllerGuid();
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not read the host's controls; using Bedrock defaults", e);
 			hostScheme = ControlScheme.BEDROCK;
@@ -451,6 +458,77 @@ public final class Party {
 		}
 	}
 
+	// ---- Player 1 in the lobby ----
+
+	/** Player 1's reduce-motion setting (the lobby's embers and card flips). */
+	public boolean reduceMotion() {
+		return hostReduceMotion;
+	}
+
+	public boolean hostHasController() {
+		HostInput current = input;
+		return current != null && current.hasPadFor(0);
+	}
+
+	public boolean hostClaimArmed() {
+		return hostClaimArmed && !hostHasController();
+	}
+
+	/** Player 1's card: the next A on a free controller makes it theirs. Render thread. */
+	public void useController() {
+		HostInput current = input;
+		if (current != null) {
+			current.armClaim();
+			hostClaimArmed = true;
+		}
+	}
+
+	/** Player 1 took a controller: remember its model so the lobby gives it back next time. Render thread. */
+	void onHostClaimed(String guid) {
+		hostClaimArmed = false;
+		if (guid == null || guid.equals(hostControllerGuid)) {
+			return;
+		}
+		hostControllerGuid = guid;
+		try {
+			ProfileStore store = profileStore();
+			ProfileFile file = store.loadFile();
+			store.saveFile(new ProfileFile(file.profiles(), file.host().withController(guid)));
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not remember player 1's controller", e);
+		}
+	}
+
+	String hostControllerGuid() {
+		return hostControllerGuid;
+	}
+
+	/**
+	 * The button style to draw for a player's controller; for -1, the first controller in the party (player 1's, then
+	 * seats in order). Xbox when there is none.
+	 */
+	public PadStyle padStyleOf(int player) {
+		HostInput current = input;
+		if (current == null) {
+			return PadStyle.XBOX;
+		}
+		if (player >= 0) {
+			return current.hasPadFor(player) ? current.styleFor(player) : PadStyle.XBOX;
+		}
+		for (int p = 0; p < 4; p++) {
+			if (current.hasPadFor(p)) {
+				return current.styleFor(p);
+			}
+		}
+		return PadStyle.XBOX;
+	}
+
+	/** A guest's chosen profile, or null while they are choosing (or the seat is free). */
+	public GuestProfile profileOf(int index) {
+		Slot slot = slots.get(index);
+		return slot == null ? null : slot.profile;
+	}
+
 	// ---- Lobby cards: each seat picks or makes its profile (Spec A sections 3.1, 5.2) ----
 
 	/** The card of a seat still choosing its profile, or null. */
@@ -513,7 +591,23 @@ public final class Party {
 		}
 		Slot slot = slots.get(player);
 		GuestProfile profile = slot == null ? null : slot.profile;
-		return profile != null ? profile.color() : PlayerColors.DEFAULTS[player % PlayerColors.DEFAULTS.length];
+		return displayColor(player,
+				profile != null ? profile.color() : PlayerColors.DEFAULTS[player % PlayerColors.DEFAULTS.length]);
+	}
+
+	/**
+	 * The colour a seat shows: the one it wants unless player 1 or a lower seat already shows it, then the first free
+	 * one, so every player in the party is told apart (Spec A section 4.1). The profile itself is not changed.
+	 */
+	public int displayColor(int seat, int wanted) {
+		List<Integer> taken = new ArrayList<>();
+		taken.add(hostColor);
+		for (int lower = 1; lower < seat; lower++) {
+			if (slots.containsKey(lower)) {
+				taken.add(colorOf(lower));
+			}
+		}
+		return taken.contains(wanted) ? PlayerColors.firstFree(taken) : wanted;
 	}
 
 	/** A seat settles on its profile: remember it for this controller, then send the player in if a world is open. */

@@ -43,6 +43,7 @@ import java.util.regex.Pattern;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractButton;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -110,6 +111,8 @@ public final class E2eDriver {
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
+				step("L5 player 1's card claims a controller; it drives the host and is not seated", this::hostCardClaims);
+				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
 				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
@@ -674,6 +677,58 @@ public final class E2eDriver {
 	}
 
 	private static final int SECOND_LOBBY_PAD = 104;
+	private static final int HOST_PAD = 106;
+	private static final String HOST_GUID = "fake-host-pad";
+
+	/** Saves a screenshot of the host's window to {@code run-e2e/screenshots/<name>.png} for the docs. */
+	private void screenshot(String name) throws Exception {
+		Thread.sleep(400);
+		onRender(() -> {
+			Screenshot.grab(minecraft.gameDirectory, name + ".png", minecraft.gameRenderer.mainRenderTarget(), 1, message -> {});
+			return null;
+		});
+		Thread.sleep(400);
+	}
+
+	private void hostCardClaims() throws Exception {
+		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+		Thread.sleep(300);
+		LobbyScreen lobby = openLobby();
+		screenshot("lobby-empty");
+		onRender(() -> {
+			Screens.getWidgets(lobby).stream()
+					.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("Use a controller"))
+					.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+			return null;
+		});
+		press(HOST_PAD, PadButton.A);
+		waitFor("player 1 has the controller", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+		check(onRender(() -> Party.current().seatedCount()) == 0, "the controller did not take a guest seat");
+		check(HOST_GUID.equals(profiles().loadFile().host().preferredControllerGuid()), "player 1's controller is remembered");
+	}
+
+	private void hostControllerRemembered() throws Exception {
+		onRender(() -> {
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		check(Party.current() == null, "leaving the empty lobby ends the party at once");
+		openLobby();
+		waitFor("player 1's controller taken again", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current().hostHasController()));
+		onRender(() -> {
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		PADS.unplug(HOST_PAD);
+		ProfileStore store = profiles();
+		ProfileFile file = store.loadFile();
+		store.saveFile(new ProfileFile(file.profiles(), file.host().withController(null)));
+	}
+
+	private ProfileStore profiles() {
+		return new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
+	}
 	private static final int REPLUG_PAD = 105;
 
 	private SeatCard card(int seat) {
@@ -692,6 +747,7 @@ public final class E2eDriver {
 
 	private void cardPreselects() throws Exception {
 		check(onRender(() -> card(1) != null), "seat 1 is choosing on its card");
+		screenshot("lobby-choosing");
 		check(onRender(() -> cardShows(1)).equals("Hazel"), "Hazel, last used on this controller, is pre-selected");
 	}
 
@@ -760,6 +816,7 @@ public final class E2eDriver {
 		press(LOBBY_PAD, PadButton.A);
 		String suggestion = onRender(() -> card(1).keyboard().text());
 		int colour = onRender(() -> card(1).setup().color());
+		screenshot("lobby-keyboard");
 		press(LOBBY_PAD, PadButton.A);
 		check(onRender(() -> card(1).setup().step()) == QuickSetup.Step.SKIN, "A keeps the suggested name " + suggestion);
 		press(LOBBY_PAD, PadButton.A);
@@ -819,6 +876,7 @@ public final class E2eDriver {
 		Thread.sleep(300);
 		press(SECOND_LOBBY_PAD, PadButton.A);
 		waitFor("seat 2 choosing on its card", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+		screenshot("lobby-three-players");
 		press(LOBBY_PAD, PadButton.START);
 		check(onRender(() -> minecraft.gui.screen() instanceof SelectWorldScreen), "Menu continues to world select");
 		openWorld();

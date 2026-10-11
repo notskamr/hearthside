@@ -26,6 +26,8 @@ public final class KeyboardWidget {
 	}
 
 	public void render(GuiGraphicsExtractor g, Font font, int x, int y, PadStyle style) {
+		// The keyboard floats over busy screens (the lobby's cards): back the glass so the keys stay readable.
+		g.fill(x + 2, y + 2, x + WIDTH - 2, y + HEIGHT - 2, 0xD8201410);
 		HearthDraw.glass(g, x, y, WIDTH, HEIGHT);
 		// The text being typed: an untouched suggestion shows as selected, ready to keep or replace.
 		int fieldY = y + PAD;

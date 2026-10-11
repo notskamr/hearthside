@@ -76,6 +76,7 @@ final class HostInput implements Runnable {
 			guids.put(pad.instanceId(), pad.guid());
 		}
 		InputRouter.Update update = router.update(pads);
+		autoClaimHost(pads);
 		long tickNow = System.nanoTime();
 		if (tickNow - lastFlowTick >= 1_000_000_000L) {
 			lastFlowTick = tickNow;
@@ -241,6 +242,24 @@ final class HostInput implements Runnable {
 		}
 	}
 
+	/** In the lobby, player 1's remembered controller is theirs again as soon as it is connected. */
+	private void autoClaimHost(List<PadSnapshot> pads) {
+		String guid = session.hostControllerGuid();
+		if (guid == null || router.hasPad(0) || session.inWorld()) {
+			return;
+		}
+		for (PadSnapshot pad : pads) {
+			if (guid.equals(pad.guid()) && router.playerFor(pad.instanceId()).isEmpty()) {
+				claimForHost(pad.instanceId());
+				return;
+			}
+		}
+	}
+
+	boolean hasPadFor(int player) {
+		return router.hasPad(player);
+	}
+
 	/** {@code /hearthside pad}: the host takes this controller, replacing any it had. */
 	private void claimForHost(int instanceId) {
 		if (router.hasPad(0)) {
@@ -257,6 +276,7 @@ final class HostInput implements Runnable {
 		ButtonGuideRenderer.enable(hostApplier::scheme);
 		VirtualCursor.setDrawn(true);
 		chat(Component.literal("Controller assigned to you."));
+		session.onHostClaimed(guids.get(instanceId));
 	}
 
 	private void restoreHostOptions() {

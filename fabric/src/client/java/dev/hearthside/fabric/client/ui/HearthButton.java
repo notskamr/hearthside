@@ -1,15 +1,31 @@
 package dev.hearthside.fabric.client.ui;
 
+import dev.hearthside.core.input.Control;
+import dev.hearthside.core.input.PadStyle;
+import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 
-/** A wooden Cozy-hearth button (Spec A section 4.1); glows ember-orange when hovered or focused. */
+/**
+ * A wooden Cozy-hearth button (Spec A section 4.1); glows ember-orange when hovered or focused. It can show the
+ * controller button that also presses it, as a glyph before its label.
+ */
 public final class HearthButton extends Button {
+	private Control glyph;
+	private Supplier<PadStyle> style;
+
 	public HearthButton(int x, int y, int width, int height, Component message, OnPress onPress) {
 		super(x, y, width, height, message, onPress, DEFAULT_NARRATION);
+	}
+
+	/** Shows this control's glyph (in the family {@code style} gives) before the label. */
+	public HearthButton withGlyph(Control control, Supplier<PadStyle> style) {
+		this.glyph = control;
+		this.style = style;
+		return this;
 	}
 
 	@Override
@@ -17,8 +33,17 @@ public final class HearthButton extends Button {
 		var sprite = !isActive() ? HearthSprites.BUTTON_DISABLED
 				: isHoveredOrFocused() ? HearthSprites.BUTTON_HIGHLIGHTED : HearthSprites.BUTTON;
 		g.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, getX(), getY(), getWidth(), getHeight());
+		var font = Minecraft.getInstance().font;
 		int colour = isActive() ? HearthDraw.CREAM : 0xFF8A7A6A;
-		g.centeredText(Minecraft.getInstance().font, getMessage(), getX() + getWidth() / 2,
-				getY() + (getHeight() - 8) / 2, colour);
+		int textY = getY() + (getHeight() - 8) / 2;
+		if (glyph == null) {
+			g.centeredText(font, getMessage(), getX() + getWidth() / 2, textY, colour);
+			return;
+		}
+		int glyphWidth = HearthDraw.glyphWidth(glyph);
+		int total = glyphWidth + 4 + font.width(getMessage());
+		int x = getX() + (getWidth() - total) / 2;
+		HearthDraw.glyph(g, glyph, style.get(), x, getY() + (getHeight() - HearthDraw.GLYPH_HEIGHT) / 2);
+		g.text(font, getMessage(), x + glyphWidth + 4, textY, colour, true);
 	}
 }
