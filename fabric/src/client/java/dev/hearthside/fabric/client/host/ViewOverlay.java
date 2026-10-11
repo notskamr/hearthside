@@ -139,6 +139,10 @@ final class ViewOverlay implements OverlayLayer {
 		party.panelAt(context.nanos(), context.reduceMotion()).ifPresent(panel -> {
 			Rect inGui = dev.hearthside.fabric.client.compositor.OverlayPass.inGui(panel.rect(), context.guiScale());
 			dev.hearthside.fabric.client.ui.PartyPanel.draw(g, font, inGui, party.panelState(), panel.alpha());
+			if (Compositor.e2eGapSampling && panel.alpha() < 1f) {
+				dev.hearthside.fabric.HearthsideMod.LOGGER.info("Hearthside panel alpha={}",
+						String.format(java.util.Locale.ROOT, "%.2f", panel.alpha()));
+			}
 		});
 		for (ViewFrame view : context.views()) {
 			Rect r = view.rect();

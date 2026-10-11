@@ -543,6 +543,7 @@ public final class E2eDriver {
 		check(alphas.size() >= 3, "the leaving view was drawn fading out (" + alphas.size() + " alphas between 0 and 1)");
 		waitFor("3 players", Duration.ofSeconds(30), () -> playerCount() == 3);
 		check(onRender(() -> !Compositor.active().hasFrame(3)), "the leaving view is gone once it has faded");
+		checkPanelFaded(mark, true);
 	}
 
 	/** Waits for the host's "layout settled" line after {@code mark}; returns its milliseconds. */
@@ -573,6 +574,22 @@ public final class E2eDriver {
 		waitFor("2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
 		waitFor("its game closed", Duration.ofSeconds(15), () -> satellites().size() == before - 1);
 		check(onRender(() -> Party.current().seatedCount()) == 1, "the seat is free");
+		checkPanelFaded(mark, false);
+	}
+
+	/** The party panel was drawn at several alphas between 0 and 1 since {@code mark}, rising (in) or falling (out). */
+	private void checkPanelFaded(long mark, boolean in) throws Exception {
+		Matcher m = Pattern.compile("hearthside panel alpha=([0-9.]+)").matcher(hostLogSince(mark));
+		List<Float> alphas = new ArrayList<>();
+		while (m.find()) {
+			float alpha = Float.parseFloat(m.group(1));
+			if (alpha > 0.05f && alpha < 0.95f) {
+				alphas.add(alpha);
+			}
+		}
+		log("   panel alphas " + alphas);
+		boolean direction = alphas.size() >= 2 && (in ? alphas.getFirst() < alphas.getLast() : alphas.getFirst() > alphas.getLast());
+		check(direction, "the party panel faded " + (in ? "in" : "out") + " (" + alphas.size() + " alphas between 0 and 1)");
 	}
 
 	/** C7c: back to two (whoever is still here of Guest3 and Guest4 leaves), with no GL errors throughout. */
