@@ -9,7 +9,9 @@ import dev.hearthside.fabric.client.host.TitleCoopButton;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.satellite.SatelliteBoot;
 import dev.hearthside.fabric.client.window.FocusLog;
+import dev.hearthside.fabric.client.menu.TitleInput;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 
 public final class HearthsideClient implements ClientModInitializer {
 	private static Role role = Role.HOST;
@@ -28,6 +30,7 @@ public final class HearthsideClient implements ClientModInitializer {
 			Party.register();
 			HostCommands.register();
 			TitleCoopButton.register();
+			ClientLifecycleEvents.CLIENT_STARTED.register(TitleInput::register);
 			E2eDriver.registerIfEnabled();
 		} else {
 			SatelliteBoot.register();

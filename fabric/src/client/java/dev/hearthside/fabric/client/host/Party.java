@@ -278,11 +278,23 @@ public final class Party {
 
 	/** The party for the co-op lobby: the current one, or a new one waiting for a world. Render thread. */
 	public static Party openLobby(Minecraft minecraft) throws IOException {
+		return openLobby(minecraft, null);
+	}
+
+	/**
+	 * The lobby's party; {@code titlePad} is the controller that pressed Co-op on the title screen (null for the mouse),
+	 * which becomes player 1's.
+	 */
+	public static Party openLobby(Minecraft minecraft, Integer titlePad) throws IOException {
 		if (current == null) {
 			current = new Party(minecraft, JoinFlow.Mode.LOBBY);
 		}
+		current.pendingHostPad = titlePad;
 		return current;
 	}
+
+	/** The title screen's controller, for the controller loop to hand to player 1 when it first sees it. */
+	volatile Integer pendingHostPad;
 
 	/** Ends the party: every guest's game stops. */
 	public void disband() {

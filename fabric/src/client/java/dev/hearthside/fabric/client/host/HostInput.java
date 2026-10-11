@@ -86,6 +86,7 @@ final class HostInput implements Runnable {
 			guids.put(pad.instanceId(), pad.guid());
 		}
 		InputRouter.Update update = router.update(pads);
+		takeTitlePad(pads);
 		autoClaimHost(pads);
 		int free = 0;
 		PadStyle freeKind = null;
@@ -274,8 +275,12 @@ final class HostInput implements Runnable {
 
 	private void handle(RouterEvent event) {
 		switch (event) {
-			case RouterEvent.UnassignedPress press -> session.onUnassignedPress(press.instanceId(), press.button(),
-					guids.get(press.instanceId()));
+			case RouterEvent.UnassignedPress press -> {
+				// A press from a controller assigned this frame (player 1's from the title) is not a join.
+				if (router.playerFor(press.instanceId()).isEmpty()) {
+					session.onUnassignedPress(press.instanceId(), press.button(), guids.get(press.instanceId()));
+				}
+			}
 			case RouterEvent.ClaimRequest claim -> claimForHost(claim.instanceId());
 			case RouterEvent.PadLost lost -> {
 				if (lost.player() == 0) {
@@ -294,6 +299,25 @@ final class HostInput implements Runnable {
 					session.sendToGuest(restored.player(), new ControlMessage.Lifecycle(LifecycleCommand.RESUME));
 				}
 				chat(Component.literal("Player " + (restored.player() + 1) + "'s controller reconnected."));
+			}
+		}
+	}
+
+	/**
+	 * The controller that pressed Co-op on the title screen is player 1's (Spec A section 3.1); the A it is still
+	 * holding doesn't also press anything in the lobby.
+	 */
+	private void takeTitlePad(List<PadSnapshot> pads) {
+		Integer id = session.pendingHostPad;
+		if (id == null) {
+			return;
+		}
+		session.pendingHostPad = null;
+		for (PadSnapshot pad : pads) {
+			if (pad.instanceId() == id && router.playerFor(id).isEmpty()) {
+				claimForHost(id);
+				heldFromCard.put(0, pad.frame().buttons());
+				return;
 			}
 		}
 	}

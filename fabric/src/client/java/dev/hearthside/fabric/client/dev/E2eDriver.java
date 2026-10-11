@@ -111,6 +111,8 @@ public final class E2eDriver {
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
+				step("T1 a controller moves focus on the title screen and A on Co-op opens the lobby", this::titleControllerOpensLobby);
+				step("T2 the controller that opened Co-op is player 1's, not seated, and remembered", this::titleControllerIsPlayerOne);
 				step("L5 player 1's card claims a controller; it drives the host and is not seated", this::hostCardClaims);
 				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
@@ -692,6 +694,46 @@ public final class E2eDriver {
 			return null;
 		});
 		Thread.sleep(400);
+	}
+
+	private static final int TITLE_PAD = 109;
+	private static final String TITLE_GUID = "fake-title-pad";
+
+	private void titleControllerOpensLobby() throws Exception {
+		PADS.plug(TITLE_PAD, TITLE_GUID, PadStyle.PLAYSTATION);
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		Thread.sleep(500);
+		for (int i = 0; i < 8 && !onRender(this::coopFocused); i++) {
+			press(TITLE_PAD, PadButton.DPAD_DOWN);
+		}
+		check(onRender(this::coopFocused), "the D-pad moved focus to Co-op");
+		screenshot("title");
+		press(TITLE_PAD, PadButton.A);
+		waitFor("the lobby", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof LobbyScreen));
+	}
+
+	/** Whether the title screen's focused widget is the Co-op button. Render thread. */
+	private boolean coopFocused() {
+		return minecraft.gui.screen() instanceof TitleScreen title && title.getFocused() instanceof AbstractButton button
+				&& button.getMessage().getString().startsWith("Co-op");
+	}
+
+	private void titleControllerIsPlayerOne() throws Exception {
+		waitFor("player 1 has the title controller", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
+		Thread.sleep(500);
+		check(onRender(() -> Party.current().seatedCount()) == 0, "the A that opened Co-op did not take a guest seat");
+		check(TITLE_GUID.equals(profiles().loadFile().host().preferredControllerGuid()), "it is remembered as player 1's");
+		onRender(() -> {
+			Party.current().releaseController();
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		PADS.unplug(TITLE_PAD);
+		check(Party.current() == null, "back on the title screen with no party");
 	}
 
 	private void hostCardClaims() throws Exception {

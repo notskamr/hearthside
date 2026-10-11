@@ -4,6 +4,7 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import java.io.IOException;
+import dev.hearthside.fabric.client.menu.TitleInput;
 import java.util.List;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
@@ -69,7 +70,8 @@ public final class TitleCoopButton {
 
 	private static void openLobby(Minecraft minecraft, TitleScreen title) {
 		try {
-			minecraft.gui.setScreen(new LobbyScreen(title, Party.openLobby(minecraft)));
+			// The controller that pressed Co-op (if one did) becomes player 1's.
+			minecraft.gui.setScreen(new LobbyScreen(title, Party.openLobby(minecraft, TitleInput.pressingPad())));
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.error("Hearthside could not start a co-op party", e);
 		}
