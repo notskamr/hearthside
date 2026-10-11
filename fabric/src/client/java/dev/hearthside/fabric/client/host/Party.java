@@ -178,8 +178,9 @@ public final class Party {
 	/** A world opened: let every guest whose game is ready log in to it. */
 	private void attach(WorldLink link) {
 		world = link;
-		// The lobby is over: seats stay, and from now on new controllers join with A, A.
-		flow.enterGame();
+		// The lobby is over: seats stay, and from now on new controllers join with A, A. (The flow is render-thread
+		// only; this runs on the server thread.)
+		minecraft.execute(flow::enterGame);
 		minecraft.execute(this::afterGuestsChanged);
 		for (Slot slot : slots.values()) {
 			ControlConnection connection = slot.connection;
@@ -211,6 +212,11 @@ public final class Party {
 		if (connection != null) {
 			send(connection, message);
 		}
+	}
+
+	/** Whether a world is open (otherwise the party is on shared screens: the lobby, world select). */
+	public boolean inWorld() {
+		return world != null;
 	}
 
 	private ProfileStore profileStore() {
@@ -404,6 +410,14 @@ public final class Party {
 		instanceOf.put(controller, instanceId);
 		guidOf.put(controller, guid);
 		apply(flow.press(controller, button == PadButton.A ? Control.A : Control.B));
+	}
+
+	/** B on a seated controller before the world: that player gives up their seat (Spec A section 3.1). Render thread. */
+	void onSeatedB(int player) {
+		String controller = controllerOfSlot.get(player);
+		if (controller != null) {
+			apply(flow.press(controller, Control.B));
+		}
 	}
 
 	/** A guest's controller dropped: their seat is kept. Render thread. */

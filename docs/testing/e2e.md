@@ -30,14 +30,18 @@ Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 
 ## Party (scripted) — 2026-10-11, same machine
 
-Plan 5b1: the party exists before a world. Run with a fake PlayStation-style pad; 41/41 steps pass in the full run.
+Plan 5b1: the party exists before a world. Run with a fake PlayStation-style pad; 44/44 steps pass in the full run (after the final-review fixes; every new
+step below marked "FAILED before" was watched failing on the code before its fix).
 
 | # | Check | Result |
 |---|---|---|
-| B7 | The title screen has "Co-op (1 controller)" under Singleplayer; it opens the lobby; Back returns with no party | PASS — FAILED before the button |
-| B6 | In the lobby, A seats a controller and starts its game; Back stops every guest's game and ends the party | PASS |
+| B7 | The title screen has "Co-op (1 controller)" under Singleplayer and every widget stays on screen; it opens the lobby; Back returns with no party | PASS — FAILED before the button, and before the layout fix (Options/Quit and the copyright line were pushed off a 240-high GUI) |
+| B6 | In the lobby, A seats a controller and starts its game; Back asks "End the party?"; End party stops every guest's game | PASS — FAILED before the confirm |
 | B4 | A in the lobby starts the guest's game before any world, and it connects to the party | PASS |
-| B5 | Continuing into a world brings the seated guest in (2 players) | PASS (13 s) |
+| B8 | In the lobby, a seated controller's stick moves the host's cursor, and its own idle game gets no input | PASS — FAILED before (its input drove the guest's hidden title screen) |
+| B10 | A title screen while the party waits (as when a world fails to open) goes back to the lobby, seat and game kept | PASS — FAILED before |
+| B9 | B on a seated controller gives up the seat (its game stops); the lobby stays | PASS — FAILED before |
+| B5 | A seats the controller again; Menu on it opens world select; the world brings the guest in (2 players) | PASS (12 s) |
 | B2 | In a world, one A on a new controller does not join | PASS |
 | B3 | The "press A again" prompt expires after 5 s | PASS |
 | P1 | A, A on a new controller adds `Player2` (see below) | PASS (16 s, incl. satellite start) |

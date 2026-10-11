@@ -20,6 +20,8 @@ import net.minecraft.network.chat.contents.TranslatableContents;
  */
 public final class TitleCoopButton {
 	private static final int ROW = 24;
+	/** Widgets this close to the bottom edge are anchored to it (the copyright line), not part of the menu. */
+	private static final int BOTTOM_PINNED = 20;
 
 	private TitleCoopButton() {}
 
@@ -32,6 +34,16 @@ public final class TitleCoopButton {
 	}
 
 	private static void add(Minecraft minecraft, TitleScreen title) {
+		Party party = Party.current();
+		if (party != null && !party.inWorld()) {
+			// A world failed to open and Minecraft fell back to the title screen: the party is still waiting, so
+			// return to its lobby with every seat kept (Spec A section 3.1).
+			minecraft.execute(() -> {
+				if (minecraft.gui.screen() == title && Party.current() == party) {
+					minecraft.gui.setScreen(new LobbyScreen(title, party));
+				}
+			});
+		}
 		List<AbstractWidget> widgets = Screens.getWidgets(title);
 		int index = indexOf(widgets, "menu.singleplayer");
 		if (index < 0) {
@@ -39,10 +51,14 @@ public final class TitleCoopButton {
 			return;
 		}
 		AbstractWidget singleplayer = widgets.get(index);
+		// Make room for one more row without pushing the menu off small screens: the rows from Singleplayer up move up
+		// half a row, the rows below it move down half a row, and text pinned to the bottom edge stays where it is.
+		int pinnedBottom = title.height - BOTTOM_PINNED;
 		for (AbstractWidget widget : widgets) {
-			if (widget.getY() > singleplayer.getY()) {
-				widget.setY(widget.getY() + ROW);
+			if (widget.getY() >= pinnedBottom) {
+				continue;
 			}
+			widget.setY(widget.getY() + (widget.getY() > singleplayer.getY() ? ROW / 2 : -ROW / 2));
 		}
 		Button coop = Button.builder(label(controllers()), b -> openLobby(minecraft, title))
 				.bounds(singleplayer.getX(), singleplayer.getY() + ROW, singleplayer.getWidth(), singleplayer.getHeight())

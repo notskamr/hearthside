@@ -3,6 +3,7 @@ package dev.hearthside.fabric.client.host;
 import dev.hearthside.core.profile.PlayerColors;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.network.chat.Component;
@@ -35,9 +36,26 @@ public final class LobbyScreen extends Screen {
 		minecraft.gui.setScreen(new SelectWorldScreen(this));
 	}
 
+	/** Back or Esc: leaving the lobby ends the party, so ask first when anyone has taken a seat (Spec A section 7.1). */
 	@Override
 	public void onClose() {
-		// Leaving the lobby ends the party: every guest's game stops.
+		if (party.seatedCount() == 0) {
+			endParty();
+			return;
+		}
+		minecraft.gui.setScreen(new ConfirmScreen(yes -> {
+			if (yes) {
+				endParty();
+			} else {
+				minecraft.gui.setScreen(this);
+			}
+		}, Component.literal("End the party?"),
+				Component.literal("Everyone's game will close, and they'll need to join again."),
+				Component.literal("End party"), Component.literal("Keep playing")));
+	}
+
+	/** Ends the party (every guest's game stops) and goes back. */
+	public void endParty() {
 		party.disband();
 		minecraft.gui.setScreen(parent);
 	}

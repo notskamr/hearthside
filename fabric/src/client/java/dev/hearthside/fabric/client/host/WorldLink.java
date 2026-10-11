@@ -10,7 +10,11 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.server.HostServerBridge;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.HttpUtil;
 
@@ -24,6 +28,10 @@ final class WorldLink {
 	private final GuestTokenAuthority tokens;
 	/** Loopback port guests join on; 0 until the first guest needs it. */
 	private volatile int gamePort;
+	/** The control connection each guest was last sent in on. Guarded by this. */
+	private final Map<Integer, ControlConnection> sentIn = new HashMap<>();
+	/** Names of the players in the world, refreshed on the server thread. */
+	private volatile Set<String> playerNames = Set.of();
 
 	WorldLink(MinecraftServer server, GuestTokenAuthority tokens) {
 		this.server = server;
@@ -32,8 +40,14 @@ final class WorldLink {
 		HostServerBridge.activate(new HostServerBridge.Active(roster, tokens, this::reopenGuestListener));
 	}
 
-	/** Lets this guest log in and tells their game to join, as {@code profile}. */
-	void sendIn(int index, GuestProfile profile, ControlConnection connection) throws IOException {
+	/**
+	 * Lets this guest log in and tells their game to join, as {@code profile}. Reached from the server thread (the world
+	 * opening) and control-channel threads (a game becoming ready), so serialised; each connection is sent in once.
+	 */
+	synchronized void sendIn(int index, GuestProfile profile, ControlConnection connection) throws IOException {
+		if (sentIn.get(index) == connection) {
+			return;
+		}
 		ensureGuestListener();
 		Optional<GuestProfile> registered = roster.byIndex(index);
 		if (registered.isPresent() && !registered.get().id().equals(profile.id())) {
@@ -45,15 +59,22 @@ final class WorldLink {
 		}
 		String token = tokens.issue(GuestUuids.forProfile(profile.id()));
 		connection.send(new ControlMessage.JoinWorld(gamePort, token, profile.name()));
+		sentIn.put(index, connection);
 	}
 
-	/** Whether a player with this name is in the world (a guest's game has finished joining). */
+	/**
+	 * Whether a player with this name is in the world (a guest's game has finished joining), as of the server's last
+	 * look. Any thread: the player list itself is the server thread's, so each call also asks it for a fresh look.
+	 */
 	boolean hasPlayer(String name) {
-		return server.getPlayerList().getPlayerByName(name) != null;
+		server.execute(() -> playerNames = server.getPlayerList().getPlayers().stream()
+				.map(player -> player.getGameProfile().name()).collect(Collectors.toUnmodifiableSet()));
+		return playerNames.contains(name);
 	}
 
-	void remove(int index) {
+	synchronized void remove(int index) {
 		roster.remove(index);
+		sentIn.remove(index);
 	}
 
 	void close() {

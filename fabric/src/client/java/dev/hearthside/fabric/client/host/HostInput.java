@@ -8,6 +8,7 @@ import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadSnapshot;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.input.RouterEvent;
+import dev.hearthside.core.input.SharedScreenInput;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
 import dev.hearthside.fabric.HearthsideMod;
@@ -21,6 +22,8 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConfirmScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -47,7 +50,10 @@ final class HostInput implements Runnable {
 	// Each controller's model id, for remembering which controller a profile last used.
 	private final Map<Integer, String> guids = new HashMap<>();
 	private long lastFlowTick;
-	private final Map<Integer, Integer> lobbyButtons = new HashMap<>();
+	/** Each controller's buttons last frame on shared screens, for press edges. */
+	private final Map<Integer, Integer> sharedButtons = new HashMap<>();
+	/** Whether a guest's controller is driving the host's shared screen (the host has no pad of its own). */
+	private boolean sharedDriving;
 
 	HostInput(Minecraft minecraft, Party session, GamepadSource source, ControlScheme hostScheme) {
 		this.minecraft = minecraft;
@@ -70,7 +76,11 @@ final class HostInput implements Runnable {
 		long tickNow = System.nanoTime();
 		if (tickNow - lastFlowTick >= 1_000_000_000L) {
 			lastFlowTick = tickNow;
-			session.tickFlow();
+			try {
+				session.tickFlow();
+			} catch (RuntimeException e) {
+				HearthsideMod.LOGGER.error("Hearthside join-flow tick failed", e);
+			}
 		}
 		for (RouterEvent event : update.events()) {
 			try {
@@ -80,18 +90,19 @@ final class HostInput implements Runnable {
 			}
 		}
 		refreshStyles();
-		if (minecraft.gui.screen() instanceof LobbyScreen lobby) {
-			// Shared screen: Menu on any seated controller moves the party on (Spec A section 7.1).
-			for (Map.Entry<Integer, InputFrame> entry : update.frames().entrySet()) {
-				int buttons = entry.getValue().buttons();
-				int before = lobbyButtons.getOrDefault(entry.getKey(), 0);
-				int start = InputFrame.buttons(PadButton.START);
-				if ((buttons & start) != 0 && (before & start) == 0) {
-					lobby.continueToWorlds();
-				}
-				lobbyButtons.put(entry.getKey(), buttons);
+		if (!session.inWorld()) {
+			// No world yet (lobby, world select): guests' games are idle on their title screens and must not be
+			// driven. Every controller drives the host's shared screen instead (Spec A sections 7.1, 8.2).
+			driveSharedScreen(update.frames());
+			return;
+		}
+		if (sharedDriving) {
+			sharedDriving = false;
+			if (!update.frames().containsKey(0)) {
+				hostApplier.release();
 			}
 		}
+		sharedButtons.clear();
 		long now = System.nanoTime();
 		update.frames().forEach((player, frame) -> {
 			if (player == 0) {
@@ -104,6 +115,50 @@ final class HostInput implements Runnable {
 			}
 		});
 		hostApplier.onFrame();
+	}
+
+	/**
+	 * Shared screens: Menu on any seated controller continues from the lobby, B on a seated controller in the lobby
+	 * gives up its seat, and otherwise whoever is using a controller moves the host's cursor.
+	 */
+	private void driveSharedScreen(Map<Integer, InputFrame> frames) {
+		Screen screen = minecraft.gui.screen();
+		LobbyScreen lobby = screen instanceof LobbyScreen l ? l : null;
+		int start = InputFrame.buttons(PadButton.START);
+		int b = InputFrame.buttons(PadButton.B);
+		for (Map.Entry<Integer, InputFrame> entry : frames.entrySet()) {
+			int player = entry.getKey();
+			int buttons = entry.getValue().buttons();
+			int pressed = buttons & ~sharedButtons.getOrDefault(player, 0);
+			sharedButtons.put(player, buttons);
+			if (player == 0 || lobby == null) {
+				continue;
+			}
+			if ((pressed & start) != 0) {
+				lobby.continueToWorlds();
+			} else if ((pressed & b) != 0) {
+				session.onSeatedB(player);
+			}
+		}
+		sharedButtons.keySet().retainAll(frames.keySet());
+		// Ending the party is player 1's call (Spec A section 7.1): guests don't drive its confirmation.
+		Map<Integer, InputFrame> drivers = screen instanceof ConfirmScreen
+				? (frames.containsKey(0) ? Map.of(0, frames.get(0)) : Map.of()) : frames;
+		InputFrame drive = SharedScreenInput.drive(drivers, lobby != null ? start | b : start);
+		if (drivers.containsKey(0)) {
+			hostApplier.accept(drive);
+			hostApplier.onFrame();
+		} else if (screen != null && SharedScreenInput.isActive(drive)) {
+			hostApplier.accept(drive);
+			hostApplier.onFrame();
+			sharedDriving = true;
+		} else if (sharedDriving) {
+			// Let go (releasing anything held), then hand the screen back to the mouse.
+			hostApplier.accept(InputFrame.NEUTRAL);
+			hostApplier.onFrame();
+			hostApplier.release();
+			sharedDriving = false;
+		}
 	}
 
 	void armClaim() {
