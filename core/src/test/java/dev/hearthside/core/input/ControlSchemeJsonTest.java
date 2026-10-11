@@ -16,9 +16,36 @@ class ControlSchemeJsonTest {
 	@Test
 	void unknownNamesAreIgnored() {
 		var scheme = ControlSchemeJson.fromJson("{\"gameplay\":{\"FLY\":\"A\",\"JUMP\":\"Z\",\"SNEAK\":\"B\"}}");
-		assertThat(scheme.controlFor(Action.JUMP)).isEmpty();
+		assertThat(scheme.controlFor(Action.JUMP)).contains(Control.A); // bad value → Bedrock default
 		assertThat(scheme.controlFor(Action.SNEAK)).contains(Control.B);
 		assertThat(scheme.menu()).isEqualTo(BEDROCK.menu());
+	}
+
+	@Test
+	void misspelledActionKeepsBedrockDefaults() {
+		assertThat(ControlSchemeJson.fromJson("{\"gameplay\":{\"jump\":\"A\"},\"menu\":{\"take\":\"A\"}}"))
+				.isEqualTo(BEDROCK);
+	}
+
+	@Test
+	void noneUnbindsExplicitly() {
+		var scheme = ControlSchemeJson.fromJson("{\"gameplay\":{\"JUMP\":\"NONE\"}}");
+		assertThat(scheme.controlFor(Action.JUMP)).isEmpty();
+		assertThat(scheme.controlFor(Action.INVENTORY)).contains(Control.Y);
+	}
+
+	@Test
+	void defaultsNeverStealAnExplicitControl() {
+		var scheme = ControlSchemeJson.fromJson("{\"gameplay\":{\"DROP\":\"A\"}}");
+		assertThat(scheme.controlFor(Action.DROP)).contains(Control.A);
+		assertThat(scheme.controlFor(Action.JUMP)).isEmpty();
+	}
+
+	@Test
+	void unboundActionsRoundTrip() {
+		var scheme = BEDROCK.withBinding(Action.DROP, Control.A);
+		assertThat(ControlSchemeJson.toJson(scheme)).contains("\"JUMP\":\"NONE\"");
+		assertThat(ControlSchemeJson.fromJson(ControlSchemeJson.toJson(scheme))).isEqualTo(scheme);
 	}
 
 	@Test
@@ -35,7 +62,7 @@ class ControlSchemeJsonTest {
 	void duplicateControlsKeepOneAction() {
 		var scheme = ControlSchemeJson.fromJson("{\"gameplay\":{\"SNEAK\":\"A\",\"JUMP\":\"A\"}}");
 		assertThat(scheme.controlFor(Action.JUMP)).contains(Control.A);
-		assertThat(scheme.controlFor(Action.SNEAK)).isEmpty();
+		assertThat(scheme.controlFor(Action.SNEAK)).contains(Control.B); // the losing action keeps its Bedrock default
 	}
 
 	@ParameterizedTest

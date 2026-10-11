@@ -4,8 +4,10 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
 import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.FreshInput;
 import dev.hearthside.core.input.GameplayIntent;
 import dev.hearthside.core.input.GamepadMapping;
+import dev.hearthside.core.input.HeldSuppression;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.MenuAction;
 import dev.hearthside.core.input.MenuIntent;
@@ -40,12 +42,19 @@ public final class InputApplier {
 	/** Entity.turn multiplies its arguments by this. */
 	private static final double TURN_SCALE = 0.15;
 	private static final double SNAP_RADIUS_GUI = 12;
-	private static final int LEFT = 0, RIGHT = 1, PRESS = 1, RELEASE = 0;
+	/** A guest stops acting on input this old (the host may have stalled). */
+	private static final long MAX_INPUT_AGE_NANOS = 300_000_000L;
+	private static final int PRESS = 1, RELEASE = 0;
+	/** InventoryScreen's widthTooNarrow threshold. */
+	private static final int RECIPE_BOOK_MIN_GUI_WIDTH = 379;
 
 	private final Minecraft minecraft;
+	private final FreshInput input = new FreshInput(System::nanoTime, MAX_INPUT_AGE_NANOS);
+	private final HeldSuppression suppression = new HeldSuppression();
 	private volatile ControlScheme scheme = ControlScheme.BEDROCK;
-	private volatile InputFrame latest;
 	private InputFrame previous = InputFrame.NEUTRAL;
+	/** Last frame used for gameplay, after suppression; edges are computed against it. */
+	private InputFrame previousGameplay = InputFrame.NEUTRAL;
 	private long lastFrameNanos;
 	private boolean inMenu;
 	/** Key mappings this applier is currently holding down. */
@@ -55,11 +64,15 @@ public final class InputApplier {
 		this.minecraft = minecraft;
 	}
 
-	/** Applies a scheme; also sets this client's toggle-sneak and auto-jump options. Render thread. */
+	/** Uses {@code newScheme} for bindings and look settings. Does not touch game options. */
 	public void setScheme(ControlScheme newScheme) {
 		this.scheme = newScheme;
-		minecraft.options.toggleCrouch().set(newScheme.toggleSneak());
-		minecraft.options.autoJump().set(newScheme.autoJump());
+	}
+
+	/** Applies the scheme's toggle-sneak and auto-jump to this client's options. Render thread. */
+	public void applyOptions() {
+		minecraft.options.toggleCrouch().set(scheme.toggleSneak());
+		minecraft.options.autoJump().set(scheme.autoJump());
 	}
 
 	public ControlScheme scheme() {
@@ -68,14 +81,15 @@ public final class InputApplier {
 
 	/** Latest controller state; any thread. */
 	public void accept(InputFrame frame) {
-		this.latest = frame;
+		input.accept(frame);
 	}
 
 	public void onFrame() {
-		InputFrame frame = latest;
-		if (frame == null) {
+		Optional<InputFrame> current = input.current();
+		if (current.isEmpty()) {
 			return;
 		}
+		InputFrame frame = current.get();
 		long now = System.nanoTime();
 		float dt = lastFrameNanos == 0 ? 0f : (now - lastFrameNanos) / 1e9f;
 		lastFrameNanos = now;
@@ -84,33 +98,42 @@ public final class InputApplier {
 			// throttled to the "away from keyboard" frame rate.
 			minecraft.getFramerateLimitTracker().onInputReceived();
 		}
-
-		Screen screen = minecraft.gui.screen();
-		if (screen == null) {
-			if (inMenu) {
-				HearthsideMod.LOGGER.info("Hearthside controller: world mode");
+		try {
+			Screen screen = minecraft.gui.screen();
+			if (screen == null) {
+				if (inMenu) {
+					HearthsideMod.LOGGER.info("Hearthside controller: world mode");
+					// Buttons still held from the menu (B to close, A on a widget) must not act in the world.
+					suppression.suppressHeld(frame);
+					previousGameplay = InputFrame.NEUTRAL;
+				}
+				inMenu = false;
+				InputFrame filtered = suppression.filter(frame);
+				applyGameplay(GamepadMapping.gameplay(scheme, previousGameplay, filtered, dt));
+				previousGameplay = filtered;
+			} else {
+				if (!inMenu) {
+					HearthsideMod.LOGGER.info("Hearthside controller: menu mode ({})", screen.getClass().getSimpleName());
+					inMenu = true;
+					releaseHeld();
+					PadMovement.clear();
+					VirtualCursor.ensurePlaced(minecraft.getWindow());
+				}
+				applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt));
 			}
-			inMenu = false;
-			applyGameplay(GamepadMapping.gameplay(scheme, previous, frame, dt));
-		} else {
-			if (!inMenu) {
-				HearthsideMod.LOGGER.info("Hearthside controller: menu mode ({})", screen.getClass().getSimpleName());
-				inMenu = true;
-				releaseHeld();
-				PadMovement.clear();
-				VirtualCursor.ensurePlaced(minecraft.getWindow());
-			}
-			applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt));
+		} finally {
+			// Even if applying failed, never replay the same button edge on the next frame.
+			previous = frame;
 		}
-		previous = frame;
 	}
 
 	/** Lets go of everything this controller is holding. */
 	public void release() {
 		releaseHeld();
 		PadMovement.clear();
-		latest = null;
+		input.clear();
 		previous = InputFrame.NEUTRAL;
+		previousGameplay = InputFrame.NEUTRAL;
 	}
 
 	private void applyGameplay(GameplayIntent intent) {
@@ -118,11 +141,7 @@ public final class InputApplier {
 		if (player == null || minecraft.level == null) {
 			return;
 		}
-		Options o = minecraft.options;
-		Map<Action, KeyMapping> heldMappings = new EnumMap<>(Map.of(
-				Action.JUMP, o.keyJump, Action.SNEAK, o.keyShift, Action.SPRINT, o.keySprint,
-				Action.ATTACK, o.keyAttack, Action.USE, o.keyUse, Action.PLAYER_LIST, o.keyPlayerList));
-		heldMappings.forEach((action, mapping) -> {
+		heldMappings().forEach((action, mapping) -> {
 			boolean want = intent.held().contains(action);
 			if (want && holding.add(action)) {
 				mapping.setDown(true);
@@ -131,6 +150,7 @@ public final class InputApplier {
 			}
 		});
 
+		Options o = minecraft.options;
 		Map<Action, KeyMapping> clickMappings = Map.of(
 				Action.INVENTORY, o.keyInventory, Action.DROP, o.keyDrop, Action.SWAP_OFFHAND, o.keySwapOffhand,
 				Action.PERSPECTIVE, o.keyTogglePerspective, Action.PICK_BLOCK, o.keyPickItem, Action.CHAT, o.keyChat);
@@ -142,7 +162,10 @@ public final class InputApplier {
 		});
 
 		if (intent.pressed().contains(Action.CRAFTING)) {
-			player.getRecipeBook().setOpen(RecipeBookType.CRAFTING, true);
+			// A split-screen window is often narrower than vanilla's 379 GUI px, where the recipe book
+			// is drawn over the inventory instead of beside it; only show it where it fits.
+			boolean fits = minecraft.getWindow().getGuiScaledWidth() >= RECIPE_BOOK_MIN_GUI_WIDTH;
+			player.getRecipeBook().setOpen(RecipeBookType.CRAFTING, fits);
 			minecraft.gui.setScreen(new InventoryScreen(player));
 		}
 		if (intent.pressed().contains(Action.PAUSE)) {
@@ -165,8 +188,7 @@ public final class InputApplier {
 	private void applyMenu(Screen screen, MenuIntent intent) {
 		Window window = minecraft.getWindow();
 		long handle = window.handle();
-		double oldX = VirtualCursor.x(), oldY = VirtualCursor.y();
-		VirtualCursor.moveTo(oldX + intent.cursorDx(), oldY + intent.cursorDy(), window);
+		VirtualCursor.moveTo(VirtualCursor.x() + intent.cursorDx(), VirtualCursor.y() + intent.cursorDy(), window);
 
 		if (screen instanceof AbstractContainerScreen<?> container) {
 			double toGui = (double) window.getGuiScaledWidth() / window.getScreenWidth();
@@ -180,17 +202,20 @@ public final class InputApplier {
 			target.ifPresent(p -> VirtualCursor.moveTo(p.x() / toGui, p.y() / toGui, window));
 		}
 
+		// Opening a screen re-syncs MouseHandler to the real OS cursor; every frame, put it back on
+		// the virtual cursor so hover highlights and clicks land where the player sees the pointer.
 		double x = VirtualCursor.x(), y = VirtualCursor.y();
-		if (x != oldX || y != oldY) {
-			minecraft.mouseHandler.onMove(handle, x, y, x - oldX, y - oldY);
+		double mouseX = minecraft.mouseHandler.xpos(), mouseY = minecraft.mouseHandler.ypos();
+		if (x != mouseX || y != mouseY) {
+			minecraft.mouseHandler.onMove(handle, x, y, x - mouseX, y - mouseY);
 		}
-		button(handle, intent, MenuAction.PICK_PLACE, LEFT, 0);
-		button(handle, intent, MenuAction.TAKE_HALF, RIGHT, 0);
-		button(handle, intent, MenuAction.QUICK_MOVE, LEFT, InputConstants.MOD_SHIFT);
+		button(handle, intent, MenuAction.PICK_PLACE, InputConstants.MOUSE_BUTTON_LEFT, 0);
+		button(handle, intent, MenuAction.TAKE_HALF, InputConstants.MOUSE_BUTTON_RIGHT, 0);
+		button(handle, intent, MenuAction.QUICK_MOVE, InputConstants.MOUSE_BUTTON_LEFT, InputConstants.MOD_SHIFT);
 		if (intent.scroll() != 0) {
 			minecraft.mouseHandler.onScroll(handle, 0, intent.scroll());
 		}
-		if (intent.down().contains(MenuAction.CLOSE)) {
+		if (intent.down().contains(MenuAction.CLOSE) && minecraft.gui.screen() == screen && screen.shouldCloseOnEsc()) {
 			screen.onClose();
 		}
 	}
@@ -215,21 +240,28 @@ public final class InputApplier {
 		return centres;
 	}
 
-	private static boolean isNeutral(InputFrame f) {
-		return f.buttons() == 0 && f.leftX() == 0 && f.leftY() == 0 && f.rightX() == 0 && f.rightY() == 0
-				&& f.leftTrigger() == 0 && f.rightTrigger() == 0;
+	private Map<Action, KeyMapping> heldMappings() {
+		Options o = minecraft.options;
+		Map<Action, KeyMapping> mappings = new EnumMap<>(Action.class);
+		mappings.put(Action.JUMP, o.keyJump);
+		mappings.put(Action.SNEAK, o.keyShift);
+		mappings.put(Action.SPRINT, o.keySprint);
+		mappings.put(Action.ATTACK, o.keyAttack);
+		mappings.put(Action.USE, o.keyUse);
+		mappings.put(Action.PLAYER_LIST, o.keyPlayerList);
+		return mappings;
 	}
 
 	private void releaseHeld() {
-		Options o = minecraft.options;
-		Map<Action, KeyMapping> mappings = Map.of(Action.JUMP, o.keyJump, Action.SNEAK, o.keyShift, Action.SPRINT, o.keySprint,
-				Action.ATTACK, o.keyAttack, Action.USE, o.keyUse, Action.PLAYER_LIST, o.keyPlayerList);
+		Map<Action, KeyMapping> mappings = heldMappings();
 		for (Action action : holding) {
-			KeyMapping mapping = mappings.get(action);
-			if (mapping != null) {
-				mapping.setDown(false);
-			}
+			mappings.get(action).setDown(false);
 		}
 		holding.clear();
+	}
+
+	private static boolean isNeutral(InputFrame f) {
+		return f.buttons() == 0 && f.leftX() == 0 && f.leftY() == 0 && f.rightX() == 0 && f.rightY() == 0
+				&& f.leftTrigger() == 0 && f.rightTrigger() == 0;
 	}
 }

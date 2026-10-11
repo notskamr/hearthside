@@ -93,7 +93,10 @@ public final class E2eDriver {
 				step("P4 RB advances the guest's hotbar", this::bumperSteps);
 				step("P7 rebound Y makes the guest jump", this::reboundJump);
 				step("P5 unplug pauses, replug resumes", this::unplugAndReplug);
-				step("P6 satellite ignores OS keyboard and mouse", this::satelliteIgnoresOsInput);
+				step("P6 satellite input-isolation boot line present (behaviour checked by hand)", this::satelliteIgnoresOsInput);
+				step("M1 inventory: X takes half a stack, A places it", this::inventoryClicks);
+				step("M2 closing a menu with B does not leak sneak into the world", this::closeWithoutSneakLeak);
+				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
 				step("P9 Player2 leaves", this::player2Leaves);
 			}
@@ -292,6 +295,65 @@ public final class E2eDriver {
 
 	private void satelliteIgnoresOsInput() throws IOException {
 		check(satelliteLog().contains("hearthside satellite ignores os keyboard and mouse"), "satellite OS-input line");
+	}
+
+	private void inventoryClicks() throws Exception {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		server.submit(() -> {
+			var source = server.createCommandSourceStack().withSuppressedOutput();
+			// Survival, so the inventory is the plain InventoryScreen rather than the creative item grid.
+			server.getCommands().performPrefixedCommand(source, "gamemode survival Player2");
+			for (int slot = 0; slot < 36; slot++) {
+				server.getCommands().performPrefixedCommand(source, "item replace entity Player2 container." + slot + " with minecraft:stone 10");
+			}
+		}).join();
+		int menusBefore = count("hearthside controller: menu mode (inventoryscreen)");
+		// Player2's P0 profile moved Y to JUMP (unbinding INVENTORY); X (crafting) opens the same screen.
+		press(102, PadButton.X);
+		waitFor("inventory open on the guest", Duration.ofSeconds(10),
+				() -> count("hearthside controller: menu mode (inventoryscreen)") > menusBefore);
+		Thread.sleep(500);
+		// The cursor starts mid-window, which may be over the recipe book; a D-pad hop lands on a slot.
+		press(102, PadButton.DPAD_DOWN);
+		Thread.sleep(300);
+		ServerPlayer guest = guest("Player2");
+		press(102, PadButton.X);
+		waitFor("half a stack on the guest's cursor", Duration.ofSeconds(5),
+				() -> guest.containerMenu.getCarried().getCount() == 5);
+		press(102, PadButton.A);
+		waitFor("stack placed back", Duration.ofSeconds(5), () -> guest.containerMenu.getCarried().isEmpty());
+		server.submit(() -> server.getCommands().performPrefixedCommand(
+				server.createCommandSourceStack().withSuppressedOutput(), "gamemode creative Player2")).join();
+	}
+
+	private void closeWithoutSneakLeak() throws Exception {
+		int worldBefore = count("hearthside controller: world mode");
+		// Hold B: it closes the inventory, then stays held in the world.
+		PADS.set(102, new InputFrame(0, InputFrame.buttons(PadButton.B), 0, 0, 0, 0, 0, 0));
+		waitFor("back in the world", Duration.ofSeconds(10), () -> count("hearthside controller: world mode") > worldBefore);
+		Thread.sleep(1000);
+		boolean sneaking = guest("Player2").isShiftKeyDown();
+		PADS.set(102, InputFrame.NEUTRAL);
+		check(!sneaking, "guest not sneaking while the closing B is still held");
+	}
+
+	private void pauseMenuOpensAndCloses() throws Exception {
+		int pausesBefore = count("hearthside controller: menu mode (pausescreen)");
+		int worldBefore = count("hearthside controller: world mode");
+		press(102, PadButton.START);
+		waitFor("pause menu on the guest", Duration.ofSeconds(10),
+				() -> count("hearthside controller: menu mode (pausescreen)") > pausesBefore);
+		press(102, PadButton.B);
+		waitFor("pause menu closed", Duration.ofSeconds(10), () -> count("hearthside controller: world mode") > worldBefore);
+	}
+
+	private int count(String needle) throws IOException {
+		String log = satelliteLog();
+		int n = 0;
+		for (int i = log.indexOf(needle); i >= 0; i = log.indexOf(needle, i + 1)) {
+			n++;
+		}
+		return n;
 	}
 
 	private void padStyleReached() throws IOException {

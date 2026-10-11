@@ -64,7 +64,7 @@ public final class SatelliteBoot {
 
 		applier = new InputApplier(minecraft);
 		FrameHook.register(applier::onFrame);
-		VirtualCursor.enableDrawing();
+		VirtualCursor.setDrawn(true);
 		ButtonGuideRenderer.enable(applier::scheme);
 
 		Thread.ofPlatform().daemon().name("hearthside-satellite-connect").start(() -> connect(minecraft, port, index, secret));
@@ -113,7 +113,10 @@ public final class SatelliteBoot {
 				}
 			});
 			case ControlMessage.Input m -> applier.accept(m.frame());
-			case ControlMessage.SetControls m -> minecraft.execute(() -> applier.setScheme(ControlSchemeJson.fromJson(m.schemeJson())));
+			case ControlMessage.SetControls m -> minecraft.execute(() -> {
+				applier.setScheme(ControlSchemeJson.fromJson(m.schemeJson()));
+				applier.applyOptions();
+			});
 			case ControlMessage.SetPadStyle m -> {
 				HearthsideMod.LOGGER.info("Hearthside SetPadStyle {}", m.style());
 				ButtonGuideRenderer.setStyle(m.style());

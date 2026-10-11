@@ -5,22 +5,27 @@ import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /**
- * A controller-driven pointer for menus. Every window on the PC shares one OS cursor, so a satellite
- * draws its own. Position is in window coordinates, the space {@code MouseHandler} uses.
+ * A controller-driven pointer for menus. Every window on the PC shares one OS cursor, so a
+ * controller-driven client draws its own. Position is in window coordinates, the space
+ * {@code MouseHandler} uses.
  */
 public final class VirtualCursor {
 	private static final int SIZE = 8;
 	private static double x = -1;
 	private static double y = -1;
 	private static volatile boolean drawn;
+	private static boolean registered;
 
 	private VirtualCursor() {}
 
-	/** Draws the cursor on every screen of this client (satellites only). */
-	public static void enableDrawing() {
-		drawn = true;
-		ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) ->
-				ScreenEvents.afterExtract(screen).register((s, graphics, mouseX, mouseY, delta) -> draw(graphics, minecraft.getWindow())));
+	/** Shows or hides the drawn pointer (satellites always; the host while it has a controller). */
+	public static void setDrawn(boolean show) {
+		drawn = show;
+		if (show && !registered) {
+			registered = true;
+			ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) ->
+					ScreenEvents.afterExtract(screen).register((s, graphics, mouseX, mouseY, delta) -> draw(graphics, minecraft.getWindow())));
+		}
 	}
 
 	public static double x() {

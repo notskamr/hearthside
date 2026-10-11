@@ -95,6 +95,19 @@ class InputRouterTest {
 	}
 
 	@Test
+	void idleIdenticalPadIsNotTakenOnUnplug() {
+		// Player 1's pad dies while an identical spare sits connected but unassigned.
+		router.update(List.of(pad(11, "xbox"), pad(12, "xbox")));
+		router.assign(11, 1);
+		assertThat(router.update(List.of(pad(12, "xbox"))).events()).containsExactly(new RouterEvent.PadLost(1));
+		assertThat(router.hasPad(1)).isFalse();
+		assertThat(router.playerFor(12)).isEmpty();
+		assertThat(router.update(List.of(pad(12, "xbox"), pad(13, "xbox"))).events())
+				.containsExactly(new RouterEvent.PadRestored(1));
+		assertThat(router.playerFor(13)).hasValue(1);
+	}
+
+	@Test
 	void lowestLostPlayerIsRestoredFirst() {
 		router.update(List.of(pad(11, "xbox"), pad(12, "xbox")));
 		router.assign(11, 3);

@@ -11,5 +11,4 @@ public interface ContainerScreenAccessor {
 	int hearthside$leftPos();
 
 	@Accessor("topPos")
-	int hearthside$topPos();
-}
+	int hearthside$topPos();}

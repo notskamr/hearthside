@@ -44,7 +44,9 @@ public final class InputRouter {
 		}
 
 		for (PadSnapshot pad : current.values()) {
-			if (padToPlayer.containsKey(pad.instanceId())) {
+			// Only a controller that has just connected can restore a player; an idle identical
+			// controller that was already here must not be taken over.
+			if (padToPlayer.containsKey(pad.instanceId()) || previous.containsKey(pad.instanceId())) {
 				continue;
 			}
 			Optional<Integer> owner = lostPlayers.stream().filter(p -> pad.guid().equals(lastGuid.get(p))).findFirst();

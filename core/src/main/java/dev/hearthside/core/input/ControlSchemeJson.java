@@ -5,9 +5,14 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
+import java.lang.System.Logger.Level;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -16,7 +21,10 @@ import java.util.TreeMap;
  * field's Bedrock value. It never throws.
  */
 public final class ControlSchemeJson {
+	private static final System.Logger LOG = System.getLogger(ControlSchemeJson.class.getName());
 	private static final Gson GSON = new Gson();
+	/** Value that explicitly unbinds an action. */
+	public static final String NONE = "NONE";
 	private static final ControlScheme DEFAULTS = ControlScheme.BEDROCK;
 
 	private ControlSchemeJson() {}
@@ -27,10 +35,15 @@ public final class ControlSchemeJson {
 
 	public static JsonObject toTree(ControlScheme scheme) {
 		JsonObject root = new JsonObject();
+		// Every action is written, unbound ones as NONE, so reading never re-fills them with defaults.
 		JsonObject gameplay = new JsonObject();
-		scheme.gameplay().forEach((action, control) -> gameplay.addProperty(action.name(), control.name()));
+		for (Action action : Action.values()) {
+			gameplay.addProperty(action.name(), scheme.controlFor(action).map(Control::name).orElse(NONE));
+		}
 		JsonObject menu = new JsonObject();
-		scheme.menu().forEach((action, control) -> menu.addProperty(action.name(), control.name()));
+		for (MenuAction action : MenuAction.values()) {
+			menu.addProperty(action.name(), scheme.controlFor(action).map(Control::name).orElse(NONE));
+		}
 		root.add("gameplay", gameplay);
 		root.add("menu", menu);
 		root.addProperty("lookSensitivity", scheme.lookSensitivity());
@@ -78,13 +91,33 @@ public final class ControlSchemeJson {
 		Map<String, JsonElement> sorted = new TreeMap<>(element.getAsJsonObject().asMap());
 		Map<K, Control> result = new EnumMap<>(type);
 		EnumSet<Control> used = EnumSet.noneOf(Control.class);
+		Set<K> unbound = new HashSet<>();
+		List<String> dropped = new ArrayList<>();
 		sorted.forEach((name, value) -> {
 			K action = parse(type, name);
-			Control control = value instanceof JsonPrimitive p && p.isString() ? parse(Control.class, p.getAsString()) : null;
+			String text = value instanceof JsonPrimitive p && p.isString() ? p.getAsString() : null;
+			if (action != null && NONE.equals(text)) {
+				unbound.add(action);
+				return;
+			}
+			Control control = text == null ? null : parse(Control.class, text);
 			if (action != null && control != null && used.add(control)) {
 				result.put(action, control);
+			} else {
+				dropped.add(name + "=" + value);
 			}
 		});
+		// Anything not (validly) mentioned keeps its Bedrock control, as long as that control is free:
+		// a typo must never leave a player without pause, jump or inventory.
+		for (K action : type.getEnumConstants()) {
+			Control fallbackControl = fallback.get(action);
+			if (!result.containsKey(action) && !unbound.contains(action) && fallbackControl != null && used.add(fallbackControl)) {
+				result.put(action, fallbackControl);
+			}
+		}
+		if (!dropped.isEmpty()) {
+			LOG.log(Level.WARNING, "Ignored controller bindings " + dropped + "; using defaults for those actions");
+		}
 		return result;
 	}
 
