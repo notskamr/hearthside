@@ -31,7 +31,8 @@ Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 - Final review: a second Hello on one login could skip the guest token; the host's name and non-guests could log in
   over the loopback listener; Stop Sharing kicked guests and closed their listener; split-screen changes to the host
   window and pause setting applied even without guests and were never undone; closing a guest window counted as a
-  crash. All fixed (see commit history); 4b and the window-restore check in 5 cover the last three in the real game.
+  crash. All fixed (see commit history). In the real game, step 4b covers Stop Sharing and step 5 covers the window
+  restore; the login rules and the clean-exit rule are covered by `core` unit tests.
 
 - The satellite inherited the host's working directory, so it wrote into the host's `logs/latest.log` and had no log
   of its own. Satellites now start in their own folder (`LaunchCommand.workingDirectory`, tests
