@@ -35,6 +35,7 @@ public final class QuickSetup {
 	}
 
 	private final Set<String> takenNames;
+	private final Set<Integer> takenColors;
 	private final String suggestedName;
 	private Step step = Step.NAME;
 	private int skin;
@@ -51,6 +52,7 @@ public final class QuickSetup {
 		if (hostName != null) {
 			this.takenNames.add(hostName.toLowerCase(Locale.ROOT));
 		}
+		this.takenColors = Set.copyOf(takenColors);
 		this.suggestedName = suggest(seat);
 		this.skin = Math.floorMod(seat, SKINS.size());
 		int first = PlayerColors.firstFree(takenColors);
@@ -109,12 +111,24 @@ public final class QuickSetup {
 		return PlayerColors.DEFAULTS[colorIndex];
 	}
 
+	/** The next colour nobody else has (all of them if every one is taken). */
 	public void nextColor() {
-		colorIndex = Math.floorMod(colorIndex + 1, PlayerColors.DEFAULTS.length);
+		cycleColor(1);
 	}
 
 	public void previousColor() {
-		colorIndex = Math.floorMod(colorIndex - 1, PlayerColors.DEFAULTS.length);
+		cycleColor(-1);
+	}
+
+	private void cycleColor(int direction) {
+		int n = PlayerColors.DEFAULTS.length;
+		for (int step = 1; step <= n; step++) {
+			int candidate = Math.floorMod(colorIndex + direction * step, n);
+			if (!takenColors.contains(PlayerColors.DEFAULTS[candidate]) || step == n) {
+				colorIndex = candidate;
+				return;
+			}
+		}
 	}
 
 	public GuestProfile build(UUID id, String name, String controllerGuid) {

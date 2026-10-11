@@ -123,6 +123,7 @@ public final class E2eDriver {
 				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
 				step("L4 B steps back out of quick setup, then leaves the seat from the carousel", this::cardBackAndLeave);
 				step("L8 unplugging mid-keyboard keeps the card; replugging resumes it", this::cardSurvivesUnplug);
+				step("L10 two identical controllers never share a profile or a new name", this::twinsNeverClash);
 				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
 				step("B5 Menu on a seated controller continues; the world brings the guests in by name", this::lobbyIntoWorld);
 			}
@@ -694,6 +695,10 @@ public final class E2eDriver {
 	}
 
 	private void hostCardClaims() throws Exception {
+		// Start from player 1 having no remembered controller (a stopped run can leave one behind).
+		ProfileStore store = profiles();
+		ProfileFile file = store.loadFile();
+		store.saveFile(new ProfileFile(file.profiles(), file.host().withController(null)));
 		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
 		Thread.sleep(300);
 		LobbyScreen lobby = openLobby();
@@ -719,14 +724,21 @@ public final class E2eDriver {
 		openLobby();
 		waitFor("player 1's controller taken again", Duration.ofSeconds(5),
 				() -> onRender(() -> Party.current().hostHasController()));
+		// "− Controller" gives it back: it is free again, and forgotten.
+		onRender(() -> {
+			Screens.getWidgets(minecraft.gui.screen()).stream()
+					.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("− Controller"))
+					.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+			return null;
+		});
+		check(onRender(() -> !Party.current().hostHasController()), "player 1 gave the controller back");
+		check(profiles().loadFile().host().preferredControllerGuid() == null, "and it is forgotten");
+		check(onRender(() -> Party.current().freeControllers()) == 1, "it is free to join as a guest");
 		onRender(() -> {
 			minecraft.gui.screen().onClose();
 			return null;
 		});
 		PADS.unplug(HOST_PAD);
-		ProfileStore store = profiles();
-		ProfileFile file = store.loadFile();
-		store.saveFile(new ProfileFile(file.profiles(), file.host().withController(null)));
 	}
 
 	private ProfileStore profiles() {
@@ -833,10 +845,61 @@ public final class E2eDriver {
 		Files.deleteIfExists(satelliteLogFile());
 	}
 
+	private static final int TWIN_A = 107, TWIN_B = 108;
+
+	/** Moves a seat's carousel to New. */
+	private void toNew(int seat, int pad) throws Exception {
+		for (int i = 0; i < 6 && !onRender(() -> cardShows(seat)).equals("New"); i++) {
+			press(pad, PadButton.DPAD_RIGHT);
+		}
+		check(onRender(() -> cardShows(seat)).equals("New"), "seat " + seat + " reached New");
+	}
+
+	private void twinsNeverClash() throws Exception {
+		PADS.plug(TWIN_A, "fake-twin", PadStyle.XBOX);
+		PADS.plug(TWIN_B, "fake-twin", PadStyle.XBOX);
+		Thread.sleep(300);
+		press(TWIN_A, PadButton.A);
+		waitFor("a card for twin A", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		press(TWIN_B, PadButton.A);
+		waitFor("a card for twin B", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+		String first = onRender(() -> cardShows(1));
+		check(onRender(() -> cardShows(2)).equals(first), "both cards open on the same profile (" + first + ")");
+		press(TWIN_A, PadButton.A);
+		check(onRender(() -> card(1) == null), "twin A takes " + first);
+		check(!onRender(() -> cardShows(2)).equals(first), "twin B's open card stops offering " + first + " at once");
+		// Two new profiles at the same time: different names, and both save.
+		toNew(2, TWIN_B);
+		press(TWIN_B, PadButton.A);
+		press(TWIN_A, PadButton.Y);
+		check(onRender(() -> card(1) != null && card(1).changing()), "twin A reopens their card");
+		toNew(1, TWIN_A);
+		press(TWIN_A, PadButton.A);
+		String nameA = onRender(() -> card(1).keyboard().text());
+		String nameB = onRender(() -> card(2).keyboard().text());
+		check(!nameA.equalsIgnoreCase(nameB), "two new players are offered different names (" + nameA + ", " + nameB + ")");
+		for (int i = 0; i < 3; i++) {
+			press(TWIN_A, PadButton.A);
+			press(TWIN_B, PadButton.A);
+		}
+		check(onRender(() -> card(1) == null && card(2) == null), "both new profiles are saved");
+		check(onRender(() -> Party.current().profileOf(1).name()).equals(nameA)
+				&& onRender(() -> Party.current().profileOf(2).name()).equals(nameB), "each seat has its own new profile");
+		press(TWIN_A, PadButton.B);
+		press(TWIN_B, PadButton.B);
+		waitFor("both twins gone", Duration.ofSeconds(30),
+				() -> satellites().isEmpty() && onRender(() -> Party.current().seatedCount()) == 0);
+		PADS.unplug(TWIN_A);
+		PADS.unplug(TWIN_B);
+		Thread.sleep(300);
+		Files.deleteIfExists(satelliteLogFile());
+		Files.deleteIfExists(minecraft.gameDirectory.toPath().resolve("hearthside/satellite-2/logs/latest.log"));
+	}
+
 	private void quickSetupAAA() throws Exception {
 		press(LOBBY_PAD, PadButton.A);
 		waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
-		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		toNew(1, LOBBY_PAD);
 		press(LOBBY_PAD, PadButton.A);
 		String suggestion = onRender(() -> card(1).keyboard().text());
 		int colour = onRender(() -> card(1).setup().color());

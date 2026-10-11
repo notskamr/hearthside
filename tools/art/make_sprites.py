@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pillow>=11"]
+# dependencies = ["pillow==12.3.0"]
 # ///
 """Draws Hearthside's pixel-art GUI sprites (Spec A section 4) into the mod's resource-pack assets.
 

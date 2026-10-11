@@ -32,7 +32,7 @@ import net.minecraft.world.entity.player.PlayerSkin;
  */
 public final class LobbyScreen extends Screen {
 	private static final int SEATS = 4, CARD_GAP = 10, HEADER = 30, FOOTER = 30;
-	private static final int MUTED = 0xFF7A6A58, FADED = 0xFFB8A48C, ERROR = 0xFFE05A40;
+	private static final int MUTED = 0xFF7A6A58, FADED = 0xFFB8A48C, ERROR_INK = 0xFFA8321E;
 	private static final Duration FLIP = Duration.ofMillis(250);
 
 	private final Screen parent;
@@ -83,8 +83,15 @@ public final class LobbyScreen extends Screen {
 			previews[seat] = addRenderableWidget(preview);
 		}
 		Card host = card(0);
+		// "+ Controller" takes one for player 1; while they have one it reads "− Controller" and gives it back.
 		useController = addRenderableWidget(new HearthButton(host.x + 4, host.bottom() - 19, host.w - 8, 14,
-				Component.literal("+ Controller"), b -> party.useController()));
+				Component.literal("+ Controller"), b -> {
+					if (party.hostHasController()) {
+						party.releaseController();
+					} else {
+						party.useController();
+					}
+				}));
 		// The hints along the bottom, as in the draft; Back and Start are also mouse buttons.
 		// Join is for controllers without a seat, so it shows theirs; the rest show whoever drives the screen.
 		Supplier<PadStyle> style = party::sharedStyle;
@@ -201,8 +208,8 @@ public final class LobbyScreen extends Screen {
 		g.pose().popMatrix();
 		previews[seat].visible = isTaken && flip >= 1 && !typing(seat);
 		if (seat == 0) {
-			useController.visible = !party.hostHasController();
-			useController.setMessage(Component.literal(party.hostClaimArmed() ? "Press A on it" : "+ Controller"));
+			useController.setMessage(Component.literal(party.hostHasController() ? "− Controller"
+					: party.hostClaimArmed() ? "Press A on it" : "+ Controller"));
 		}
 	}
 
@@ -245,9 +252,8 @@ public final class LobbyScreen extends Screen {
 		if (seat == 0) {
 			HearthDraw.inkCentred(g, font, Component.literal(minecraft.getUser().getName()), c.centre(), c.y + 7,
 					HearthDraw.INK);
-			// The player pill (where they'll be on the split screen); "+ Controller" sits under it until they take one.
-			HearthDraw.colourPill(g, font, Component.literal("P1"), c.centre(), party.hostHasController() ? pillY : pillY - 18,
-					colour);
+			// The player pill (where they'll be on the split screen), with player 1's controller button under it.
+			HearthDraw.colourPill(g, font, Component.literal("P1"), c.centre(), pillY - 18, colour);
 			return;
 		}
 		SeatCard card = party.seatCard(seat);
@@ -263,6 +269,10 @@ public final class LobbyScreen extends Screen {
 			String name = card.carousel().current() instanceof ProfileCarousel.Entry.Profile(GuestProfile p)
 					? p.name() : "+ New";
 			HearthDraw.inkCentred(g, font, Component.literal("‹ " + name + " ›"), c.centre(), c.y + 7, HearthDraw.INK);
+			if (card.problem() != null) {
+				// Another seat took that profile: say so on the card.
+				HearthDraw.inkCentred(g, font, Component.literal(card.problem()), c.centre(), c.bottom() - 42, ERROR_INK);
+			}
 			hints(g, c, style, Control.A, "Pick", Control.B, card.changing() ? "Keep" : "Leave");
 			return;
 		}
@@ -301,19 +311,20 @@ public final class LobbyScreen extends Screen {
 		int pw = font.width(heading) + 20;
 		HearthDraw.pill(g, width / 2 - pw / 2, 8, pw, 16);
 		HearthDraw.labelCentred(g, font, heading, width / 2, 12, HearthDraw.CREAM);
-		// On-screen keyboards float over the board, under their player's card.
+		// On-screen keyboards sit inside their player's own card, so several players can type at once.
 		for (int seat = 1; seat < SEATS; seat++) {
 			if (!typing(seat)) {
 				continue;
 			}
 			SeatCard card = party.seatCard(seat);
 			Card c = card(seat);
-			int x = Math.clamp(c.centre() - KeyboardWidget.WIDTH / 2, 4, Math.max(4, width - KeyboardWidget.WIDTH - 4));
-			int y = Math.clamp(c.y + 22, HEADER, Math.max(HEADER, height - FOOTER - KeyboardWidget.HEIGHT));
-			new KeyboardWidget(card.keyboard(), card.setup().color()).render(g, font, x, y, party.padStyleOf(seat));
+			int y = c.y + 18;
+			new KeyboardWidget(card.keyboard(), card.setup().color()).render(g, font, c.x + 3, y, c.w - 6,
+					party.padStyleOf(seat));
 			if (card.nameProblem() != null) {
-				HearthDraw.labelCentred(g, font, Component.literal(card.nameProblem()), x + KeyboardWidget.WIDTH / 2, y - 10,
-						ERROR);
+				String problem = font.plainSubstrByWidth(card.nameProblem(), c.w - 8);
+				HearthDraw.inkCentred(g, font, Component.literal(problem), c.centre(), y + KeyboardWidget.height() + 3,
+						ERROR_INK);
 			}
 		}
 	}

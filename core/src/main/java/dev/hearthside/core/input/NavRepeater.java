@@ -31,11 +31,11 @@ public final class NavRepeater {
 			nextNanos = nanos + initialNanos;
 			return 1;
 		}
-		int moves = 0;
-		while (nanos >= nextNanos) {
-			moves++;
-			nextNanos += repeatNanos;
+		if (nanos < nextNanos) {
+			return 0;
 		}
-		return moves;
+		// One move per frame at most: a stall (or a held direction across an unplug) must not fire a burst.
+		nextNanos = Math.max(nextNanos, nanos) + repeatNanos;
+		return 1;
 	}
 }

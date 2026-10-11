@@ -17,8 +17,15 @@ class NavRepeaterTest {
 		assertThat(repeater.step(1, 300 * MS)).isEqualTo(1);
 		assertThat(repeater.step(1, 340 * MS)).isZero();
 		assertThat(repeater.step(1, 380 * MS)).isEqualTo(1);
-		// A slow frame catches up.
-		assertThat(repeater.step(1, 540 * MS)).isEqualTo(2);
+	}
+
+	@Test
+	void aLongStallMovesOnceNotMany() {
+		// A direction held through a stall (or an unplug and replug) must not fire a burst of moves.
+		repeater.step(1, 0);
+		assertThat(repeater.step(1, 10_000 * MS)).isEqualTo(1);
+		assertThat(repeater.step(1, 10_010 * MS)).isZero();
+		assertThat(repeater.step(1, 10_080 * MS)).isEqualTo(1);
 	}
 
 	@Test

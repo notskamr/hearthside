@@ -28,27 +28,41 @@ class LobbyProfilesTest {
 	@Test
 	void carouselPreselectsTheControllersLastProfile() {
 		// Stored least recently used first: the last profile used on this controller model is Kit.
-		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.of(), "pad-model-2");
+		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.<UUID>of()::contains, "pad-model-2");
 		assertThat(carousel.current()).isEqualTo(new Entry.Profile(kit));
 	}
 
 	@Test
 	void carouselSkipsProfilesHeldByOtherSeats() {
 		// Two identical controllers share a model GUID: the second seat gets the other profile that used it.
-		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.of(kit.id()), "pad-model-2");
+		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.of(kit.id())::contains, "pad-model-2");
 		assertThat(carousel.current()).isEqualTo(new Entry.Profile(jo));
 		assertThat(carousel.entries()).doesNotContain(new Entry.Profile(kit));
 	}
 
 	@Test
 	void carouselWithNoMatchStartsAtTheFirstProfile() {
-		assertThat(new ProfileCarousel(List.of(sam, jo), Set.of(), "other").current()).isEqualTo(new Entry.Profile(sam));
-		assertThat(new ProfileCarousel(List.of(sam, jo), Set.of(), null).current()).isEqualTo(new Entry.Profile(sam));
+		assertThat(new ProfileCarousel(List.of(sam, jo), Set.<UUID>of()::contains, "other").current()).isEqualTo(new Entry.Profile(sam));
+		assertThat(new ProfileCarousel(List.of(sam, jo), Set.<UUID>of()::contains, null).current()).isEqualTo(new Entry.Profile(sam));
+	}
+
+	@Test
+	void carouselSkipsProfilesTakenAfterItOpened() {
+		// Another seat confirms Sam while this card is open: this card stops offering Sam at once.
+		java.util.Set<UUID> held = new java.util.HashSet<>();
+		var carousel = new ProfileCarousel(List.of(sam, jo), held::contains, null);
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(sam));
+		held.add(sam.id());
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(jo));
+		assertThat(carousel.entries()).containsExactly(new Entry.Profile(jo), new Entry.New());
+		carousel.next();
+		carousel.next();
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(jo));
 	}
 
 	@Test
 	void carouselEndsWithNewAndWraps() {
-		var carousel = new ProfileCarousel(List.of(sam, jo), Set.of(), null);
+		var carousel = new ProfileCarousel(List.of(sam, jo), Set.<UUID>of()::contains, null);
 		assertThat(carousel.entries()).last().isEqualTo(new Entry.New());
 		carousel.previous();
 		assertThat(carousel.current()).isEqualTo(new Entry.New());
@@ -61,7 +75,7 @@ class LobbyProfilesTest {
 
 	@Test
 	void carouselWithNoProfilesOffersOnlyNew() {
-		var carousel = new ProfileCarousel(List.of(sam), Set.of(sam.id()), "pad-model-1");
+		var carousel = new ProfileCarousel(List.of(sam), Set.of(sam.id())::contains, "pad-model-1");
 		assertThat(carousel.entries()).containsExactly(new Entry.New());
 		assertThat(carousel.current()).isEqualTo(new Entry.New());
 	}
@@ -122,8 +136,11 @@ class LobbyProfilesTest {
 		assertThat(setup.color()).isEqualTo(PlayerColors.DEFAULTS[2]);
 		setup.nextColor();
 		assertThat(setup.color()).isEqualTo(PlayerColors.DEFAULTS[3]);
+		// Colours other players have are skipped.
 		setup.nextColor();
-		assertThat(setup.color()).isEqualTo(PlayerColors.DEFAULTS[0]);
+		assertThat(setup.color()).isEqualTo(PlayerColors.DEFAULTS[2]);
+		setup.previousColor();
+		assertThat(setup.color()).isEqualTo(PlayerColors.DEFAULTS[3]);
 	}
 
 	@Test

@@ -37,6 +37,7 @@ import dev.hearthside.core.session.SatelliteDirectories;
 import dev.hearthside.core.supervise.RestartPolicy;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
+import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.core.compositor.Transport;
@@ -172,6 +173,7 @@ public final class Party {
 			hostScheme = file.hostControls();
 			hostColor = file.host().color();
 			hostReduceMotion = file.host().settings().reduceMotion();
+			ButtonGuideRenderer.setReduceMotion(hostReduceMotion);
 			hostControllerGuid = file.host().preferredControllerGuid();
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not read the host's controls; using Bedrock defaults", e);
@@ -207,7 +209,8 @@ public final class Party {
 		minecraft.execute(this::afterGuestsChanged);
 		for (Slot slot : slots.values()) {
 			ControlConnection connection = slot.connection;
-			if (connection != null) {
+			// A seat with its card open (choosing, or changing profile) goes in once its card settles.
+			if (connection != null && !cards.containsKey(slot.index)) {
 				sendIn(link, slot, connection);
 			}
 		}
@@ -474,6 +477,23 @@ public final class Party {
 		return hostClaimArmed && !hostHasController();
 	}
 
+	/** Player 1's card: gives their controller back (it can then join as a guest) and forgets it. Render thread. */
+	public void releaseController() {
+		HostInput current = input;
+		if (current != null) {
+			current.releaseHost();
+		}
+		hostClaimArmed = false;
+		hostControllerGuid = null;
+		try {
+			ProfileStore store = profileStore();
+			ProfileFile file = store.loadFile();
+			store.saveFile(new ProfileFile(file.profiles(), file.host().withController(null)));
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not forget player 1's controller", e);
+		}
+	}
+
 	/** Player 1's card: the next A on a free controller makes it theirs. Render thread. */
 	public void useController() {
 		HostInput current = input;
@@ -599,16 +619,47 @@ public final class Party {
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
 		}
-		java.util.Set<UUID> held = new java.util.HashSet<>();
+		String guid = guidOf.get(controller);
+		// Checked live: another seat may confirm a profile, or start naming one, while this card is open.
+		return new SeatCard(index, new ProfileCarousel(profiles, id -> heldByAnotherSeat(index, id), guid),
+				() -> new QuickSetup(namesInUse(index), minecraft.getUser().getName(), takenColors(index), index), guid,
+				keep);
+	}
+
+	private boolean heldByAnotherSeat(int index, UUID profileId) {
+		for (Slot slot : slots.values()) {
+			GuestProfile profile = slot.profile;
+			if (slot.index != index && profile != null && profile.id().equals(profileId)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Names a new profile for this seat can't use: saved profiles, other seats' profiles, and other cards' names. */
+	private List<String> namesInUse(int index) {
+		List<String> names = new ArrayList<>();
+		try {
+			profileStore().load().forEach(p -> names.add(p.name()));
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+		}
 		slots.values().forEach(s -> {
 			if (s.index != index && s.profile != null) {
-				held.add(s.profile.id());
+				names.add(s.profile.name());
 			}
 		});
-		List<String> names = profiles.stream().map(GuestProfile::name).toList();
-		String guid = guidOf.get(controller);
-		return new SeatCard(index, new ProfileCarousel(profiles, held, guid),
-				() -> new QuickSetup(names, minecraft.getUser().getName(), takenColors(index), index), guid, keep);
+		cards.forEach((seat, other) -> {
+			if (seat != index) {
+				if (other.keyboard() != null) {
+					names.add(other.keyboard().text());
+				}
+				if (other.setup() != null) {
+					names.add(other.setup().suggestedName());
+				}
+			}
+		});
+		return names;
 	}
 
 	/** Colours other players in the party are using. */
@@ -649,16 +700,34 @@ public final class Party {
 		return taken.contains(wanted) ? PlayerColors.firstFree(taken) : wanted;
 	}
 
-	/** A seat settles on its profile: remember it for this controller, then send the player in if a world is open. */
-	void confirmProfile(int index, GuestProfile picked) {
+	/**
+	 * A seat settles on its profile: remember it for this controller, then send the player in if a world is open.
+	 * Refused (false, and the card says why) when another seat already plays that profile or a new profile's name is
+	 * taken; the card stays open.
+	 */
+	boolean confirmProfile(int index, GuestProfile picked) {
 		Slot slot = slots.get(index);
 		if (slot == null || picked == null) {
-			return;
+			return false;
+		}
+		String problem = problemWith(index, picked);
+		if (problem != null) {
+			SeatCard card = cards.get(index);
+			if (card != null) {
+				card.reject(problem);
+			}
+			return false;
 		}
 		String controller = controllerOfSlot.get(index);
 		String guid = controller == null ? null : guidOf.get(controller);
 		GuestProfile profile = guid != null ? picked.withController(guid) : picked;
-		rememberProfile(profile);
+		if (!rememberProfile(profile)) {
+			SeatCard card = cards.get(index);
+			if (card != null) {
+				card.reject("Couldn't save " + profile.name());
+			}
+			return false;
+		}
 		slot.profile = profile;
 		cards.remove(index);
 		if (controller != null) {
@@ -673,25 +742,65 @@ public final class Party {
 			}
 		}
 		HearthsideMod.LOGGER.info("Hearthside seat {} is {}", index + 1, profile.name());
+		return true;
+	}
+
+	/** Why a seat can't take this profile now, or null. */
+	private String problemWith(int index, GuestProfile picked) {
+		if (heldByAnotherSeat(index, picked.id())) {
+			return picked.name() + " is playing";
+		}
+		if (picked.name().equalsIgnoreCase(minecraft.getUser().getName())) {
+			return picked.name() + " is taken";
+		}
+		boolean saved = false;
+		try {
+			for (GuestProfile p : profileStore().load()) {
+				if (p.id().equals(picked.id())) {
+					saved = true;
+				} else if (p.name().equalsIgnoreCase(picked.name())) {
+					return picked.name() + " is taken";
+				}
+			}
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+		}
+		for (Slot slot : slots.values()) {
+			GuestProfile profile = slot.profile;
+			if (slot.index != index && profile != null && !saved && profile.name().equalsIgnoreCase(picked.name())) {
+				return picked.name() + " is taken";
+			}
+		}
+		return null;
 	}
 
 	/** The world opened: seats still choosing go in with what their card shows. Render thread. */
 	private void confirmWaitingCards() {
 		for (Map.Entry<Integer, SeatCard> entry : List.copyOf(cards.entrySet())) {
-			confirmProfile(entry.getKey(), entry.getValue().autoConfirm());
+			try {
+				SeatCard card = entry.getValue();
+				// What the card shows; if another seat took that meanwhile, a fresh profile with its own name.
+				if (!confirmProfile(entry.getKey(), card.autoConfirm())) {
+					confirmProfile(entry.getKey(), card.autoConfirmFresh());
+				}
+			} catch (RuntimeException e) {
+				HearthsideMod.LOGGER.error("Could not settle seat {}'s profile", entry.getKey() + 1, e);
+			}
 		}
 	}
 
 	/** Saves a profile as the most recently used (profiles are stored least recent first). */
-	private void rememberProfile(GuestProfile profile) {
+	private boolean rememberProfile(GuestProfile profile) {
 		try {
 			ProfileStore store = profileStore();
 			List<GuestProfile> profiles = new ArrayList<>(store.load());
 			profiles.removeIf(p -> p.id().equals(profile.id()));
 			profiles.add(profile);
 			store.save(profiles);
-		} catch (IOException e) {
+			return true;
+		} catch (IOException | IllegalArgumentException e) {
 			HearthsideMod.LOGGER.error("Could not save {}'s profile", profile.name(), e);
+			return false;
 		}
 	}
 
@@ -809,7 +918,8 @@ public final class Party {
 					playing.add(s.profile.name().toLowerCase(Locale.ROOT));
 				}
 			});
-			for (GuestProfile p : profiles) {
+			// The most recently used match: profiles are stored least recent first.
+			for (GuestProfile p : profiles.reversed()) {
 				if (guid != null && guid.equals(p.preferredControllerGuid()) && !playing.contains(p.name().toLowerCase(Locale.ROOT))) {
 					return p;
 				}

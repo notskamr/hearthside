@@ -36,6 +36,7 @@ public final class SeatCard {
 	/** Whether the player has moved over the keyboard: until then A keeps the suggested name ("A, A, A"). */
 	private boolean keyboardMoved;
 	private String nameProblem;
+	private String problem;
 	private GuestProfile chosen;
 	/** Everything counts as already held when the card opens: the A that took the seat must not also confirm. */
 	private int lastButtons = -1;
@@ -52,6 +53,9 @@ public final class SeatCard {
 	public Outcome accept(InputFrame frame, long nanos) {
 		int pressed = frame.buttons() & ~lastButtons;
 		lastButtons = frame.buttons();
+		if (pressed != 0) {
+			problem = null;
+		}
 		int dx = horizontal.step(direction(frame, PadButton.DPAD_LEFT, PadButton.DPAD_RIGHT, frame.leftX()), nanos);
 		int dy = vertical.step(direction(frame, PadButton.DPAD_UP, PadButton.DPAD_DOWN, frame.leftY()), nanos);
 		int sx = Integer.signum(direction(frame, PadButton.DPAD_LEFT, PadButton.DPAD_RIGHT, frame.leftX())) * dx;
@@ -148,7 +152,7 @@ public final class SeatCard {
 					}
 				}
 				if (down(pressed, PadButton.A) || down(pressed, PadButton.START)) {
-					setup.next();
+					// Stays on this step: if the party refuses the profile, the card goes back to the name.
 					chosen = setup.build(UUID.randomUUID(), keyboard.text(), controllerGuid);
 					return Outcome.CONFIRMED;
 				} else if (down(pressed, PadButton.B)) {
@@ -186,6 +190,11 @@ public final class SeatCard {
 	 * or a new one from quick setup as it stands (its suggested name if the typed one can't be used).
 	 */
 	public GuestProfile autoConfirm() {
+		if (keep != null) {
+			// Changing profile when the world opened: keep the one the player had.
+			chosen = keep;
+			return keep;
+		}
 		if (stage == Stage.CAROUSEL && carousel.current() instanceof ProfileCarousel.Entry.Profile(GuestProfile profile)) {
 			chosen = profile;
 			return profile;
@@ -195,6 +204,35 @@ public final class SeatCard {
 				: s.suggestedName();
 		chosen = s.build(UUID.randomUUID(), name, controllerGuid);
 		return chosen;
+	}
+
+	/** A fresh profile with quick setup's suggested name (names are checked live when the setup is made). */
+	public GuestProfile autoConfirmFresh() {
+		QuickSetup s = newSetup.get();
+		chosen = s.build(UUID.randomUUID(), s.suggestedName(), controllerGuid);
+		return chosen;
+	}
+
+	/**
+	 * The party refused the profile (another seat plays it, or its name was just taken): stay open and say why. A new
+	 * profile goes back to its name.
+	 */
+	public void reject(String reason) {
+		chosen = null;
+		if (stage == Stage.SETUP && setup != null) {
+			while (setup.back()) {
+				// back to NAME
+			}
+			keyboardMoved = true;
+			nameProblem = reason;
+		} else {
+			problem = reason;
+		}
+	}
+
+	/** Why the carousel's pick was refused, or null. */
+	public String problem() {
+		return problem;
 	}
 
 	private static int direction(InputFrame frame, PadButton negative, PadButton positive, float axis) {
