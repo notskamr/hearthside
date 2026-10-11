@@ -61,6 +61,15 @@ public final class ProfileCarousel {
 		step(-1);
 	}
 
+	/** Swaps in a changed copy of a profile (same id), keeping its place; unknown profiles are ignored. */
+	public void replace(GuestProfile updated) {
+		for (int i = 0; i < all.size(); i++) {
+			if (all.get(i) instanceof Entry.Profile(GuestProfile p) && p.id().equals(updated.id())) {
+				all.set(i, new Entry.Profile(updated));
+			}
+		}
+	}
+
 	/** What the carousel offers now, in order. */
 	public List<Entry> entries() {
 		List<Entry> out = new ArrayList<>();

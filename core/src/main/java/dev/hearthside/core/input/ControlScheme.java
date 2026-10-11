@@ -118,6 +118,21 @@ public record ControlScheme(Map<Action, Control> gameplay, Map<MenuAction, Contr
 				swapSticks);
 	}
 
+	/** A preset's in-world bindings and sticks, with this scheme's own settings (sensitivity, dead zone and so on). */
+	public ControlScheme withLayoutOf(ControlScheme preset) {
+		return new ControlScheme(preset.gameplay, menu, lookSensitivity, invertY, deadZone, toggleSneak, autoJump,
+				showButtonGuide, preset.swapSticks);
+	}
+
+	/** The preset whose layout (in-world bindings and sticks) this scheme has, if any. */
+	public static Optional<String> presetName(ControlScheme scheme) {
+		return PRESETS.stream().filter(p -> sameLayout(p.scheme(), scheme)).map(Named::name).findFirst();
+	}
+
+	static boolean sameLayout(ControlScheme a, ControlScheme b) {
+		return a.gameplay.equals(b.gameplay) && a.swapSticks == b.swapSticks;
+	}
+
 	/** This scheme's settings with its in-world bindings changed by {@code change}, sticks as given. */
 	private ControlScheme withGameplay(java.util.function.Consumer<Map<Action, Control>> change, boolean sticksSwapped) {
 		Map<Action, Control> next = new EnumMap<>(Action.class);

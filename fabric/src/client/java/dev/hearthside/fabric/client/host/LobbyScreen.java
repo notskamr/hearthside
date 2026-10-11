@@ -11,6 +11,7 @@ import dev.hearthside.fabric.client.mixin.DefaultPlayerSkinInvoker;
 import dev.hearthside.fabric.client.ui.EmberLayer;
 import dev.hearthside.fabric.client.ui.HearthButton;
 import dev.hearthside.fabric.client.ui.HearthDraw;
+import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.HintChip;
 import dev.hearthside.fabric.client.ui.KeyboardWidget;
 import java.time.Duration;
@@ -20,6 +21,7 @@ import net.minecraft.client.gui.components.PlayerSkinWidget;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.PlayerModelType;
 import net.minecraft.world.entity.player.PlayerSkin;
@@ -28,7 +30,8 @@ import net.minecraft.world.entity.player.PlayerSkin;
  * The co-op party lobby in the Cozy-hearth style (Spec A sections 3.1, 4.1; the approved style draft): a dark plank
  * wall lit by firelight from below with drifting embers, a parchment card per player in a frame of their colour, faint
  * glass cards for empty seats, and button hints along the bottom. A controller presses A to take a card, then picks or
- * makes its profile on it; Y on a ready card picks again; Menu (or Start) goes on to choose a world together.
+ * makes its profile on it; Y on a ready card picks again; X opens More (controls, managing profiles); Menu (or Start)
+ * goes on to choose a world together.
  */
 public final class LobbyScreen extends Screen {
 	private static final int SEATS = 4, CARD_GAP = 10, HEADER = 30, FOOTER = 30;
@@ -98,6 +101,7 @@ public final class LobbyScreen extends Screen {
 		HintChip[] chips = {
 				new HintChip(0, 0, Control.A, party::joinStyle, Component.literal("Join"), b -> { }),
 				new HintChip(0, 0, Control.Y, style, Component.literal("Profile"), b -> { }),
+				new HintChip(0, 0, Control.X, style, Component.literal("More"), b -> { }),
 				new HintChip(0, 0, Control.B, style, Component.literal("Back"), b -> onClose()),
 				new HintChip(0, 0, Control.START, style, Component.literal("Start"), b -> continueToWorlds()),
 		};
@@ -108,6 +112,14 @@ public final class LobbyScreen extends Screen {
 			x -= 4;
 			addRenderableWidget(chips[i]);
 		}
+	}
+
+	/**
+	 * Nothing: controllers here drive their cards and the pointer, not focus, so vanilla's initial focus (the first
+	 * button, after controller or keyboard input) would only make "+ Controller" look selected.
+	 */
+	@Override
+	protected void setInitialFocus() {
 	}
 
 	/** On to choosing a world, with the party kept. */
@@ -206,7 +218,7 @@ public final class LobbyScreen extends Screen {
 			drawEmpty(g, c);
 		}
 		g.pose().popMatrix();
-		previews[seat].visible = isTaken && flip >= 1 && !typing(seat);
+		previews[seat].visible = isTaken && flip >= 1 && !typing(seat) && !inMore(seat);
 		if (seat == 0) {
 			useController.setMessage(Component.literal(party.hostHasController() ? "− Controller"
 					: party.hostClaimArmed() ? "Press A on it" : "+ Controller"));
@@ -240,6 +252,11 @@ public final class LobbyScreen extends Screen {
 		return party.colorOf(seat);
 	}
 
+	private boolean inMore(int seat) {
+		SeatCard card = seat == 0 ? null : party.seatCard(seat);
+		return card != null && card.stage() == SeatCard.Stage.MORE;
+	}
+
 	private boolean typing(int seat) {
 		SeatCard card = seat == 0 ? null : party.seatCard(seat);
 		return card != null && card.setup() != null && card.setup().step() == QuickSetup.Step.NAME;
@@ -262,6 +279,10 @@ public final class LobbyScreen extends Screen {
 			HearthDraw.inkCentred(g, font, Component.literal(view.name()), c.centre(), c.y + 7, HearthDraw.INK);
 			HearthDraw.inkCentred(g, font, Component.literal(view.status()), c.centre(), pillY - 12, MUTED);
 			HearthDraw.colourPill(g, font, Component.literal("P" + (seat + 1)), c.centre(), pillY, colour);
+			return;
+		}
+		if (card.stage() == SeatCard.Stage.MORE) {
+			drawMore(g, card, c, style);
 			return;
 		}
 		if (card.setup() == null) {
@@ -290,6 +311,25 @@ public final class LobbyScreen extends Screen {
 		if (setup.step() != QuickSetup.Step.NAME) {
 			hints(g, c, style, Control.A, "Next", Control.B, "Back");
 		}
+	}
+
+	/** More on a card: whose it is, then its entries as small wooden rows, the focused one lit. */
+	private void drawMore(GuiGraphicsExtractor g, SeatCard card, Card c, PadStyle style) {
+		HearthDraw.inkCentred(g, font, Component.literal("More"), c.centre(), c.y + 7, HearthDraw.INK);
+		GuestProfile profile = card.moreProfile();
+		if (profile != null) {
+			HearthDraw.inkCentred(g, font, Component.literal(font.plainSubstrByWidth(profile.name(), c.w - 8)),
+					c.centre(), c.y + 19, MUTED);
+		}
+		int y = c.y + 34;
+		for (SeatCard.MoreEntry entry : card.moreEntries()) {
+			var sprite = entry == card.moreFocus() ? HearthSprites.BUTTON_HIGHLIGHTED : HearthSprites.BUTTON;
+			g.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, c.x + 5, y, c.w - 10, 14);
+			String label = font.plainSubstrByWidth(entry.label, c.w - 14);
+			HearthDraw.labelCentred(g, font, Component.literal(label), c.centre(), y + 3, HearthDraw.CREAM);
+			y += 18;
+		}
+		hints(g, c, style, Control.A, "Open", Control.B, "Back");
 	}
 
 	private void hints(GuiGraphicsExtractor g, Card c, PadStyle style, Control first, String firstLabel, Control second,

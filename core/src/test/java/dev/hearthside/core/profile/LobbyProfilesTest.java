@@ -41,6 +41,19 @@ class LobbyProfilesTest {
 	}
 
 	@Test
+	void carouselTakesAnUpdatedProfileInPlace() {
+		// Saved from the controls screen while the card is open: picking it must not bring back the old controls.
+		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.<UUID>of()::contains, "pad-model-1");
+		GuestProfile updated = jo.withControls(ControlScheme.SOUTHPAW);
+		carousel.replace(updated);
+		assertThat(carousel.entries()).containsExactly(new Entry.Profile(sam), new Entry.Profile(updated),
+				new Entry.Profile(kit), new Entry.New());
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(sam));
+		carousel.replace(profile("Nobody", null));
+		assertThat(carousel.entries()).hasSize(4);
+	}
+
+	@Test
 	void carouselWithNoMatchStartsAtTheFirstProfile() {
 		assertThat(new ProfileCarousel(List.of(sam, jo), Set.<UUID>of()::contains, "other").current()).isEqualTo(new Entry.Profile(sam));
 		assertThat(new ProfileCarousel(List.of(sam, jo), Set.<UUID>of()::contains, null).current()).isEqualTo(new Entry.Profile(sam));

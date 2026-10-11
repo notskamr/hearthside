@@ -165,8 +165,10 @@ final class HostInput implements Runnable {
 		for (Map.Entry<Integer, InputFrame> entry : frames.entrySet()) {
 			int player = entry.getKey();
 			InputFrame frame = entry.getValue();
-			if (player != 0 && session.hasSeatCard(player)) {
-				// A card is only on screen in the lobby; elsewhere (world select) that controller waits.
+			boolean ownScreen = screen instanceof ControlsScreen controls && controls.seat() == player;
+			if (player != 0 && session.hasSeatCard(player) && !ownScreen) {
+				// A card is only on screen in the lobby; elsewhere (world select) that controller waits, unless the
+				// screen is the one its card opened (its controls).
 				if (lobby != null) {
 					session.seatCardInput(player, frame, now);
 				}
@@ -206,6 +208,9 @@ final class HostInput implements Runnable {
 			} else if ((pressed & InputFrame.buttons(PadButton.Y)) != 0) {
 				// Y on a ready card: pick another profile (Spec A section 5.5).
 				session.changeProfile(player);
+			} else if ((pressed & InputFrame.buttons(PadButton.X)) != 0) {
+				// X on a ready card: More (its controls, managing profiles).
+				session.openMore(player);
 			}
 		}
 		sharedButtons.keySet().retainAll(frames.keySet());
@@ -236,7 +241,7 @@ final class HostInput implements Runnable {
 		// Ending the party is player 1's call (Spec A section 7.1): guests don't drive its confirmation.
 		Map<Integer, InputFrame> drivers = screen instanceof ConfirmScreen
 				? (shared.containsKey(0) ? Map.of(0, shared.get(0)) : Map.of()) : shared;
-		int lobbyButtons = start | b | InputFrame.buttons(PadButton.Y);
+		int lobbyButtons = start | b | InputFrame.buttons(PadButton.Y, PadButton.X);
 		SharedScreenInput.Driver driver = SharedScreenInput.drive(drivers, lobby != null ? lobbyButtons : start);
 		if (driver != null && (driver.player() != 0 || drivers.containsKey(0))
 				&& (SharedScreenInput.isActive(driver.frame()) || lastDriver < 0)) {

@@ -28,6 +28,7 @@ import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.ControlsScreen;
 import dev.hearthside.fabric.client.host.NewWorldScreen;
 import dev.hearthside.fabric.client.host.SeatCard;
 import dev.hearthside.fabric.client.host.WorldsScreen;
@@ -128,6 +129,8 @@ public final class E2eDriver {
 				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
 				step("L2 Y and the D-pad cycle profiles on the card; A confirms", this::cardCyclesAndConfirms);
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
+				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
+						this::controlsRemap);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
 				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
@@ -947,6 +950,69 @@ public final class E2eDriver {
 		check(onRender(() -> card(1) == null && Party.current().profileOf(1).name().equals("Birch")),
 				"B backs out and keeps Birch");
 		check(onRender(() -> Party.current().seatView(1).status()).equals("Ready"), "the seat is ready again");
+	}
+
+	private GuestProfile storedProfile(String name) throws IOException {
+		return new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json")).load().stream()
+				.filter(p -> p.name().equals(name)).findFirst().orElseThrow();
+	}
+
+	private void controlsRemap() throws Exception {
+		press(LOBBY_PAD, PadButton.X);
+		check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.MORE), "X on the ready card opens More");
+		check(onRender(() -> card(1).moreFocus()) == SeatCard.MoreEntry.CONTROLS, "More starts on Controls");
+		check(onRender(() -> minecraft.gui.screen().getFocused()) == null,
+				"nothing in the lobby looks selected (its controllers drive cards and the pointer, not focus)");
+		screenshot("lobby-more");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ControlsScreen c && c.seat() == 1),
+				"A on Controls opens that seat's controls");
+		ControlsScreen screen = onRender(() -> (ControlsScreen) minecraft.gui.screen());
+		check(onRender(screen::focusedAction) == Action.JUMP, "focus starts on Jump");
+		checkOwnHintsOnly("the controls screen");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> screen.model().listening()) == Action.JUMP, "A waits for Jump's button");
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> screen.model().scheme().controlFor(Action.JUMP).orElse(null)) == Control.Y
+				&& onRender(() -> screen.model().scheme().controlFor(Action.INVENTORY).orElse(null)) == Control.A,
+				"Y is Jump now, and Inventory took A (a swap)");
+		check(onRender(() -> screen.model().name()).equals("Custom"), "the layout is Custom");
+		screenshot("controls");
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		check(onRender(() -> screen.model().name()).equals("Southpaw") && onRender(() -> screen.model().scheme().swapSticks()),
+				"RB tries the presets: Southpaw swaps the sticks");
+		press(LOBBY_PAD, PadButton.LEFT_BUMPER);
+		press(LOBBY_PAD, PadButton.LEFT_BUMPER);
+		press(LOBBY_PAD, PadButton.LEFT_BUMPER);
+		check(onRender(() -> screen.model().name()).equals("Custom")
+				&& onRender(() -> screen.model().scheme().controlFor(Action.JUMP).orElse(null)) == Control.Y,
+				"LB comes back to the edited layout");
+		press(LOBBY_PAD, PadButton.START);
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) != null
+				&& card(1).stage() == SeatCard.Stage.MORE), "Menu saves and goes back to the card's More");
+		check(storedProfile("Birch").controls().controlFor(Action.JUMP).orElse(null) == Control.Y,
+				"the profile is saved with Y for Jump");
+		check(onRender(() -> Party.current().profileOf(1).controls().controlFor(Action.JUMP).orElse(null)) == Control.Y,
+				"the seat plays with it");
+		waitFor("the guest's game told", Duration.ofSeconds(10), () -> satelliteLog().contains("setcontrols jump=y"));
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().seatView(1).status().equals("Ready")),
+				"B in More goes back to the ready seat");
+		check(storedProfile("Birch").controls().controlFor(Action.JUMP).orElse(null) == Control.Y,
+				"leaving More keeps the saved controls");
+		// Back to Bedrock for the steps after, through the screen again: RB from the saved layout is Bedrock.
+		press(LOBBY_PAD, PadButton.X);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ControlsScreen), "the controls open again");
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		check(onRender(() -> ((ControlsScreen) minecraft.gui.screen()).model().name()).equals("Bedrock"),
+				"RB from Custom is Bedrock");
+		press(LOBBY_PAD, PadButton.START);
+		press(LOBBY_PAD, PadButton.B);
+		check(ControlScheme.presetName(storedProfile("Birch").controls()).orElse("").equals("Bedrock")
+				&& onRender(() -> card(1) == null), "Birch is back on Bedrock and ready");
 	}
 
 	private void cardBackAndLeave() throws Exception {

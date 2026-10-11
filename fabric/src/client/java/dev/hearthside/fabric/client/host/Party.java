@@ -607,8 +607,72 @@ public final class Party {
 		switch (card.accept(frame, nanos)) {
 			case CONFIRMED -> confirmProfile(player, card.chosen());
 			case LEAVE -> onSeatedB(player);
-			case NONE -> { }
+			case CONTROLS -> {
+				if (card.moreProfile() != null && minecraft.gui.screen() instanceof LobbyScreen lobby) {
+					minecraft.gui.setScreen(new ControlsScreen(lobby, this, player, card.moreProfile()));
+				}
+			}
+			case MANAGE, NONE -> { }
 		}
+	}
+
+	/** X on a ready seat's card in the lobby: its More (controls, profiles); B goes back to ready. Render thread. */
+	void openMore(int player) {
+		Slot slot = slots.get(player);
+		String controller = controllerOfSlot.get(player);
+		GuestProfile current = slot == null ? null : slot.profile;
+		if (current == null || controller == null || world != null || cards.containsKey(player)) {
+			return;
+		}
+		if (flow.changeProfile(controller)) {
+			cards.put(player, newCard(player, controller, current, true));
+		}
+	}
+
+	/** Back in the lobby from a screen a card opened: what is still held there doesn't press the card. */
+	void backToCard(int player) {
+		SeatCard card = cards.get(player);
+		if (card != null) {
+			card.ignoreHeld();
+		}
+	}
+
+	/**
+	 * Saves a profile's controls (the controls screen's Menu): the stored profile keeps its place, a seat playing it
+	 * gets them at once, and open cards pick the new copy. False if the profile couldn't be saved.
+	 */
+	public boolean saveControls(UUID profileId, ControlScheme scheme) {
+		GuestProfile updated;
+		try {
+			ProfileStore store = profileStore();
+			List<GuestProfile> profiles = new ArrayList<>(store.load());
+			int at = -1;
+			for (int i = 0; i < profiles.size(); i++) {
+				if (profiles.get(i).id().equals(profileId)) {
+					at = i;
+				}
+			}
+			if (at < 0) {
+				return false;
+			}
+			updated = profiles.get(at).withControls(scheme);
+			profiles.set(at, updated);
+			store.save(profiles);
+		} catch (IOException | IllegalArgumentException e) {
+			HearthsideMod.LOGGER.error("Could not save controls", e);
+			return false;
+		}
+		for (Slot slot : slots.values()) {
+			if (slot.profile != null && slot.profile.id().equals(profileId)) {
+				slot.profile = slot.profile.withControls(scheme);
+				if (slot.connection != null) {
+					send(slot.connection, new ControlMessage.SetControls(ControlSchemeJson.toJson(scheme)));
+				}
+			}
+		}
+		cards.values().forEach(card -> card.replaceProfile(updated));
+		HearthsideMod.LOGGER.info("Hearthside saved {}'s controls", updated.name());
+		return true;
 	}
 
 	/** Y on a ready seat's card in the lobby: choose its profile again (B keeps the current one). Render thread. */
@@ -625,6 +689,10 @@ public final class Party {
 	}
 
 	private SeatCard newCard(int index, String controller, GuestProfile keep) {
+		return newCard(index, controller, keep, false);
+	}
+
+	private SeatCard newCard(int index, String controller, GuestProfile keep, boolean more) {
 		List<GuestProfile> profiles = List.of();
 		try {
 			profiles = profileStore().load();
@@ -635,7 +703,7 @@ public final class Party {
 		// Checked live: another seat may confirm a profile, or start naming one, while this card is open.
 		return new SeatCard(index, new ProfileCarousel(profiles, id -> heldByAnotherSeat(index, id), guid),
 				() -> new QuickSetup(namesInUse(index), minecraft.getUser().getName(), takenColors(index), index), guid,
-				keep);
+				keep, more);
 	}
 
 	private boolean heldByAnotherSeat(int index, UUID profileId) {
