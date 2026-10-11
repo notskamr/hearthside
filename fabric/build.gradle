@@ -2,6 +2,16 @@ plugins {
 	id 'net.fabricmc.fabric-loom' version "${loom_version}"
 }
 
+repositories {
+	maven {
+		name = 'Modrinth'
+		url = 'https://api.modrinth.com/maven'
+		content {
+			includeGroup 'maven.modrinth'
+		}
+	}
+}
+
 base {
 	archivesName = 'hearthside'
 }
@@ -18,6 +28,14 @@ loom {
 
 	runs {
 		// A second client that boots in satellite role, in its own run directory.
+		// Drives the walking-skeleton end-to-end check (see E2eDriver).
+		e2eClient {
+			client()
+			name = 'E2E Client'
+			vmArg '-Dhearthside.e2e=true'
+			runDir 'run-e2e'
+		}
+
 		satelliteClient {
 			client()
 			name = 'Satellite Client'
@@ -34,6 +52,10 @@ dependencies {
 
 	implementation project(':core')
 	include project(':core')
+
+	// Compatibility targets, present only in dev runs.
+	runtimeOnly "maven.modrinth:sodium:${sodium_version}"
+	runtimeOnly "maven.modrinth:iris:${iris_version}"
 }
 
 processResources {

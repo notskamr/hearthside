@@ -88,6 +88,12 @@ class ControlCodecTest {
 	}
 
 	@Test
+	void joinWorldWithBadPortIsRejected() {
+		assertThatThrownBy(() -> ControlCodec.read(input(frame(2 + 4, 6, ByteBuffer.allocate(4).putInt(0).array()))))
+				.isInstanceOf(ProtocolException.class);
+	}
+
+	@Test
 	void malformedStringIsProtocolError() {
 		byte[] payload = ByteBuffer.allocate(12).putInt(1).putInt(1)
 				.putShort((short) 2).put((byte) 0xC0).put((byte) 0x00).array();

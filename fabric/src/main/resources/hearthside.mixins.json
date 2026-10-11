@@ -1,0 +1,11 @@
+{
+	"required": true,
+	"package": "dev.hearthside.fabric.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"mixins": [
+		"GuestLoginMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

@@ -46,6 +46,8 @@ class ControlCodecProperties {
 				.as((x, y, w, h) -> new ControlMessage.SetViewport(new Rect(x, y, w, h)));
 		Arbitrary<ControlMessage> lifecycle = Arbitraries.of(LifecycleCommand.class).map(ControlMessage.Lifecycle::new);
 
-		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle);
+		Arbitrary<ControlMessage> joinWorld = Arbitraries.integers().between(1, 65535).map(ControlMessage.JoinWorld::new);
+
+		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld);
 	}
 }

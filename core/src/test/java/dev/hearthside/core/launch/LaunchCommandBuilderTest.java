@@ -8,13 +8,15 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class LaunchCommandBuilderTest {
+	static final Path HOST_GAME_DIR = Path.of("C:\\Users\\Jo Smith\\AppData\\Roaming\\.minecraft");
+
 	final HostJvm host = new HostJvm(Path.of("C:\\jdk\\bin\\javaw.exe"),
 			List.of("-Xmx8G", "-Xms2G", "-agentlib:jdwp=transport=dt_socket,server=y,address=5005",
 					"-XX:+UseG1GC", "-Dhearthside.role=host"),
 			"C:\\a b\\x.jar;C:\\y.jar", "net.fabricmc.loader.impl.launch.knot.KnotClient",
 			List.of("--username", "HostName", "--accessToken", "SECRET_HOST_TOKEN", "--uuid", "abc",
 					"--gameDir", "C:\\mc", "--assetsDir", "C:\\mc\\assets", "--assetIndex", "29", "--version", "26.3"),
-			8L << 30);
+			8L << 30, HOST_GAME_DIR);
 	final SatelliteLaunch sat = new SatelliteLaunch(1, 50123, Path.of("C:\\mc\\hearthside\\satellite-1"), "Bob_2", "s3cret");
 
 	@Test
@@ -36,7 +38,7 @@ class LaunchCommandBuilderTest {
 	@Test
 	void heapHasFloor() {
 		var small = new HostJvm(host.javaExecutable(), host.jvmArgs(), host.classpath(), host.mainClass(),
-				host.gameArgs(), 1L << 30);
+				host.gameArgs(), 1L << 30, host.gameDir());
 		assertThat(LaunchCommandBuilder.build(small, sat).command()).contains("-Xmx1024m");
 	}
 
@@ -71,7 +73,7 @@ class LaunchCommandBuilderTest {
 	@Test
 	void valuelessFlagsSurvive() {
 		var demo = new HostJvm(host.javaExecutable(), List.of(), "cp", "Main",
-				List.of("--demo", "--username", "HostName", "--fullscreen"), 4L << 30);
+				List.of("--demo", "--username", "HostName", "--fullscreen"), 4L << 30, host.gameDir());
 		var cmd = LaunchCommandBuilder.build(demo, sat).command();
 		assertThat(cmd).contains("--demo", "--fullscreen").doesNotContain("HostName");
 	}
@@ -81,6 +83,34 @@ class LaunchCommandBuilderTest {
 		var lc = LaunchCommandBuilder.build(host, sat);
 		assertThat(lc.command()).doesNotContain("s3cret");
 		assertThat(lc.environment()).containsEntry("HEARTHSIDE_LAUNCH_SECRET", "s3cret");
+	}
+
+	@Test
+	void satelliteRunsInItsOwnFolder() {
+		// Minecraft writes logs/ (and crash reports) relative to the working directory.
+		assertThat(LaunchCommandBuilder.build(host, sat).workingDirectory()).isEqualTo(sat.gameDir());
+	}
+
+	@Test
+	void modsFolderPointsAtHostMods() {
+		assertThat(LaunchCommandBuilder.build(host, sat).command())
+				.contains("-Dfabric.modsFolder=" + HOST_GAME_DIR.resolve("mods").toAbsolutePath());
+	}
+
+	@Test
+	void modsFolderWithSpacesIsOneArgument() {
+		var modsArgs = LaunchCommandBuilder.build(host, sat).command().stream()
+				.filter(a -> a.startsWith("-Dfabric.modsFolder=")).toList();
+		assertThat(modsArgs).singleElement().asString().contains("Jo Smith");
+	}
+
+	@Test
+	void hostModsFolderOverrideIsKept() {
+		var custom = new HostJvm(host.javaExecutable(), List.of("-Dfabric.modsFolder=D:\\mods"), host.classpath(),
+				host.mainClass(), host.gameArgs(), host.maxHeapBytes(), host.gameDir());
+		var modsArgs = LaunchCommandBuilder.build(custom, sat).command().stream()
+				.filter(a -> a.startsWith("-Dfabric.modsFolder=")).toList();
+		assertThat(modsArgs).containsExactly("-Dfabric.modsFolder=D:\\mods");
 	}
 
 	@Test

@@ -42,6 +42,15 @@ public sealed interface ControlMessage {
 		}
 	}
 
+	/** Type 6, host → satellite: join the host's world at {@code 127.0.0.1:<port>}. */
+	record JoinWorld(int port) implements ControlMessage {
+		public JoinWorld {
+			if (port < 1 || port > 65535) {
+				throw new IllegalArgumentException("Port out of range: " + port);
+			}
+		}
+	}
+
 	/** A message whose type this version does not know; produced only by decoding, never written. */
 	record Unknown(int typeId) implements ControlMessage {}
 }

@@ -17,6 +17,9 @@ public final class LaunchCommandBuilder {
 	public static final long MIN_HEAP_MB = 1024;
 	public static final String SECRET_ENV = "HEARTHSIDE_LAUNCH_SECRET";
 
+	/** Fabric Loader 0.19.5 {@code SystemProperties.MODS_FOLDER}. */
+	private static final String MODS_FOLDER_ARG = "-Dfabric.modsFolder=";
+
 	private static final List<String> DROPPED_JVM_PREFIXES = List.of(
 			"-Xmx", "-Xms", "-agentlib:jdwp", "-Xrunjdwp",
 			"-XX:SharedArchiveFile", "-XX:ArchiveClassesAtExit", "-Dhearthside.");
@@ -49,6 +52,10 @@ public final class LaunchCommandBuilder {
 		cmd.add("-Dhearthside.role=satellite");
 		cmd.add("-Dhearthside.controlPort=" + sat.controlPort());
 		cmd.add("-Dhearthside.player=" + sat.playerIndex());
+		if (host.jvmArgs().stream().noneMatch(a -> a.startsWith(MODS_FOLDER_ARG))) {
+			// The satellite's own --gameDir would otherwise make Fabric load mods from <satellite>/mods.
+			cmd.add(MODS_FOLDER_ARG + host.gameDir().resolve("mods").toAbsolutePath());
+		}
 
 		cmd.add("-cp");
 		cmd.add(host.classpath());
@@ -72,6 +79,7 @@ public final class LaunchCommandBuilder {
 		cmd.add("--accessToken");
 		cmd.add("0");
 
-		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret()), INHERITED_JVM_OPTION_VARIABLES);
+		// Minecraft writes logs/ and crash-reports/ relative to the working directory, as the launcher sets it.
+		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret()), INHERITED_JVM_OPTION_VARIABLES, sat.gameDir());
 	}
 }
