@@ -1,5 +1,6 @@
 package dev.hearthside.core.protocol;
 
+import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
@@ -29,10 +30,16 @@ public sealed interface ControlMessage {
 		}
 	}
 
-	/** Type 4, host → satellite: where this satellite's view goes on screen. */
-	record SetViewport(Rect rect) implements ControlMessage {
+	/**
+	 * Type 4, host → satellite: this satellite's view, in the host window's framebuffer pixels, and the host display's
+	 * refresh rate (the satellite paces its frames to it).
+	 */
+	record SetViewport(Rect rect, int refreshHz) implements ControlMessage {
 		public SetViewport {
 			Objects.requireNonNull(rect, "rect");
+			if (refreshHz < 1 || refreshHz > 1000) {
+				throw new IllegalArgumentException("Refresh rate out of range: " + refreshHz);
+			}
 		}
 	}
 
@@ -65,6 +72,27 @@ public sealed interface ControlMessage {
 			Objects.requireNonNull(style, "style");
 		}
 	}
+
+	/**
+	 * Type 9, satellite → host: this satellite's frame slots are ready at {@code width}×{@code height}. The slot table is
+	 * the file {@code controlFile}; GPU slot memory is named from the session, the player and {@code generation}.
+	 */
+	record FrameSlotsReady(Transport transport, int width, int height, int generation, String controlFile)
+			implements ControlMessage {
+		public FrameSlotsReady {
+			Objects.requireNonNull(transport, "transport");
+			Objects.requireNonNull(controlFile, "controlFile");
+			if (width < 1 || height < 1) {
+				throw new IllegalArgumentException("Frame size must be positive: " + width + "x" + height);
+			}
+		}
+	}
+
+	/**
+	 * Type 10, host → satellite: the host could not use this satellite's shared GPU frames; reallocate them with the
+	 * copy transport and keep using it.
+	 */
+	record UseCopyTransport() implements ControlMessage {}
 
 	/** A message whose type this version does not know; produced only by decoding, never written. */
 	record Unknown(int typeId) implements ControlMessage {}

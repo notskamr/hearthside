@@ -51,6 +51,15 @@ public final class WindowPlacer {
 		SDLVideo.SDL_SetWindowPosition(handle, rect.x(), rect.y());
 	}
 
+	/** The refresh rate of the display the window is on, rounded; 60 if SDL can't tell. */
+	public static int refreshHz(Window window) {
+		var mode = SDLVideo.SDL_GetCurrentDisplayMode(SDLVideo.SDL_GetDisplayForWindow(window.handle()));
+		if (mode == null || mode.refresh_rate() < 1) {
+			return 60;
+		}
+		return Math.clamp(Math.round(mode.refresh_rate()), 1, 1000);
+	}
+
 	public static void focus(Window window) {
 		SDLVideo.SDL_RaiseWindow(window.handle());
 	}

@@ -33,6 +33,11 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
+import dev.hearthside.core.compositor.Transport;
+import dev.hearthside.core.compositor.TransportChoice;
+import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.GlInterop;
+import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import dev.hearthside.fabric.server.HostServerBridge;
 import java.io.IOException;
@@ -45,6 +50,7 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -56,6 +62,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import com.mojang.blaze3d.platform.Window;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.server.IntegratedServer;
@@ -93,6 +100,10 @@ public final class HostSession {
 	private Rect hostWindowBefore;
 	private boolean pauseOnLostFocusBefore;
 	private Rect workArea;
+	/** Whether guests render hidden and this window composites them (decided on the render thread at session start). */
+	private volatile boolean composite;
+	/** GPU sharing or copying, as this machine's probe decided at session start. */
+	private volatile Transport hostTransport = Transport.COPY;
 
 	private static final class Slot {
 		final int index;
@@ -115,8 +126,23 @@ public final class HostSession {
 		this.controlServer = ControlServer.start(this::verifyHello);
 		HostServerBridge.activate(new HostServerBridge.Active(roster, tokens, this::reopenGuestListener));
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
+		minecraft.execute(this::choosePresentation);
 		minecraft.execute(this::startInput);
 		HearthsideMod.LOGGER.info("Hearthside session open: control channel on {}", controlServer.port());
+	}
+
+	/** Composite into this window when the GL context supports it; otherwise tile real windows. Render thread. */
+	private void choosePresentation() {
+		try {
+			composite = Presentation.glSupportsCompositing();
+			if (composite) {
+				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5).
+				hostTransport = TransportChoice.choose(GlInterop.probe(false));
+			}
+		} catch (RuntimeException | LinkageError e) {
+			composite = false; // no GL context (for example Minecraft's Vulkan backend)
+		}
+		HearthsideMod.LOGGER.info("Hearthside split-screen presentation: {}", composite ? "one window" : "tiled windows");
 	}
 
 	/** Opens the controllers and starts the per-frame input loop. Render thread (SDL). */
@@ -208,7 +234,7 @@ public final class HostSession {
 			try {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
 				return LaunchCommandBuilder.build(host,
-						new SatelliteLaunch(index, controlServer.port(), dir, profile.name(), slot.secret));
+						new SatelliteLaunch(index, controlServer.port(), dir, profile.name(), slot.secret, presentation()));
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
@@ -331,6 +357,16 @@ public final class HostSession {
 		return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, true, "", tokens.issue(guest)),
 				connection -> {
 					slot.connection = connection;
+					connection.onMessage(message -> {
+						if (message instanceof ControlMessage.FrameSlotsReady ready) {
+							minecraft.execute(() -> {
+								Compositor compositor = Compositor.active();
+								if (compositor != null) {
+									compositor.onGuestSlots(slot.index, ready);
+								}
+							});
+						}
+					});
 					connection.onClose(() -> {
 						if (slot.connection == connection) {
 							slot.connection = null;
@@ -353,8 +389,18 @@ public final class HostSession {
 		splitScreen = true;
 		hostWindowBefore = WindowPlacer.bounds(minecraft.getWindow());
 		pauseOnLostFocusBefore = minecraft.options.pauseOnLostFocus;
-		// Satellite windows take focus as they appear; the host must not pause because of it.
+		// Other players keep playing while this window is in the background; the host must not pause because of it.
 		minecraft.options.pauseOnLostFocus = false;
+	}
+
+	/** How each guest's view reaches the screen, for its launch command. */
+	private SatelliteLaunch.Presentation presentation() {
+		if (!composite) {
+			return SatelliteLaunch.Presentation.TILED;
+		}
+		return Presentation.forceCopy() || hostTransport == Transport.COPY
+				? SatelliteLaunch.Presentation.COMPOSITED_COPY
+				: SatelliteLaunch.Presentation.COMPOSITED;
 	}
 
 	/** Puts the host window and focus setting back once no guests remain. Render thread. */
@@ -363,15 +409,40 @@ public final class HostSession {
 			return;
 		}
 		splitScreen = false;
-		WindowPlacer.restore(minecraft.getWindow(), hostWindowBefore);
+		if (Compositor.active() != null) {
+			Compositor.deactivate(minecraft);
+		} else {
+			WindowPlacer.restore(minecraft.getWindow(), hostWindowBefore);
+		}
 		minecraft.options.pauseOnLostFocus = pauseOnLostFocusBefore;
 	}
 
-	/** Re-tiles, or leaves split-screen mode when the last guest has gone. Render thread. */
+	/** Re-lays out the views, or leaves split-screen mode when the last guest has gone. Render thread. */
 	private void afterGuestsChanged() {
 		List<Slot> guests = new ArrayList<>(slots.values());
 		if (guests.isEmpty()) {
 			leaveSplitScreen();
+			return;
+		}
+		int refresh = WindowPlacer.refreshHz(minecraft.getWindow());
+		if (composite) {
+			// One window: lay every player out inside this window's framebuffer; the window itself stays put.
+			Window.FramebufferSize size = minecraft.getWindow().queryFramebufferSize();
+			List<Rect> rects = new ConsoleLayout(TwoPlayerSplit.VERTICAL)
+					.layout(1 + guests.size(), new Rect(0, 0, size.width(), size.height()));
+			Map<Integer, Rect> guestViews = new HashMap<>();
+			for (int i = 0; i < guests.size(); i++) {
+				guestViews.put(guests.get(i).index, rects.get(i + 1));
+			}
+			Compositor.activate(minecraft, this::afterGuestsChanged,
+					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), rects.get(0), guestViews, size.width(),
+					size.height());
+			for (int i = 0; i < guests.size(); i++) {
+				ControlConnection connection = guests.get(i).connection;
+				if (connection != null) {
+					send(connection, new ControlMessage.SetViewport(rects.get(i + 1), refresh));
+				}
+			}
 			return;
 		}
 		if (workArea == null) {
@@ -382,7 +453,7 @@ public final class HostSession {
 		for (int i = 0; i < guests.size(); i++) {
 			ControlConnection connection = guests.get(i).connection;
 			if (connection != null) {
-				send(connection, new ControlMessage.SetViewport(rects.get(i + 1)));
+				send(connection, new ControlMessage.SetViewport(rects.get(i + 1), refresh));
 			}
 		}
 		WindowPlacer.focus(minecraft.getWindow());

@@ -13,7 +13,10 @@ import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.ProfileStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
+import com.mojang.blaze3d.platform.InputConstants;
+import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.HostSession;
+import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -26,9 +29,13 @@ import java.util.List;
 import java.util.UUID;
 import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
@@ -41,6 +48,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.sdl.SDLVideo;
 import net.minecraft.util.HttpUtil;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
@@ -86,10 +94,23 @@ public final class E2eDriver {
 			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
+			step("C1 guest window is hidden", this::guestWindowHidden);
+			step("C2 guest frames reach the host's window", this::guestFramesComposited);
+			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
+			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
+			step("C5 copy transport works", this::copyTransportWorks);
+			step("C6 maximise and restore keep the guest composited", this::maximiseAndRestore);
+			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
+			step("C7 a third player and back re-lays out without GL errors", this::thirdPlayerAndBack);
+			step("C9 the host's mouse works only inside its own view", this::hostMouseConfined);
+			step("C11 in the world, the host's clicks count wherever the cursor drifted", this::hostWorldClicksAnywhere);
 			step("3 crashed satellite is restarted", this::crashedSatelliteRestarts);
+			step("C8 the restarted guest's frames come back", this::restartedGuestComposited);
 			step("4 guest named like the host is refused", this::hostNameRefused);
 			step("4b opening and closing LAN keeps the guest", this::lanToggleKeepsGuest);
-			step("5 leave closes the satellite and restores the host window", this::leaveClosesSatellite);
+			long beforeLastLeave = hostLogLength();
+			step("5 leave closes the satellite and leaves the host window as it was", this::leaveClosesSatellite);
+			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				step("P1 START on a new controller adds Player2", this::startJoins);
@@ -131,11 +152,293 @@ public final class E2eDriver {
 			return null;
 		});
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
-		// The host window should now fill the left half of the primary display's usable area.
-		Rect expected = new ConsoleLayout(TwoPlayerSplit.VERTICAL).layout(2, onRender(WindowPlacer::primaryWorkArea)).get(0);
-		Rect actual = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
-		log("   host window " + actual + ", expected " + expected);
-		check(actual.equals(expected), "host window tiled into the left half");
+	}
+
+	// ---- Compositor steps ----
+
+	private static final String PATTERN = "rgb=ff00ff";
+
+	private void guestWindowHidden() throws Exception {
+		waitFor("satellite window flags line", Duration.ofSeconds(30),
+				() -> satelliteLog().contains("hearthside window flags hidden=true"));
+	}
+
+	/** The guest paints its frame's top-left corner magenta in E2E; the host logs what it composited there. */
+	private void guestFramesComposited() throws Exception {
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+	}
+
+	private void hostWindowUntouched() throws Exception {
+		Rect now = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
+		log("   host window " + now + ", before split-screen " + hostWindowBefore);
+		check(now.equals(hostWindowBefore), "host window unchanged by split-screen");
+	}
+
+	private void resizeRelaysOut() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), 1280, 720));
+		try {
+			int halfWidth = onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) / 2;
+			waitFor("guest re-sized to half the new window", Duration.ofSeconds(10),
+					() -> satelliteLog().contains("hearthside virtual size " + halfWidth + "x"));
+			waitForProbe(2, mark, Duration.ofSeconds(10));
+		} finally {
+			onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), hostWindowBefore.width(), hostWindowBefore.height()));
+		}
+		// The transport is decided once; a resize must not re-probe the GPU (each probe creates Vulkan instances).
+		int probes = count("hearthside gpu sharing probe");
+		check(probes <= 1, "the guest probed the GPU once, not " + probes + " times");
+	}
+
+	private void copyTransportWorks() throws Exception {
+		System.setProperty("hearthside.forceCopy", "true");
+		try {
+			onRender(() -> {
+				HostSession.current().leave(GUEST);
+				return null;
+			});
+			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			long mark = hostLogLength();
+			onRender(() -> {
+				HostSession.current().join(GUEST);
+				return null;
+			});
+			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, mark, Duration.ofSeconds(30));
+			// Resize twice: each reallocates the copy transport's files; old ones must be unmapped and deleted.
+			for (int[] size : new int[][] {{1280, 720}, {hostWindowBefore.width(), hostWindowBefore.height()}}) {
+				int before = lastProbeGeneration(2);
+				long resized = hostLogLength();
+				onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), size[0], size[1]));
+				waitForProbe(2, resized, Duration.ofSeconds(15), before);
+			}
+			Thread.sleep(1000);
+			long pixelFiles;
+			try (var files = Files.list(minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1"))) {
+				pixelFiles = files.filter(f -> f.getFileName().toString().endsWith(".pixels")).count();
+			}
+			log("   copy-transport pixel files left: " + pixelFiles);
+			check(pixelFiles <= 2, "old copy-transport files are cleaned up (found " + pixelFiles + ")");
+		} finally {
+			System.clearProperty("hearthside.forceCopy");
+		}
+	}
+
+	private void maximiseAndRestore() throws Exception {
+		int before = lastProbeGeneration(2);
+		long mark = hostLogLength();
+		onRender(() -> SDLVideo.SDL_MaximizeWindow(minecraft.getWindow().handle()));
+		int maximised;
+		try {
+			waitFor("window maximised", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) > hostWindowBefore.width());
+			maximised = waitForProbe(2, mark, Duration.ofSeconds(10), before);
+		} finally {
+			onRender(() -> SDLVideo.SDL_RestoreWindow(minecraft.getWindow().handle()));
+		}
+		long restored = hostLogLength();
+		waitFor("window restored", Duration.ofSeconds(5),
+				() -> onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) == hostWindowBefore.width());
+		waitForProbe(2, restored, Duration.ofSeconds(10), maximised);
+	}
+
+	/** A GPU import that fails must not freeze the guest: the host switches it to the copy transport. */
+	private void failedImportFallsBackToCopy() throws Exception {
+		// Start from a guest on GPU sharing (C5 left it on copy).
+		onRender(() -> {
+			HostSession.current().leave(GUEST);
+			return null;
+		});
+		waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+		onRender(() -> {
+			HostSession.current().join(GUEST);
+			return null;
+		});
+		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+		waitFor("guest on GPU sharing", Duration.ofSeconds(30),
+				() -> satelliteLog().contains("hearthside frame slots ready transport=gpu_shared"));
+		int before = lastProbeGeneration(2);
+		long mark = hostLogLength();
+		int satelliteMark = satelliteLog().length();
+		System.setProperty("hearthside.e2e.failGpuImport", "true");
+		try {
+			onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), 1280, 720));
+			waitFor("guest switched to copy", Duration.ofSeconds(15),
+					() -> satelliteLog().substring(Math.min(satelliteMark, satelliteLog().length()))
+							.contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, mark, Duration.ofSeconds(15), before);
+		} finally {
+			System.clearProperty("hearthside.e2e.failGpuImport");
+			onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), hostWindowBefore.width(), hostWindowBefore.height()));
+		}
+	}
+
+	/** In the world, player 1's mouse buttons always count, wherever the hidden OS cursor has drifted. */
+	private void hostWorldClicksAnywhere() throws Exception {
+		double guestX = onRender(() -> minecraft.getWindow().queryFramebufferSize().width() * 0.75 * Compositor.active().screenPerFramebuffer());
+		double hostX = guestX / 3;
+		check(onRender(() -> minecraft.gui.screen() == null), "host is in the world");
+		try {
+			osButton(guestX, 100, true);
+			check(onRender(() -> minecraft.options.keyAttack.isDown()), "attack held by a press over another view");
+			osButton(guestX, 100, false);
+			check(onRender(() -> !minecraft.options.keyAttack.isDown()), "attack released over another view");
+			// Pressed inside, released outside: the release must still land, or attack sticks down.
+			osButton(hostX, 100, true);
+			osButton(guestX, 100, false);
+			check(onRender(() -> !minecraft.options.keyAttack.isDown()), "attack released after drifting out of the view");
+		} finally {
+			onRender(() -> {
+				minecraft.options.keyAttack.setDown(false);
+				return null;
+			});
+		}
+	}
+
+	private void osButton(double windowX, double windowY, boolean press) throws Exception {
+		onRender(() -> {
+			long handle = minecraft.getWindow().handle();
+			minecraft.mouseHandler.onMove(handle, windowX, windowY, 0, 0);
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), press ? 1 : 0);
+			return null;
+		});
+		Thread.sleep(100);
+	}
+
+	private void thirdPlayerAndBack() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> {
+			HostSession.current().join("Guest3");
+			return null;
+		});
+		try {
+			waitFor("3 players", Duration.ofSeconds(180), () -> playerCount() == 3);
+			waitForProbe(3, mark, Duration.ofSeconds(30));
+			waitForProbe(2, mark, Duration.ofSeconds(10));
+		} finally {
+			onRender(() -> {
+				HostSession.current().leave("Guest3");
+				return null;
+			});
+		}
+		long back = hostLogLength();
+		waitFor("back to 2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
+		waitForProbe(2, back, Duration.ofSeconds(10));
+		check(!hostLogSince(mark).contains("gl error"), "no GL errors while re-laying out");
+	}
+
+	private int generationBeforeCrash = -1;
+
+	/** The host keeps the dead guest's last frame; only a probe from a new import proves the restart's frames arrive. */
+	private void restartedGuestComposited() throws Exception {
+		waitForProbe(2, 0, Duration.ofSeconds(30), generationBeforeCrash);
+	}
+
+	/** Clicks through MouseHandler as the OS would, in window coordinates: inside the host's view, then over the guest's. */
+	private void hostMouseConfined() throws Exception {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		String host = minecraft.getUser().getName();
+		server(("gamemode survival " + host), ("item replace entity " + host + " container.9 with minecraft:stone 10"));
+		onRender(() -> {
+			minecraft.gui.setScreen(new InventoryScreen(minecraft.player));
+			return null;
+		});
+		Thread.sleep(500);
+		ServerPlayer hostPlayer = server.getPlayerList().getPlayerByName(host);
+		try {
+			// Slot 9 is the first main-inventory slot; find where it is drawn, in window coordinates.
+			double[] slotWindow = onRender(() -> {
+				var screen = (InventoryScreen) minecraft.gui.screen();
+				var accessor = (ContainerScreenAccessor) screen;
+				var slot = screen.getMenu().slots.stream().filter(s -> s.getContainerSlot() == 9 && s.container == minecraft.player.getInventory())
+						.findFirst().orElseThrow();
+				double guiX = accessor.hearthside$leftPos() + slot.x + 8, guiY = accessor.hearthside$topPos() + slot.y + 8;
+				var window = minecraft.getWindow();
+				double toScreen = (double) window.getScreenWidth() / window.getGuiScaledWidth();
+				return new double[] {guiX * toScreen, guiY * toScreen};
+			});
+			osClick(slotWindow[0], slotWindow[1]);
+			waitFor("stone on the host's cursor", Duration.ofSeconds(5), () -> !hostPlayer.containerMenu.getCarried().isEmpty());
+			osClick(slotWindow[0], slotWindow[1]);
+			waitFor("stone put back", Duration.ofSeconds(5), () -> hostPlayer.containerMenu.getCarried().isEmpty());
+			// Over the guest's view (the right half of the window), the same click must do nothing.
+			double guestX = onRender(() -> minecraft.getWindow().queryFramebufferSize().width() * 0.75 * Compositor.active().screenPerFramebuffer());
+			osClick(guestX, slotWindow[1]);
+			Thread.sleep(500);
+			check(hostPlayer.containerMenu.getCarried().isEmpty(), "a click over the guest's view did nothing");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			server("gamemode creative " + host);
+		}
+	}
+
+	private void osClick(double windowX, double windowY) throws Exception {
+		onRender(() -> {
+			long handle = minecraft.getWindow().handle();
+			minecraft.mouseHandler.onMove(handle, windowX, windowY, 0, 0);
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 1);
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 0);
+			return null;
+		});
+		Thread.sleep(300);
+	}
+
+	private void fullWindowAgain(long fromOffset) throws Exception {
+		waitFor("virtual size cleared", Duration.ofSeconds(10), () -> hostLogSince(fromOffset).contains("virtual size cleared"));
+		boolean full = onRender(() -> minecraft.getWindow().getWidth() == minecraft.getWindow().queryFramebufferSize().width()
+				&& minecraft.getWindow().getHeight() == minecraft.getWindow().queryFramebufferSize().height());
+		check(full, "the host renders at its full window size");
+	}
+
+	private void waitForProbe(int player, long fromOffset, Duration timeout) throws Exception {
+		waitForProbe(player, fromOffset, timeout, -1);
+	}
+
+	/** Waits for the host to log the pattern for {@code player} from an import other than generation {@code notGeneration}. */
+	private int waitForProbe(int player, long fromOffset, Duration timeout, int notGeneration) throws Exception {
+		Pattern line = Pattern.compile("hearthside compositor probe player=" + player + " gen=([0-9]+) " + PATTERN);
+		int[] found = {-1};
+		waitFor("player " + player + "'s pattern in the host window" + (notGeneration < 0 ? "" : " from a new import"), timeout, () -> {
+			Matcher m = line.matcher(hostLogSince(fromOffset));
+			while (m.find()) {
+				int generation = Integer.parseInt(m.group(1));
+				if (generation != notGeneration) {
+					found[0] = generation;
+					return true;
+				}
+			}
+			return false;
+		});
+		return found[0];
+	}
+
+	/** The generation of the most recent probe the host logged for {@code player}. */
+	private int lastProbeGeneration(int player) throws IOException {
+		Matcher m = Pattern.compile("hearthside compositor probe player=" + player + " gen=([0-9]+)").matcher(hostLogSince(0));
+		int generation = -1;
+		while (m.find()) {
+			generation = Integer.parseInt(m.group(1));
+		}
+		return generation;
+	}
+
+	private Path hostLogFile() {
+		return minecraft.gameDirectory.toPath().resolve("logs/latest.log");
+	}
+
+	private long hostLogLength() throws IOException {
+		return Files.size(hostLogFile());
+	}
+
+	private String hostLogSince(long offset) throws IOException {
+		byte[] all = Files.readAllBytes(hostLogFile());
+		int from = (int) Math.min(offset, all.length);
+		return new String(all, from, all.length - from, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
 	}
 
 	private void lanToggleKeepsGuest() throws Exception {
@@ -156,6 +459,7 @@ public final class E2eDriver {
 	}
 
 	private void crashedSatelliteRestarts() throws Exception {
+		generationBeforeCrash = lastProbeGeneration(2);
 		satellites().forEach(ProcessHandle::destroyForcibly);
 		waitFor("guest dropped", Duration.ofSeconds(30), () -> playerCount() == 1);
 		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);

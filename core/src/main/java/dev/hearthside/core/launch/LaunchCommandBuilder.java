@@ -52,6 +52,11 @@ public final class LaunchCommandBuilder {
 		cmd.add("-Dhearthside.role=satellite");
 		cmd.add("-Dhearthside.controlPort=" + sat.controlPort());
 		cmd.add("-Dhearthside.player=" + sat.playerIndex());
+		switch (sat.presentation()) {
+			case TILED -> cmd.add("-Dhearthside.presenter=tiled");
+			case COMPOSITED_COPY -> cmd.add("-Dhearthside.forceCopy=true");
+			case COMPOSITED -> { }
+		}
 		if (host.jvmArgs().stream().noneMatch(a -> a.startsWith(MODS_FOLDER_ARG))) {
 			// The satellite's own --gameDir would otherwise make Fabric load mods from <satellite>/mods.
 			cmd.add(MODS_FOLDER_ARG + host.gameDir().resolve("mods").toAbsolutePath());

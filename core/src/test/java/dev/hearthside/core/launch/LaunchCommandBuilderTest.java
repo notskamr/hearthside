@@ -86,6 +86,21 @@ class LaunchCommandBuilderTest {
 	}
 
 	@Test
+	void compositedByDefault() {
+		var cmd = LaunchCommandBuilder.build(host, sat).command();
+		assertThat(cmd).noneMatch(a -> a.startsWith("-Dhearthside.presenter")).noneMatch(a -> a.startsWith("-Dhearthside.forceCopy"));
+	}
+
+	@Test
+	void presentationSettingsReachTheSatellite() {
+		var tiled = new SatelliteLaunch(1, 50123, sat.gameDir(), "Bob_2", "s3cret", SatelliteLaunch.Presentation.TILED);
+		assertThat(LaunchCommandBuilder.build(host, tiled).command()).contains("-Dhearthside.presenter=tiled");
+		var copy = new SatelliteLaunch(1, 50123, sat.gameDir(), "Bob_2", "s3cret", SatelliteLaunch.Presentation.COMPOSITED_COPY);
+		assertThat(LaunchCommandBuilder.build(host, copy).command()).contains("-Dhearthside.forceCopy=true")
+				.noneMatch(a -> a.startsWith("-Dhearthside.presenter"));
+	}
+
+	@Test
 	void satelliteWindowDoesNotTakeFocusWhenShown() {
 		var lc = LaunchCommandBuilder.build(host, sat);
 		// SDL reads hints from the environment: a guest window opening must not steal the keyboard from player 1.

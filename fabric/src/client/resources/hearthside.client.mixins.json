@@ -10,9 +10,14 @@
 		"KeyboardInputMixin",
 		"KeyMappingAccessor",
 		"SatelliteGrabMixin",
+		"HostMouseMixin",
+		"PresentMixin",
 		"SatelliteInputMixin",
+		"SatelliteSwapMixin",
 		"SatelliteWindowMixin",
-		"UnpublishMixin"
+		"UnpublishMixin",
+		"WindowAccessor",
+		"WindowSizeMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
