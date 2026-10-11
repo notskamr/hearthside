@@ -25,6 +25,7 @@ public final class ControlCodec {
 	private static final int INPUT = 3;
 	private static final int SET_VIEWPORT = 4;
 	private static final int LIFECYCLE = 5;
+	private static final int JOIN_WORLD = 6;
 
 	private ControlCodec() {}
 
@@ -69,6 +70,10 @@ public final class ControlCodec {
 				p.writeByte(m.command().ordinal());
 				yield LIFECYCLE;
 			}
+			case ControlMessage.JoinWorld m -> {
+				p.writeInt(m.port());
+				yield JOIN_WORLD;
+			}
 			case ControlMessage.Unknown m ->
 					throw new IllegalArgumentException("Cannot write an Unknown message (type " + m.typeId() + ")");
 		};
@@ -101,6 +106,7 @@ public final class ControlCodec {
 						p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat()));
 				case SET_VIEWPORT -> new ControlMessage.SetViewport(new Rect(p.readInt(), p.readInt(), p.readInt(), p.readInt()));
 				case LIFECYCLE -> new ControlMessage.Lifecycle(lifecycle(p.readUnsignedByte()));
+				case JOIN_WORLD -> new ControlMessage.JoinWorld(p.readInt());
 				default -> {
 					p.skipNBytes(payload.length);
 					yield new ControlMessage.Unknown(type);
