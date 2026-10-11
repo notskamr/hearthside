@@ -1,6 +1,7 @@
 package dev.hearthside.core.protocol;
 
 import dev.hearthside.core.input.InputFrame;
+import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -26,6 +27,8 @@ public final class ControlCodec {
 	private static final int SET_VIEWPORT = 4;
 	private static final int LIFECYCLE = 5;
 	private static final int JOIN_WORLD = 6;
+	private static final int SET_CONTROLS = 7;
+	private static final int SET_PAD_STYLE = 8;
 
 	private ControlCodec() {}
 
@@ -74,6 +77,14 @@ public final class ControlCodec {
 				p.writeInt(m.port());
 				yield JOIN_WORLD;
 			}
+			case ControlMessage.SetControls m -> {
+				p.writeUTF(m.schemeJson());
+				yield SET_CONTROLS;
+			}
+			case ControlMessage.SetPadStyle m -> {
+				p.writeByte(m.style().ordinal());
+				yield SET_PAD_STYLE;
+			}
 			case ControlMessage.Unknown m ->
 					throw new IllegalArgumentException("Cannot write an Unknown message (type " + m.typeId() + ")");
 		};
@@ -107,6 +118,8 @@ public final class ControlCodec {
 				case SET_VIEWPORT -> new ControlMessage.SetViewport(new Rect(p.readInt(), p.readInt(), p.readInt(), p.readInt()));
 				case LIFECYCLE -> new ControlMessage.Lifecycle(lifecycle(p.readUnsignedByte()));
 				case JOIN_WORLD -> new ControlMessage.JoinWorld(p.readInt());
+				case SET_CONTROLS -> new ControlMessage.SetControls(p.readUTF());
+				case SET_PAD_STYLE -> new ControlMessage.SetPadStyle(padStyle(p.readUnsignedByte()));
 				default -> {
 					p.skipNBytes(payload.length);
 					yield new ControlMessage.Unknown(type);
@@ -123,6 +136,14 @@ public final class ControlCodec {
 			throw new ProtocolException(p.available() + " unexpected trailing bytes in message type " + type);
 		}
 		return message;
+	}
+
+	private static PadStyle padStyle(int ordinal) throws ProtocolException {
+		PadStyle[] values = PadStyle.values();
+		if (ordinal >= values.length) {
+			throw new ProtocolException("Unknown pad style " + ordinal);
+		}
+		return values[ordinal];
 	}
 
 	private static LifecycleCommand lifecycle(int ordinal) throws ProtocolException {

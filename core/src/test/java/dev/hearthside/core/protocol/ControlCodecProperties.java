@@ -2,7 +2,10 @@ package dev.hearthside.core.protocol;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.ControlSchemeJson;
 import dev.hearthside.core.input.InputFrame;
+import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -48,6 +51,10 @@ class ControlCodecProperties {
 
 		Arbitrary<ControlMessage> joinWorld = Arbitraries.integers().between(1, 65535).map(ControlMessage.JoinWorld::new);
 
-		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld);
+		Arbitrary<ControlMessage> setControls = Arbitraries.oneOf(
+				Arbitraries.just(ControlSchemeJson.toJson(ControlScheme.BEDROCK)), text).map(ControlMessage.SetControls::new);
+		Arbitrary<ControlMessage> padStyle = Arbitraries.of(PadStyle.class).map(ControlMessage.SetPadStyle::new);
+
+		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld, setControls, padStyle);
 	}
 }

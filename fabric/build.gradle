@@ -33,6 +33,12 @@ loom {
 			client()
 			name = 'E2E Client'
 			vmArg '-Dhearthside.e2e=true'
+			vmArg '-Dhearthside.e2e.fakePads=true'
+			// The test host window opens without taking focus, so the developer can keep using the PC during a run.
+			// (SDL_WINDOW_NOT_FOCUSABLE does not stop activation on first show; this hint does.)
+			environmentVariable 'SDL_WINDOW_ACTIVATE_WHEN_SHOWN', '0'
+			// Guests (which inherit this environment) report no focus, so every run tests the unfocused path.
+			environmentVariable 'HEARTHSIDE_E2E_GUEST_UNFOCUSED', '1'
 			runDir 'run-e2e'
 		}
 

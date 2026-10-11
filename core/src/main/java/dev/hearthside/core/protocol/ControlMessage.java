@@ -1,6 +1,7 @@
 package dev.hearthside.core.protocol;
 
 import dev.hearthside.core.input.InputFrame;
+import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
 import java.util.Objects;
 
@@ -48,6 +49,20 @@ public sealed interface ControlMessage {
 			if (port < 1 || port > 65535) {
 				throw new IllegalArgumentException("Port out of range: " + port);
 			}
+		}
+	}
+
+	/** Type 7, host → satellite: this player's controller scheme, as {@code ControlSchemeJson}. */
+	record SetControls(String schemeJson) implements ControlMessage {
+		public SetControls {
+			Objects.requireNonNull(schemeJson, "schemeJson");
+		}
+	}
+
+	/** Type 8, host → satellite: which button labels this player's controller uses. */
+	record SetPadStyle(PadStyle style) implements ControlMessage {
+		public SetPadStyle {
+			Objects.requireNonNull(style, "style");
 		}
 	}
 

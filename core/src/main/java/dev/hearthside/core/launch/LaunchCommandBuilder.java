@@ -80,6 +80,8 @@ public final class LaunchCommandBuilder {
 		cmd.add("0");
 
 		// Minecraft writes logs/ and crash-reports/ relative to the working directory, as the launcher sets it.
-		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret()), INHERITED_JVM_OPTION_VARIABLES, sat.gameDir());
+		// SDL reads hints from the environment: a guest window opening must not take focus from the players already playing.
+		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret(), "SDL_WINDOW_ACTIVATE_WHEN_SHOWN", "0"),
+				INHERITED_JVM_OPTION_VARIABLES, sat.gameDir());
 	}
 }

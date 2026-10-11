@@ -1,0 +1,18 @@
+{
+	"hearthside.guide.mine": "Mine",
+	"hearthside.guide.attack": "Attack",
+	"hearthside.guide.place": "Place",
+	"hearthside.guide.use": "Use",
+	"hearthside.guide.jump": "Jump",
+	"hearthside.guide.fly_up": "Fly Up",
+	"hearthside.guide.sneak": "Sneak",
+	"hearthside.guide.fly_down": "Fly Down",
+	"hearthside.guide.inventory": "Inventory",
+	"hearthside.guide.take": "Take",
+	"hearthside.guide.take_half": "Take Half",
+	"hearthside.guide.place_one": "Place One",
+	"hearthside.guide.quick_move": "Quick Move",
+	"hearthside.guide.close": "Close",
+	"hearthside.guide.select": "Select",
+	"hearthside.guide.back": "Back"
+}
