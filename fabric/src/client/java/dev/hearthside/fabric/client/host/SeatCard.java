@@ -332,6 +332,11 @@ public final class SeatCard {
 		}
 	}
 
+	/** A profile was deleted: the carousel drops it. */
+	public void removeProfile(UUID profileId) {
+		carousel.remove(profileId);
+	}
+
 	/** Whether this card is changing a ready seat's profile (B keeps the old one) rather than a new seat's. */
 	public boolean changing() {
 		return keep != null;

@@ -95,13 +95,10 @@ public final class LobbyScreen extends Screen {
 						party.useController();
 					}
 				}));
-		// The hints along the bottom, as in the draft; Back and Start are also mouse buttons.
-		// Join is for controllers without a seat, so it shows theirs; the rest show whoever drives the screen.
+		// Along the bottom, only what the whole lobby does (also mouse buttons). A seat's own buttons (Profile, More,
+		// Leave) are hinted on its card in its own controller's glyphs, and "A to join" on the empty cards.
 		Supplier<PadStyle> style = party::sharedStyle;
 		HintChip[] chips = {
-				new HintChip(0, 0, Control.A, party::joinStyle, Component.literal("Join"), b -> { }),
-				new HintChip(0, 0, Control.Y, style, Component.literal("Profile"), b -> { }),
-				new HintChip(0, 0, Control.X, style, Component.literal("More"), b -> { }),
 				new HintChip(0, 0, Control.B, style, Component.literal("Back"), b -> onClose()),
 				new HintChip(0, 0, Control.START, style, Component.literal("Start"), b -> continueToWorlds()),
 		};
@@ -172,7 +169,8 @@ public final class LobbyScreen extends Screen {
 		};
 	}
 
-	private static PlayerSkin skin(SkinRef ref) {
+	/** A profile's skin for a preview (built-in skins; others preview as Steve until Plan 5d). */
+	static PlayerSkin skin(SkinRef ref) {
 		// Imported and borrowed skins arrive with Plan 5d; until then they preview as Steve.
 		boolean builtIn = ref != null && ref.kind() == SkinRef.Kind.DEFAULT;
 		boolean slim = builtIn && ref.slim();
@@ -277,7 +275,14 @@ public final class LobbyScreen extends Screen {
 		if (card == null) {
 			Party.SeatView view = party.seatView(seat);
 			HearthDraw.inkCentred(g, font, Component.literal(view.name()), c.centre(), c.y + 7, HearthDraw.INK);
-			HearthDraw.inkCentred(g, font, Component.literal(view.status()), c.centre(), pillY - 12, MUTED);
+			if (view.status().equals("Ready")) {
+				// What this seat's controller can do here, in its own glyphs.
+				hint(g, c, style, Control.Y, "Profile", pillY - 39);
+				hint(g, c, style, Control.X, "More", pillY - 26);
+				hint(g, c, style, Control.B, "Leave", pillY - 13);
+			} else {
+				HearthDraw.inkCentred(g, font, Component.literal(view.status()), c.centre(), pillY - 12, MUTED);
+			}
 			HearthDraw.colourPill(g, font, Component.literal("P" + (seat + 1)), c.centre(), pillY, colour);
 			return;
 		}
@@ -292,8 +297,9 @@ public final class LobbyScreen extends Screen {
 			HearthDraw.inkCentred(g, font, Component.literal("‹ " + name + " ›"), c.centre(), c.y + 7, HearthDraw.INK);
 			if (card.problem() != null) {
 				// Another seat took that profile: say so on the card.
-				HearthDraw.inkCentred(g, font, Component.literal(card.problem()), c.centre(), c.bottom() - 42, ERROR_INK);
+				HearthDraw.inkCentred(g, font, Component.literal(card.problem()), c.centre(), c.bottom() - 56, ERROR_INK);
 			}
+			hint(g, c, style, Control.X, "More", c.bottom() - 43);
 			hints(g, c, style, Control.A, "Pick", Control.B, card.changing() ? "Keep" : "Leave");
 			return;
 		}
@@ -334,13 +340,15 @@ public final class LobbyScreen extends Screen {
 
 	private void hints(GuiGraphicsExtractor g, Card c, PadStyle style, Control first, String firstLabel, Control second,
 			String secondLabel) {
-		int y = c.bottom() - 30;
+		hint(g, c, style, first, firstLabel, c.bottom() - 30);
+		hint(g, c, style, second, secondLabel, c.bottom() - 17);
+	}
+
+	/** One of a card's button hints: the glyph in that seat's controller family, then what it does. */
+	private void hint(GuiGraphicsExtractor g, Card c, PadStyle style, Control control, String label, int y) {
 		int x = c.x + 7;
-		x += HearthDraw.glyph(g, first, style, x, y) + 3;
-		g.text(font, firstLabel, x, y + 2, HearthDraw.INK, false);
-		x = c.x + 7;
-		x += HearthDraw.glyph(g, second, style, x, y + 13) + 3;
-		g.text(font, secondLabel, x, y + 15, HearthDraw.INK, false);
+		x += HearthDraw.glyph(g, control, style, x, y) + 3;
+		g.text(font, label, x, y + 2, HearthDraw.INK, false);
 	}
 
 	@Override

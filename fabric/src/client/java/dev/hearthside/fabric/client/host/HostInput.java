@@ -16,6 +16,7 @@ import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.menu.PadScreen;
+import dev.hearthside.fabric.client.menu.SeatScreen;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -165,10 +166,10 @@ final class HostInput implements Runnable {
 		for (Map.Entry<Integer, InputFrame> entry : frames.entrySet()) {
 			int player = entry.getKey();
 			InputFrame frame = entry.getValue();
-			boolean ownScreen = screen instanceof ControlsScreen controls && controls.seat() == player;
+			boolean ownScreen = screen instanceof SeatScreen opened && opened.seat() == player;
 			if (player != 0 && session.hasSeatCard(player) && !ownScreen) {
 				// A card is only on screen in the lobby; elsewhere (world select) that controller waits, unless the
-				// screen is the one its card opened (its controls).
+				// screen is one its card opened (its controls, managing profiles).
 				if (lobby != null) {
 					session.seatCardInput(player, frame, now);
 				}

@@ -70,6 +70,19 @@ public final class ProfileCarousel {
 		}
 	}
 
+	/** Drops a deleted profile; the carousel moves on to what followed it. */
+	public void remove(UUID profileId) {
+		for (int i = all.size() - 1; i >= 0; i--) {
+			if (all.get(i) instanceof Entry.Profile(GuestProfile p) && p.id().equals(profileId)) {
+				all.remove(i);
+				if (i < index) {
+					index--;
+				}
+			}
+		}
+		index = Math.min(index, all.size() - 1);
+	}
+
 	/** What the carousel offers now, in order. */
 	public List<Entry> entries() {
 		List<Entry> out = new ArrayList<>();

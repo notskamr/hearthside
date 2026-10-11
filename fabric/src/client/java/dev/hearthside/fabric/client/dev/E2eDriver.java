@@ -29,6 +29,7 @@ import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
 import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.host.ControlsScreen;
+import dev.hearthside.fabric.client.host.ManageProfilesScreen;
 import dev.hearthside.fabric.client.host.NewWorldScreen;
 import dev.hearthside.fabric.client.host.SeatCard;
 import dev.hearthside.fabric.client.host.WorldsScreen;
@@ -131,6 +132,8 @@ public final class E2eDriver {
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
 						this::controlsRemap);
+				step("M1 holding Y deletes an unused profile; a profile in use is refused; letting go early cancels",
+						this::manageProfiles);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
 				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
@@ -958,6 +961,10 @@ public final class E2eDriver {
 	}
 
 	private void controlsRemap() throws Exception {
+		check(onRender(() -> minecraft.gui.screen().children().stream()
+				.filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance).count()) == 2,
+				"the lobby's footer has only Back and Start (a seat's own buttons are on its card)");
+		screenshot("lobby-ready");
 		press(LOBBY_PAD, PadButton.X);
 		check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.MORE), "X on the ready card opens More");
 		check(onRender(() -> card(1).moreFocus()) == SeatCard.MoreEntry.CONTROLS, "More starts on Controls");
@@ -1013,6 +1020,56 @@ public final class E2eDriver {
 		press(LOBBY_PAD, PadButton.B);
 		check(ControlScheme.presetName(storedProfile("Birch").controls()).orElse("").equals("Bedrock")
 				&& onRender(() -> card(1) == null), "Birch is back on Bedrock and ready");
+	}
+
+	/** Holds a button down for a while, then lets go. */
+	private void hold(int pad, PadButton button, long millis) throws InterruptedException {
+		PADS.set(pad, new InputFrame(0, InputFrame.buttons(button), 0, 0, 0, 0, 0, 0));
+		Thread.sleep(millis);
+		PADS.set(pad, InputFrame.NEUTRAL);
+		Thread.sleep(150);
+	}
+
+	private boolean stored(String name) throws IOException {
+		return new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json")).load().stream()
+				.anyMatch(p -> p.name().equals(name));
+	}
+
+	private void manageProfiles() throws Exception {
+		// A spare profile nobody plays, first in the list.
+		ProfileStore store = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
+		List<GuestProfile> saved = new ArrayList<>(store.load());
+		saved.add(0, new GuestProfile(UUID.nameUUIDFromBytes("Spare".getBytes()), "Spare", SkinRef.defaultSkin("steve"),
+				null));
+		store.save(saved);
+		press(LOBBY_PAD, PadButton.X);
+		pressUntil(LOBBY_PAD, PadButton.DPAD_DOWN, 3, () -> card(1).moreFocus() == SeatCard.MoreEntry.MANAGE);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ManageProfilesScreen m && m.seat() == 1
+				&& m.names().contains("Spare") && m.names().contains("Birch")), "Profiles lists the saved profiles");
+		ManageProfilesScreen screen = onRender(() -> (ManageProfilesScreen) minecraft.gui.screen());
+		checkOwnHintsOnly("the profiles screen");
+		pressUntil(LOBBY_PAD, PadButton.DPAD_RIGHT, 8, () -> "Birch".equals(screen.focusedName()));
+		hold(LOBBY_PAD, PadButton.Y, 2000);
+		check(stored("Birch") && onRender(screen::problem) != null && onRender(screen::problem).contains("playing"),
+				"Birch is seat 2's: holding Y is refused, and the card says why");
+		pressUntil(LOBBY_PAD, PadButton.DPAD_LEFT, 8, () -> "Spare".equals(screen.focusedName()));
+		hold(LOBBY_PAD, PadButton.Y, 600);
+		check(stored("Spare") && onRender(screen::progress) == 0, "letting go early keeps it");
+		PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y), 0, 0, 0, 0, 0, 0));
+		Thread.sleep(300);
+		screenshot("manage-profiles");
+		Thread.sleep(1200);
+		PADS.set(LOBBY_PAD, InputFrame.NEUTRAL);
+		Thread.sleep(300);
+		check(!stored("Spare") && !onRender(screen::names).contains("Spare"), "holding Y for 1.5 s deletes it");
+		check(stored("Birch") && stored("Hazel"), "nothing else is deleted");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) != null
+				&& card(1).stage() == SeatCard.Stage.MORE), "B goes back to the card's More");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().seatView(1).status().equals("Ready")),
+				"and B again to the ready seat");
 	}
 
 	private void cardBackAndLeave() throws Exception {

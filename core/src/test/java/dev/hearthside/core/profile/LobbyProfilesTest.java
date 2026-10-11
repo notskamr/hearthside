@@ -54,6 +54,19 @@ class LobbyProfilesTest {
 	}
 
 	@Test
+	void carouselDropsADeletedProfile() {
+		// Deleted from Manage profiles while a card shows it: picking it must not bring it back.
+		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.<UUID>of()::contains, "pad-model-2");
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(kit));
+		carousel.remove(kit.id());
+		assertThat(carousel.entries()).containsExactly(new Entry.Profile(sam), new Entry.Profile(jo), new Entry.New());
+		assertThat(carousel.current()).isEqualTo(new Entry.New());
+		carousel.remove(sam.id());
+		carousel.next();
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(jo));
+	}
+
+	@Test
 	void carouselWithNoMatchStartsAtTheFirstProfile() {
 		assertThat(new ProfileCarousel(List.of(sam, jo), Set.<UUID>of()::contains, "other").current()).isEqualTo(new Entry.Profile(sam));
 		assertThat(new ProfileCarousel(List.of(sam, jo), Set.<UUID>of()::contains, null).current()).isEqualTo(new Entry.Profile(sam));

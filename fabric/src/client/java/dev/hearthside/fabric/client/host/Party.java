@@ -612,7 +612,48 @@ public final class Party {
 					minecraft.gui.setScreen(new ControlsScreen(lobby, this, player, card.moreProfile()));
 				}
 			}
-			case MANAGE, NONE -> { }
+			case MANAGE -> {
+				if (minecraft.gui.screen() instanceof LobbyScreen lobby) {
+					minecraft.gui.setScreen(new ManageProfilesScreen(lobby, this, player));
+				}
+			}
+			case NONE -> { }
+		}
+	}
+
+	/** Whether a seat is playing as this profile. */
+	public boolean profileInUse(UUID profileId) {
+		return slots.values().stream().anyMatch(s -> s.profile != null && s.profile.id().equals(profileId));
+	}
+
+	/** Deletes a saved profile nobody is playing as; open cards drop it. False if in use or it couldn't be saved. */
+	public boolean deleteProfile(UUID profileId) {
+		if (profileInUse(profileId)) {
+			return false;
+		}
+		try {
+			ProfileStore store = profileStore();
+			List<GuestProfile> profiles = new ArrayList<>(store.load());
+			if (!profiles.removeIf(p -> p.id().equals(profileId))) {
+				return false;
+			}
+			store.save(profiles);
+		} catch (IOException | IllegalArgumentException e) {
+			HearthsideMod.LOGGER.error("Could not delete a profile", e);
+			return false;
+		}
+		cards.values().forEach(card -> card.removeProfile(profileId));
+		HearthsideMod.LOGGER.info("Hearthside deleted a profile");
+		return true;
+	}
+
+	/** The saved guest profiles, least recently used first (empty if they can't be read). */
+	public List<GuestProfile> savedProfiles() {
+		try {
+			return profileStore().load();
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+			return List.of();
 		}
 	}
 

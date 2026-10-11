@@ -8,7 +8,7 @@ import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.input.RemapModel;
 import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.fabric.client.menu.MenuNavigator;
-import dev.hearthside.fabric.client.menu.PadScreen;
+import dev.hearthside.fabric.client.menu.SeatScreen;
 import dev.hearthside.fabric.client.ui.HearthDraw;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.HintChip;
@@ -27,7 +27,7 @@ import net.minecraft.network.chat.Component;
  * with its button; A on an action waits for the button to bind (swapping with whatever had it); LB/RB try the
  * presets; a strip at the bottom says what each pressed button would do. Menu saves, B discards.
  */
-public final class ControlsScreen extends Screen implements PadScreen {
+public final class ControlsScreen extends Screen implements SeatScreen {
 	private static final int ROWS = 8, ROW_H = 14, ROW_GAP = 2, TOP = 48;
 	private static final long LISTEN_NANOS = 5_000_000_000L;
 	private static final int ERROR_INK = 0xFFA8321E;
@@ -257,6 +257,7 @@ public final class ControlsScreen extends Screen implements PadScreen {
 
 	// ---- For the E2E ----
 
+	@Override
 	public int seat() {
 		return seat;
 	}
