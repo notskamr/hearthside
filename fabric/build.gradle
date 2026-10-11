@@ -33,6 +33,7 @@ loom {
 			client()
 			name = 'E2E Client'
 			vmArg '-Dhearthside.e2e=true'
+			vmArg '-Dhearthside.e2e.fakePads=true'
 			runDir 'run-e2e'
 		}
 

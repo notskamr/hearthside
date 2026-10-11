@@ -10,6 +10,7 @@ import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.MenuAction;
 import dev.hearthside.core.input.MenuIntent;
 import dev.hearthside.core.input.SlotGeometry;
+import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.mixin.KeyMappingAccessor;
 import java.util.ArrayList;
@@ -78,13 +79,22 @@ public final class InputApplier {
 		long now = System.nanoTime();
 		float dt = lastFrameNanos == 0 ? 0f : (now - lastFrameNanos) / 1e9f;
 		lastFrameNanos = now;
+		if (!isNeutral(frame) || !isNeutral(previous)) {
+			// Controller input is input: without this a satellite, which never sees OS input, is
+			// throttled to the "away from keyboard" frame rate.
+			minecraft.getFramerateLimitTracker().onInputReceived();
+		}
 
 		Screen screen = minecraft.gui.screen();
 		if (screen == null) {
+			if (inMenu) {
+				HearthsideMod.LOGGER.info("Hearthside controller: world mode");
+			}
 			inMenu = false;
 			applyGameplay(GamepadMapping.gameplay(scheme, previous, frame, dt));
 		} else {
 			if (!inMenu) {
+				HearthsideMod.LOGGER.info("Hearthside controller: menu mode ({})", screen.getClass().getSimpleName());
 				inMenu = true;
 				releaseHeld();
 				PadMovement.clear();
@@ -203,6 +213,11 @@ public final class InputApplier {
 			}
 		}
 		return centres;
+	}
+
+	private static boolean isNeutral(InputFrame f) {
+		return f.buttons() == 0 && f.leftX() == 0 && f.leftY() == 0 && f.rightX() == 0 && f.rightY() == 0
+				&& f.leftTrigger() == 0 && f.rightTrigger() == 0;
 	}
 
 	private void releaseHeld() {

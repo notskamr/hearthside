@@ -1,8 +1,17 @@
 package dev.hearthside.fabric.client.dev;
 
+import dev.hearthside.core.input.Action;
+import dev.hearthside.core.input.Control;
+import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.InputFrame;
+import dev.hearthside.core.input.PadButton;
+import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
+import dev.hearthside.core.profile.GuestProfile;
+import dev.hearthside.core.profile.ProfileStore;
+import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.host.HostSession;
 import dev.hearthside.fabric.client.window.WindowPlacer;
@@ -12,7 +21,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.Locale;
 import java.util.concurrent.Callable;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -22,6 +33,9 @@ import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.util.HttpUtil;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
@@ -71,6 +85,18 @@ public final class E2eDriver {
 			step("4 guest named like the host is refused", this::hostNameRefused);
 			step("4b opening and closing LAN keeps the guest", this::lanToggleKeepsGuest);
 			step("5 leave closes the satellite and restores the host window", this::leaveClosesSatellite);
+			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
+				step("P1 START on a new controller adds Player2", this::startJoins);
+				step("P2 left stick moves the guest", this::stickMoves);
+				step("P3 right stick turns the guest", this::stickTurns);
+				step("P4 RB advances the guest's hotbar", this::bumperSteps);
+				step("P7 rebound Y makes the guest jump", this::reboundJump);
+				step("P5 unplug pauses, replug resumes", this::unplugAndReplug);
+				step("P6 satellite ignores OS keyboard and mouse", this::satelliteIgnoresOsInput);
+				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
+				step("P9 Player2 leaves", this::player2Leaves);
+			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
 			openWorld();
@@ -164,6 +190,139 @@ public final class E2eDriver {
 		log("   satellites gone " + Duration.ofNanos(System.nanoTime() - start).toMillis() + " ms after world close");
 		waitFor("back on a menu", Duration.ofSeconds(60),
 				() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+	}
+
+	// ---- Controller steps (scripted pads) ----
+
+	private static final String PAD_GUID = "fake-dualsense";
+	private static final FakeGamepadSource PADS = FakeGamepadSource.INSTANCE;
+
+	private void rebindPlayer2Jump() throws Exception {
+		ProfileStore store = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
+		List<GuestProfile> profiles = new ArrayList<>(store.load());
+		profiles.removeIf(p -> p.name().equalsIgnoreCase("Player2"));
+		profiles.add(new GuestProfile(UUID.randomUUID(), "Player2", SkinRef.defaultSkin("alex"), null,
+				ControlScheme.BEDROCK.withBinding(Action.JUMP, Control.Y)));
+		store.save(profiles);
+	}
+
+	private void startJoins() throws Exception {
+		PADS.plug(101, PAD_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		press(101, PadButton.START);
+		waitFor("Player2 in the world", Duration.ofSeconds(180), () -> guest("Player2") != null);
+		// The server counts the guest as joined while its client still shows the terrain-loading
+		// screen; controller input only drives the player once that screen is gone.
+		waitFor("satellite in world mode", Duration.ofSeconds(60),
+				() -> satelliteLog().contains("hearthside controller: world mode"));
+	}
+
+	/** A 21×21 barrier platform high above the terrain, so walking tests never hit a wall. */
+	private void placeGuestOnTestPlatform() throws Exception {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		server.submit(() -> {
+			var source = server.createCommandSourceStack().withSuppressedOutput();
+			server.getCommands().performPrefixedCommand(source, "fill -10 249 -10 10 249 10 minecraft:barrier");
+			server.getCommands().performPrefixedCommand(source, "tp Player2 0.5 250 0.5 0 0");
+		}).join();
+		Thread.sleep(1000);
+	}
+
+	private void stickMoves() throws Exception {
+		placeGuestOnTestPlatform();
+		ServerPlayer guest = guest("Player2");
+		Vec3 start = guest.position();
+		PADS.set(101, new InputFrame(0, 0, 0, -1, 0, 0, 0, 0));
+		Thread.sleep(2000);
+		PADS.set(101, InputFrame.NEUTRAL);
+		double moved = guest.position().distanceTo(start);
+		log("   guest moved " + String.format("%.2f", moved) + " blocks");
+		check(moved > 1, "guest moved more than one block");
+	}
+
+	private void stickTurns() throws Exception {
+		ServerPlayer guest = guest("Player2");
+		float yaw = guest.getYRot();
+		// 0.4 s at full deflection is ~120°: under 180°, so the wrapped difference is unambiguous.
+		PADS.set(101, new InputFrame(0, 0, 0, 0, 1, 0, 0, 0));
+		Thread.sleep(400);
+		PADS.set(101, InputFrame.NEUTRAL);
+		Thread.sleep(300);
+		float turned = Math.abs(Mth.wrapDegrees(guest.getYRot() - yaw));
+		log("   guest turned " + String.format("%.1f", turned) + " degrees");
+		check(turned > 45, "guest turned more than 45 degrees");
+	}
+
+	private void bumperSteps() throws Exception {
+		ServerPlayer guest = guest("Player2");
+		int slot = guest.getInventory().getSelectedSlot();
+		press(101, PadButton.RIGHT_BUMPER);
+		waitFor("hotbar slot change", Duration.ofSeconds(5), () -> guest.getInventory().getSelectedSlot() == (slot + 1) % 9);
+	}
+
+	private void reboundJump() throws Exception {
+		ServerPlayer guest = guest("Player2");
+		double ground = guest.getY();
+		PADS.set(101, new InputFrame(0, InputFrame.buttons(PadButton.Y), 0, 0, 0, 0, 0, 0));
+		double peak = ground;
+		long end = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+		while (System.nanoTime() < end) {
+			peak = Math.max(peak, guest.getY());
+			Thread.sleep(20);
+		}
+		PADS.set(101, InputFrame.NEUTRAL);
+		log("   guest rose " + String.format("%.2f", peak - ground) + " blocks");
+		check(peak - ground > 0.5, "guest jumped with Y");
+	}
+
+	private void unplugAndReplug() throws Exception {
+		PADS.unplug(101);
+		waitFor("satellite paused", Duration.ofSeconds(10), () -> satelliteLog().contains("hearthside satellite paused"));
+		PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+		waitFor("satellite resumed", Duration.ofSeconds(10), () -> satelliteLog().contains("hearthside satellite resumed"));
+		PADS.set(102, InputFrame.NEUTRAL);
+		placeGuestOnTestPlatform();
+		ServerPlayer guest = guest("Player2");
+		Vec3 start = guest.position();
+		PADS.set(102, new InputFrame(0, 0, 0, -1, 0, 0, 0, 0));
+		Thread.sleep(2000);
+		PADS.set(102, InputFrame.NEUTRAL);
+		check(guest.position().distanceTo(start) > 1, "guest moves again after replug");
+	}
+
+	private void satelliteIgnoresOsInput() throws IOException {
+		check(satelliteLog().contains("hearthside satellite ignores os keyboard and mouse"), "satellite OS-input line");
+	}
+
+	private void padStyleReached() throws IOException {
+		check(satelliteLog().contains("hearthside setpadstyle playstation"), "SetPadStyle PLAYSTATION handled");
+	}
+
+	private void player2Leaves() throws Exception {
+		onRender(() -> {
+			HostSession.current().leave("Player2");
+			return null;
+		});
+		PADS.unplug(102);
+		waitFor("1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
+		waitFor("satellite exit", Duration.ofSeconds(15), () -> satellites().isEmpty());
+	}
+
+	private void press(int pad, PadButton button) throws InterruptedException {
+		PADS.set(pad, new InputFrame(0, InputFrame.buttons(button), 0, 0, 0, 0, 0, 0));
+		Thread.sleep(250);
+		PADS.set(pad, InputFrame.NEUTRAL);
+		Thread.sleep(100);
+	}
+
+	private ServerPlayer guest(String name) {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		return server == null ? null : server.getPlayerList().getPlayerByName(name);
+	}
+
+	private String satelliteLog() throws IOException {
+		Path log = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/logs/latest.log");
+		return Files.exists(log) ? Files.readString(log).toLowerCase(Locale.ROOT) : "";
 	}
 
 	private void openWorld() throws Exception {
