@@ -299,8 +299,9 @@ public final class LobbyScreen extends Screen {
 				// Another seat took that profile: say so on the card.
 				HearthDraw.inkCentred(g, font, Component.literal(card.problem()), c.centre(), c.bottom() - 56, ERROR_INK);
 			}
-			hint(g, c, style, Control.X, "More", c.bottom() - 43);
-			hints(g, c, style, Control.A, "Pick", Control.B, card.changing() ? "Keep" : "Leave");
+			// The main action first, then More, then leaving (as on a ready card).
+			hint(g, c, style, Control.A, "Pick", c.bottom() - 43);
+			hints(g, c, style, Control.X, "More", Control.B, card.changing() ? "Keep" : "Leave");
 			return;
 		}
 		QuickSetup setup = card.setup();
