@@ -25,6 +25,8 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 test {
+	// Lets JdkProcessLauncherTest prove inherited variables can be removed from child processes.
+	environment 'HEARTHSIDE_TEST_INHERITED', 'leak'
 	useJUnitPlatform {
 		includeEngines 'junit-jupiter', 'jqwik'
 	}
