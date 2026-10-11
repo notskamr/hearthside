@@ -135,9 +135,11 @@ final class ViewOverlay implements OverlayLayer {
 			return;
 		}
 		var font = Minecraft.getInstance().font;
-		// The free quarter with three players: the party panel and its live map.
-		party.panelRect().ifPresent(panel -> dev.hearthside.fabric.client.ui.PartyPanel.draw(g, font,
-				dev.hearthside.fabric.client.compositor.OverlayPass.inGui(panel, context.guiScale()), party.panelState()));
+		// The free quarter with three players: the party panel and its live map, fading in and out with the layout.
+		party.panelAt(context.nanos(), context.reduceMotion()).ifPresent(panel -> {
+			Rect inGui = dev.hearthside.fabric.client.compositor.OverlayPass.inGui(panel.rect(), context.guiScale());
+			dev.hearthside.fabric.client.ui.PartyPanel.draw(g, font, inGui, party.panelState(), panel.alpha());
+		});
 		for (ViewFrame view : context.views()) {
 			Rect r = view.rect();
 			int seat = view.seat();
@@ -147,13 +149,13 @@ final class ViewOverlay implements OverlayLayer {
 				if (cover < 1f && compositor.isStale(seat)) {
 					g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_PANEL, r.x(), r.y(), r.width(), r.height(), FROST);
 				}
-				SeatCard card = party.seatCard(seat);
+				SeatCard card = party.drawnCard(seat);
 				if (card != null) {
 					// Dropping in: they pick their profile right here, while everyone else plays on.
 					drawPicker(g, font, r, seat, card);
 				} else if (cover > 0f) {
-					CardPainter.joining(g, font, r, party.who(seat), party.viewPhase(seat),
-							party.joiningStuck(seat, context.nanos()), cover, context.nanos(), context.reduceMotion());
+					CardPainter.joining(g, font, r, party.who(seat), party.cardStatus(seat, context.nanos()), cover,
+							context.nanos(), context.reduceMotion());
 				}
 			}
 			if (context.views().size() > 1) {

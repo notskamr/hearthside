@@ -17,8 +17,8 @@ import java.util.Set;
 
 /**
  * The party's views in the one window (Spec A section 6): Spec A's layouts for the players in the world, player 1
- * top-left and the others in the order they joined, gliding whenever someone arrives or the window changes. Render
- * thread.
+ * top-left and the others in the order they joined, gliding whenever someone arrives or the window changes. A leaving
+ * view fades out where it is first; the party then re-lays out without it. Render thread.
  */
 final class Views implements ViewSource {
 	private final ViewMotion motion = new ViewMotion();
@@ -26,8 +26,10 @@ final class Views implements ViewSource {
 	private final List<Integer> order = new ArrayList<>();
 	private Rect window;
 	private Optional<Rect> panel = Optional.empty();
-	/** When the layout last changed (name tags show again for a while after). */
-	private long changedAt;
+	/** When the layout last changed (name tags show again for a while after), and the panel last appeared or went. */
+	private long changedAt, panelSince, panelGoneAt;
+	/** Where the panel was before it went (it fades out there), or null. */
+	private Rect lastPanel;
 
 	/** The guests now in the world and the window's size: views glide to the new layout (or jump, if the window changed). */
 	void update(Collection<Integer> guests, Rect newWindow, long now, boolean reduceMotion) {
@@ -44,6 +46,14 @@ final class Views implements ViewSource {
 		for (int i = 0; i < seats.size(); i++) {
 			targets.put(seats.get(i), plan.players().get(i));
 		}
+		if (plan.panel().isPresent() && panel.isEmpty()) {
+			panelSince = now;
+		}
+		// A panel that goes fades out where it was while the views glide over it (one cut by a resize just goes).
+		lastPanel = plan.panel().isEmpty() && !resized ? panel.orElse(lastPanel) : null;
+		if (plan.panel().isEmpty() && panel.isPresent()) {
+			panelGoneAt = now;
+		}
 		panel = plan.panel();
 		changedAt = now;
 		if (first) {
@@ -55,6 +65,22 @@ final class Views implements ViewSource {
 		} else {
 			motion.retarget(targets, now, reduceMotion);
 		}
+	}
+
+	/** A guest leaves: their view fades out where it is while everyone else stays put; then {@link #update} without them. */
+	void leave(int seat, long now) {
+		order.remove(Integer.valueOf(seat));
+		motion.leave(seat, Map.of(), now, false);
+	}
+
+	/** Whether a leaving view is still fading out. */
+	boolean fading(long now) {
+		return motion.fading(now);
+	}
+
+	/** Whether any view is still fading or gliding. */
+	boolean moving(long now) {
+		return motion.moving(now);
 	}
 
 	@Override
@@ -76,8 +102,19 @@ final class Views implements ViewSource {
 		return changedAt;
 	}
 
-	/** The party panel's place (with three players), or empty. */
-	Optional<Rect> panel() {
-		return panel;
+	/** Where the party panel is drawn now, and how opaque: it fades in as it appears and out as it goes. */
+	record PanelDraw(Rect rect, float alpha) {}
+
+	/** The party panel (with three players) as drawn now, or empty. */
+	Optional<PanelDraw> panelAt(long now, boolean reduceMotion) {
+		if (panel.isPresent()) {
+			return Optional.of(new PanelDraw(panel.get(), reduceMotion ? 1f : progress(panelSince, now)));
+		}
+		float shown = lastPanel == null || reduceMotion ? 0f : 1f - progress(panelGoneAt, now);
+		return shown > 0f ? Optional.of(new PanelDraw(lastPanel, shown)) : Optional.empty();
+	}
+
+	private static float progress(long since, long now) {
+		return Math.clamp((now - since) / (float) ViewMotion.GLIDE.toNanos(), 0f, 1f);
 	}
 }

@@ -19,6 +19,7 @@ import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -77,6 +78,8 @@ public final class Compositor {
 	private ViewSource views;
 	/** A guest's frames at a new size (or from a restarted game), drawn from the first frame they publish. */
 	private final Map<Integer, Import> incoming = new HashMap<>();
+	/** Seats whose game crashed: their last picture stays (under their card) until their restarted game is in the world. */
+	private final Set<Integer> holding = new HashSet<>();
 	/** Views as drawn this frame: computed once, shared by the overlay pass (which runs first) and present. */
 	private List<ViewFrame> frames = List.of();
 	private boolean framesFresh;
@@ -123,17 +126,7 @@ public final class Compositor {
 		c.layoutWidth = windowWidth;
 		c.layoutHeight = windowHeight;
 		c.screenPerFb = screenPerFramebuffer(minecraft);
-		Set<Integer> seats = views.seats();
-		for (Integer gone : List.copyOf(c.imports.keySet())) {
-			if (!seats.contains(gone)) {
-				c.retired.add(c.imports.remove(gone));
-			}
-		}
-		for (Integer gone : List.copyOf(c.incoming.keySet())) {
-			if (!seats.contains(gone)) {
-				c.retired.add(c.incoming.remove(gone));
-			}
-		}
+		c.retireGone();
 		Rect host = views.target(0).orElse(new Rect(0, 0, windowWidth, windowHeight));
 		if (c.hostViewport == null) {
 			c.hostViewport = host;
@@ -201,6 +194,18 @@ public final class Compositor {
 	/** Whether a seat's picture was waiting for its new size last frame (drawn blurred). */
 	public boolean isStale(int seat) {
 		return stale.contains(seat);
+	}
+
+	/**
+	 * While held, a seat keeps showing the last picture it had (its game crashed) and a restarted game's frames wait;
+	 * once let go, they show from its next frame.
+	 */
+	public void holdLastFrame(int seat, boolean hold) {
+		if (hold) {
+			holding.add(seat);
+		} else {
+			holding.remove(seat);
+		}
 	}
 
 	public Rect hostViewport() {
@@ -326,6 +331,7 @@ public final class Compositor {
 			}
 			releaseFinished(imp);
 		}
+		retireGone();
 		closeRetired();
 		if (probe) {
 			probeGuests(swapHeight);
@@ -357,7 +363,8 @@ public final class Compositor {
 		Import next = incoming.get(seat);
 		if (next != null) {
 			acquire(next);
-			if (next.held >= 0 || imp == null) {
+			// A restarted game's frames wait (its title and loading screens) while the last picture is held.
+			if ((next.held >= 0 && !holding.contains(seat)) || imp == null) {
 				incoming.remove(seat);
 				if (imp != null) {
 					retired.add(imp);
@@ -409,6 +416,22 @@ public final class Compositor {
 			glDeleteSync(next[1]);
 			imp.slots.release((int) next[0]);
 		}
+	}
+
+	/** A seat with no view any more (gone, or faded out after leaving) lets go of its game's frames. */
+	private void retireGone() {
+		Set<Integer> seats = views.seats();
+		for (Integer gone : List.copyOf(imports.keySet())) {
+			if (!seats.contains(gone)) {
+				retired.add(imports.remove(gone));
+			}
+		}
+		for (Integer gone : List.copyOf(incoming.keySet())) {
+			if (!seats.contains(gone)) {
+				retired.add(incoming.remove(gone));
+			}
+		}
+		holding.retainAll(seats);
 	}
 
 	private void closeRetired() {
@@ -471,12 +494,21 @@ public final class Compositor {
 		}
 	}
 
-	/** E2E: reads the centre of every view this frame; the bare divider colour there is a gap (logged at most 4×/s). */
+	/**
+	 * E2E: reads the centre of every settled view this frame; the bare divider colour there is a gap (logged at most
+	 * 4×/s). A view fading in or out shows the divider through it on purpose: its alpha is logged instead.
+	 */
 	private void sampleGaps(int swapHeight) {
 		int previousRead = glGetInteger(GL_READ_FRAMEBUFFER_BINDING);
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 		long now = System.nanoTime();
-		drawn.forEach((seat, rect) -> {
+		for (ViewFrame view : frames) {
+			int seat = view.seat();
+			Rect rect = view.rect();
+			if (view.alpha() < 1f) {
+				HearthsideMod.LOGGER.info("Hearthside compositor fade seat={} alpha={}", seat, String.format(Locale.ROOT, "%.2f", view.alpha()));
+				continue;
+			}
 			glReadPixels(rect.x() + rect.width() / 2, swapHeight - (rect.y() + rect.height() / 2) - 1, 1, 1, GL_RGBA,
 					GL_UNSIGNED_BYTE, probePixel);
 			boolean bare = (probePixel.get(0) & 0xFF) == 0x12 && (probePixel.get(1) & 0xFF) == 0x0c
@@ -485,7 +517,7 @@ public final class Compositor {
 				lastGapLog.put(seat, now);
 				HearthsideMod.LOGGER.info("Hearthside compositor gap player={}", seat + 1);
 			}
-		});
+		}
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
 	}
 

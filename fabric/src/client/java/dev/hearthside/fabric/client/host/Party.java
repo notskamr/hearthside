@@ -108,6 +108,15 @@ public final class Party {
 	private Views views = new Views();
 	/** What each guest's view shows: their card while they join, then their game (fresh for each split-screen run). */
 	private ViewPhases phases = new ViewPhases();
+	/** Guests whose views are fading out: who they were (and their card, if they were still picking), drawn as they were. */
+	private record Leaving(dev.hearthside.fabric.client.ui.CardPainter.Who who, SeatCard card) {}
+	private final Map<Integer, Leaving> leaving = new HashMap<>();
+	/** A view is fading out; once it has gone, the others glide into its space. */
+	private boolean relayoutAfterFade;
+	/** The views are gliding after a leave; once they settle it is logged (and with nobody left, split-screen ends). */
+	private boolean settling;
+	/** When the last leave began. */
+	private long leaveAt;
 	private final ViewOverlay viewOverlay = new ViewOverlay(this);
 	/** The party panel's live map: sampled on the server thread, drawn from a texture. */
 	private final MapSampler mapSampler;
@@ -250,6 +259,11 @@ public final class Party {
 			throw new IllegalStateException("Controllers are unavailable");
 		}
 		input.armClaim();
+	}
+
+	/** E2E: a guest's game leaves the world, as its own pause menu's Disconnect would. */
+	public void e2eDisconnectGuest(int index) {
+		sendToGuest(index, new ControlMessage.Lifecycle(LifecycleCommand.DISCONNECT));
 	}
 
 	void sendToGuest(int index, ControlMessage message) {
@@ -395,6 +409,9 @@ public final class Party {
 		if (index < 0) {
 			throw new IllegalStateException("All 3 guest slots are taken");
 		}
+		// The seat may still be fading out from whoever had it last: the newcomer starts afresh.
+		leaving.remove(index);
+		phases.remove(index);
 
 		Slot slot = new Slot(index, profile);
 		Path satelliteDir = gameDir.resolve("hearthside").resolve("satellite-" + index);
@@ -408,7 +425,10 @@ public final class Party {
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
-		}, satelliteDir.resolve("logs").resolve("hearthside-launch.log"), RestartPolicy.DEFAULT,
+		}, satelliteDir.resolve("logs").resolve("hearthside-launch.log"),
+				// E2E: no restarts, so the first crash gives up.
+				Boolean.getBoolean("hearthside.e2e.failRestarts") ? new RestartPolicy(List.of(), Duration.ofMinutes(1))
+						: RestartPolicy.DEFAULT,
 				(task, delay) -> scheduler.schedule(task, delay.toMillis(), TimeUnit.MILLISECONDS),
 				Clock.systemUTC(), new SlotListener(slot));
 		if (slots.isEmpty()) {
@@ -425,7 +445,7 @@ public final class Party {
 		return index;
 	}
 
-	/** Removes a guest and closes their satellite. Runs on the render thread. */
+	/** Removes a guest and closes their satellite: their view fades out and the layout glides back. Render thread. */
 	public void leave(String name) {
 		Slot slot = slots.values().stream()
 				.filter(s -> s.profile != null && s.profile.name().equalsIgnoreCase(name))
@@ -586,6 +606,10 @@ public final class Party {
 		if (current == null) {
 			return PadStyle.XBOX;
 		}
+		Leaving gone = player > 0 ? gone(player) : null;
+		if (gone != null) {
+			return gone.who().style(); // their controller has gone already; their fading card still shows its buttons
+		}
 		if (player >= 0) {
 			return current.hasPadFor(player) ? current.styleFor(player) : PadStyle.XBOX;
 		}
@@ -623,6 +647,22 @@ public final class Party {
 		return driver >= 0 && current.hasPadFor(driver) ? current.styleFor(driver) : padStyleOf(-1);
 	}
 
+	/** How long a card says a game couldn't start before the view fades out. */
+	private static final Duration FAILED_SHOWN = Duration.ofMillis(2500);
+
+	/** Keeps showing a seat's last picture from its game (it crashed) until its restarted game is in the world. */
+	private static void holdLastFrame(int seat, boolean hold) {
+		Compositor compositor = Compositor.active();
+		if (compositor != null) {
+			compositor.holdLastFrame(seat, hold);
+		}
+	}
+
+	/** A seat whose player has left and whose view is still fading out, or null. */
+	private Leaving gone(int seat) {
+		return slots.containsKey(seat) ? null : leaving.get(seat);
+	}
+
 	/** A guest's chosen profile, or null while they are choosing (or the seat is free). */
 	public GuestProfile profileOf(int index) {
 		Slot slot = slots.get(index);
@@ -634,6 +674,13 @@ public final class Party {
 	/** The card of a seat still choosing its profile, or null. */
 	public SeatCard seatCard(int player) {
 		return cards.get(player);
+	}
+
+	/** The card drawn in a seat's view: theirs while they pick, or the one they left with while their view fades. */
+	SeatCard drawnCard(int seat) {
+		SeatCard card = cards.get(seat);
+		Leaving gone = gone(seat);
+		return card != null || gone == null ? card : gone.card();
 	}
 
 	boolean hasSeatCard(int player) {
@@ -842,6 +889,10 @@ public final class Party {
 		if (player == 0) {
 			return hostColor;
 		}
+		Leaving gone = gone(player);
+		if (gone != null) {
+			return gone.who().colour();
+		}
 		Slot slot = slots.get(player);
 		GuestProfile profile = slot == null ? null : slot.profile;
 		return displayColor(player,
@@ -1021,9 +1072,9 @@ public final class Party {
 
 	// ---- The party panel (three players) ----
 
-	/** Where the party panel goes (the free quarter with three players), in window pixels. */
-	java.util.Optional<Rect> panelRect() {
-		return views.panel();
+	/** Where the party panel is drawn now (the free quarter with three players, in window pixels) and how opaque. */
+	java.util.Optional<Views.PanelDraw> panelAt(long now, boolean reduceMotion) {
+		return views.panelAt(now, reduceMotion);
 	}
 
 	/** How much of the party map has ground on it. For the E2E. */
@@ -1065,8 +1116,10 @@ public final class Party {
 			String name = slot.profile != null ? slot.profile.name() : slot.displayName();
 			String status = switch (viewPhase(index)) {
 				case PICKING -> "picking…";
-				case JOINING, RECONNECTING -> "joining…";
-				case LIVE, LEAVING -> placeOf(elsewhere.get(name));
+				case JOINING -> "joining…";
+				case RECONNECTING -> "reconnecting…";
+				case FAILED -> "couldn't start";
+				case LIVE -> placeOf(elsewhere.get(name));
 			};
 			seats.add(new dev.hearthside.fabric.client.ui.PartyPanel.Seat(name, colorOf(index), status));
 		});
@@ -1123,7 +1176,7 @@ public final class Party {
 
 	/** A picking newcomer's card colour: quick setup's pick, else the profile on their carousel, else their seat's. */
 	int pickerColour(int seat) {
-		SeatCard card = cards.get(seat);
+		SeatCard card = drawnCard(seat);
 		if (card != null && card.setup() != null) {
 			return card.setup().color();
 		}
@@ -1135,7 +1188,7 @@ public final class Party {
 
 	/** A picking newcomer's skin, as their card shows it. */
 	net.minecraft.world.entity.player.PlayerSkin pickerSkin(int seat) {
-		SeatCard card = cards.get(seat);
+		SeatCard card = drawnCard(seat);
 		dev.hearthside.core.profile.SkinRef skin = null;
 		if (card != null && card.setup() != null) {
 			skin = card.setup().skin();
@@ -1153,9 +1206,25 @@ public final class Party {
 		return phases.stuck(seat, now);
 	}
 
+	/** What a seat's card says while their game joins, restarts or gives up. */
+	dev.hearthside.fabric.client.ui.CardPainter.Status cardStatus(int seat, long now) {
+		boolean stuck = phases.stuck(seat, now);
+		return switch (viewPhase(seat)) {
+			case RECONNECTING -> stuck ? dev.hearthside.fabric.client.ui.CardPainter.Status.STILL_RECONNECTING
+					: dev.hearthside.fabric.client.ui.CardPainter.Status.RECONNECTING;
+			case FAILED -> dev.hearthside.fabric.client.ui.CardPainter.Status.COULDNT_START;
+			case PICKING, JOINING, LIVE -> stuck ? dev.hearthside.fabric.client.ui.CardPainter.Status.STILL_JOINING
+					: dev.hearthside.fabric.client.ui.CardPainter.Status.JOINING;
+		};
+	}
+
 	/** Who a seat is, for their card: name, skin, colour and controller family. */
 	dev.hearthside.fabric.client.ui.CardPainter.Who who(int seat) {
-		Slot slot = slots.get(seat);
+		Leaving gone = gone(seat);
+		return gone != null ? gone.who() : who(seat, slots.get(seat));
+	}
+
+	private dev.hearthside.fabric.client.ui.CardPainter.Who who(int seat, Slot slot) {
 		GuestProfile profile = slot == null ? null : slot.profile;
 		String name = profile != null ? profile.name() : slot != null ? slot.displayName() : "Player " + (seat + 1);
 		return new dev.hearthside.fabric.client.ui.CardPainter.Who(name, LobbyScreen.skin(profile == null ? null : profile.skin()),
@@ -1166,6 +1235,7 @@ public final class Party {
 	private void guestInWorld(int index) {
 		HearthsideMod.LOGGER.info("Hearthside seat {} in world", index);
 		phases.inWorld(index, System.nanoTime());
+		holdLastFrame(index, false); // a restarted game's own frames now (its card crossfades into them)
 		String controller = controllerOfSlot.get(index);
 		if (controller != null) {
 			apply(flow.loaded(controller));
@@ -1293,10 +1363,15 @@ public final class Party {
 		minecraft.gui.chatListener().handleSystemMessage(message, false);
 	}
 
+	/** A guest's seat is free again. In the world their view fades out where it is, then the others glide. */
 	private void removeSlot(Slot slot) {
+		if (slots.get(slot.index) != slot) {
+			return; // already gone
+		}
+		// Who they were, while their view fades: read while the seat still has its profile, colour and controller.
+		dev.hearthside.fabric.client.ui.CardPainter.Who who = who(slot.index, slot);
 		slots.remove(slot.index, slot);
-		minecraft.execute(() -> phases.remove(slot.index));
-		cards.remove(slot.index);
+		SeatCard card = cards.remove(slot.index);
 		String controller = controllerOfSlot.remove(slot.index);
 		if (controller != null) {
 			minecraft.execute(() -> flow.leave(controller));
@@ -1309,8 +1384,64 @@ public final class Party {
 			if (input != null) {
 				input.release(slot.index);
 			}
-			afterGuestsChanged();
+			if (slots.containsKey(slot.index)) {
+				afterGuestsChanged(); // someone new has the seat already
+			} else if (!fadeOut(slot.index, new Leaving(who, card))) {
+				phases.remove(slot.index);
+				afterGuestsChanged();
+			}
 		});
+	}
+
+	/**
+	 * Fades a leaving guest's view out where it is, looking just as it did, while everyone else plays on; the others
+	 * glide into its space once it has gone ({@link #frame}). False when there is no view to fade (no world, tiled
+	 * windows, reduce motion). Render thread.
+	 */
+	private boolean fadeOut(int seat, Leaving who) {
+		if (!composite || world == null || hostReduceMotion || Compositor.active() == null || !views.seats().contains(seat)) {
+			return false;
+		}
+		long now = System.nanoTime();
+		leaving.put(seat, who);
+		views.leave(seat, now);
+		relayoutAfterFade = true;
+		leaveAt = now;
+		return true;
+	}
+
+	/**
+	 * Each frame: once a leaving view has faded out, the others glide into its space (with nobody left, player 1's view
+	 * glides back to the whole window); once they settle, split-screen ends if nobody is left. Render thread.
+	 */
+	void frame(long now) {
+		if (relayoutAfterFade && !views.fading(now)) {
+			relayoutAfterFade = false;
+			for (Integer seat : List.copyOf(leaving.keySet())) {
+				if (!slots.containsKey(seat)) {
+					leaving.remove(seat);
+					phases.remove(seat);
+				}
+			}
+			settling = true;
+			afterGuestsChanged();
+		} else if (settling && !relayoutAfterFade && !views.moving(now)) {
+			settling = false;
+			HearthsideMod.LOGGER.info("Hearthside layout settled {} ms after a leave", (now - leaveAt) / 1_000_000L);
+			if (slots.isEmpty()) {
+				leaveSplitScreen();
+			}
+		}
+	}
+
+	/** B on a card stuck joining: that player gives up their seat. Render thread. */
+	void cancelJoin(int seat) {
+		Slot slot = slots.get(seat);
+		if (slot != null) {
+			HearthsideMod.LOGGER.info("Hearthside seat {} gave up joining", seat);
+			endSlot(slot);
+			removeSlot(slot);
+		}
 	}
 
 	private void stopAllSatellites() {
@@ -1336,13 +1467,24 @@ public final class Party {
 					slot.connection = connection;
 					connection.onMessage(message -> {
 						if (message instanceof ControlMessage.InWorld) {
-							minecraft.execute(() -> guestInWorld(slot.index));
+							minecraft.execute(() -> {
+								if (slots.get(slot.index) == slot) {
+									guestInWorld(slot.index);
+								}
+							});
 						} else if (message instanceof ControlMessage.LeftWorld) {
-							minecraft.execute(() -> HearthsideMod.LOGGER.info("Hearthside seat {} left its world", slot.index));
+							minecraft.execute(() -> {
+								HearthsideMod.LOGGER.info("Hearthside seat {} left its world", slot.index);
+								// Left from their own game (its pause menu): the player leaves the party.
+								if (slots.get(slot.index) == slot && world != null) {
+									endSlot(slot);
+									removeSlot(slot);
+								}
+							});
 						} else if (message instanceof ControlMessage.FrameSlotsReady ready) {
 							minecraft.execute(() -> {
 								Compositor compositor = Compositor.active();
-								if (compositor != null) {
+								if (compositor != null && slots.get(slot.index) == slot) {
 									compositor.onGuestSlots(slot.index, ready);
 								}
 							});
@@ -1397,6 +1539,9 @@ public final class Party {
 		splitScreen = false;
 		views = new Views();
 		phases = new ViewPhases();
+		leaving.clear();
+		relayoutAfterFade = false;
+		settling = false;
 		mapTexture.close();
 		OverlayPass.unregister(viewOverlay);
 		if (Compositor.active() != null) {
@@ -1417,10 +1562,11 @@ public final class Party {
 			}
 			return;
 		}
-		if (guests.isEmpty()) {
+		if (guests.isEmpty() && !(composite && settling && Compositor.active() != null)) {
 			leaveSplitScreen();
 			return;
 		}
+		// (After the last guest's view has faded out, player 1's glides back to the whole window before split-screen ends.)
 		int refresh = WindowPlacer.refreshHz(minecraft.getWindow());
 		if (composite) {
 			// One window: lay every player out inside this window's framebuffer; the window itself stays put.
@@ -1512,7 +1658,13 @@ public final class Party {
 		@Override
 		public void restarting(int consecutiveFailures, Duration delay) {
 			HearthsideMod.LOGGER.warn("Satellite for {} stopped; restarting in {}s", slot.displayName(), delay.toSeconds());
-			minecraft.execute(() -> phases.reconnecting(slot.index, System.nanoTime()));
+			minecraft.execute(() -> {
+				if (slots.get(slot.index) == slot) {
+					// Their card comes back over the last picture from their game, which stays until the new one is in.
+					phases.reconnecting(slot.index, System.nanoTime());
+					holdLastFrame(slot.index, true);
+				}
+			});
 			chat(Component.literal(slot.displayName() + "'s game stopped; restarting in " + delay.toSeconds() + "s")
 					.withStyle(ChatFormatting.YELLOW));
 		}
@@ -1522,13 +1674,22 @@ public final class Party {
 			HearthsideMod.LOGGER.error("Satellite for {} keeps crashing (exit {}); giving up", slot.displayName(), exitCode);
 			chat(Component.literal(slot.displayName() + "'s game keeps crashing. See hearthside/satellite-" + slot.index
 					+ "/logs for details.").withStyle(ChatFormatting.RED));
+			minecraft.execute(() -> {
+				if (slots.get(slot.index) == slot) {
+					HearthsideMod.LOGGER.info("Hearthside seat {} couldn't start", slot.index);
+					phases.failed(slot.index, System.nanoTime());
+					holdLastFrame(slot.index, true);
+				}
+			});
+			// Their card says so for a moment; then their view fades out.
+			scheduler.schedule(() -> minecraft.execute(() -> removeSlot(slot)), FAILED_SHOWN.toMillis(), TimeUnit.MILLISECONDS);
 		}
 
 		@Override
 		public void ended() {
 			HearthsideMod.LOGGER.info("{} closed their game window", slot.displayName());
 			chat(Component.literal(slot.displayName() + " left."));
-			removeSlot(slot);
+			minecraft.execute(() -> removeSlot(slot));
 		}
 
 		private void chat(Component message) {

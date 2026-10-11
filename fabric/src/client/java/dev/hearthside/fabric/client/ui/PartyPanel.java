@@ -34,35 +34,37 @@ public final class PartyPanel {
 
 	private PartyPanel() {}
 
-	public static void draw(GuiGraphicsExtractor g, Font font, Rect panel, State state) {
-		CardPainter.board(g, panel, 1f);
+	/** Draws the panel at {@code alpha} (it fades in and out with the layout). */
+	public static void draw(GuiGraphicsExtractor g, Font font, Rect panel, State state, float alpha) {
+		int white = fade(0xFFFFFFFF, alpha);
+		CardPainter.board(g, panel, alpha);
 		int margin = Math.max(4, Math.round(Math.min(panel.width(), panel.height()) * 0.07f));
 		Rect box = new Rect(panel.x() + margin, panel.y() + margin, panel.width() - 2 * margin, panel.height() - 2 * margin);
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_PANEL, box.x(), box.y(), box.width(), box.height());
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_PANEL, box.x(), box.y(), box.width(), box.height(), white);
 		int pad = 6;
 		int map = Math.min(box.height() - 2 * pad, Math.round(box.width() * 0.55f));
 		int mx = box.x() + pad, my = box.y() + (box.height() - map) / 2;
 		// Parchment where nothing is loaded yet, the ground's colours over it.
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.PARCHMENT_CARD, mx - 1, my - 1, map + 2, map + 2);
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.PARCHMENT_CARD, mx - 1, my - 1, map + 2, map + 2, white);
 		if (state.map() != null) {
-			g.blit(RenderPipelines.GUI_TEXTURED, state.map(), mx, my, 0, 0, map, map, 128, 128, 128, 128);
+			g.blit(RenderPipelines.GUI_TEXTURED, state.map(), mx, my, 0, 0, map, map, 128, 128, 128, 128, white);
 		}
 		int arrow = Math.clamp(map / 13, 5, 9);
 		for (PartyMapView.Marker marker : state.markers()) {
-			drawArrow(g, mx + marker.u() * map, my + marker.v() * map, marker.angleDegrees(), arrow, marker.colour());
+			drawArrow(g, mx + marker.u() * map, my + marker.v() * map, marker.angleDegrees(), arrow, marker.colour(), alpha);
 		}
 		int right = box.x() + box.width() - pad;
 		int dx = mx + map + 8;
 		int width = right - dx;
 		int y = box.y() + pad;
-		HearthDraw.label(g, font, Component.literal("Party"), dx, y, ORANGE);
+		HearthDraw.label(g, font, Component.literal("Party"), dx, y, fade(ORANGE, alpha));
 		y += 12;
 		// The day: a sun or moon, the day and time, and the weather when it fits.
 		long time = Math.floorMod(state.dayTime(), 24000L);
 		long day = state.dayTime() / 24000L + 1;
 		boolean night = time >= 13500 && time < 23000;
 		Identifier sky = night ? HearthSprites.MOON : HearthSprites.SUN;
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, sky, dx, y, 8, 8);
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, sky, dx, y, 8, 8, white);
 		String dayLine = "Day " + day + " · " + timeOfDay(time);
 		String weather = switch (state.weather()) {
 			case CLEAR -> "";
@@ -76,7 +78,7 @@ public final class PartyPanel {
 			dayLine = "Day " + day;
 		}
 		if (font.width(dayLine) <= textWidth) {
-			HearthDraw.label(g, font, Component.literal(dayLine), textX, y, MUTED);
+			HearthDraw.label(g, font, Component.literal(dayLine), textX, y, fade(MUTED, alpha));
 			y += 12;
 		}
 		int joinY = box.y() + box.height() - pad - 11;
@@ -84,33 +86,39 @@ public final class PartyPanel {
 			if (y + 9 > (state.joinPrompt() ? joinY - 2 : box.y() + box.height() - pad)) {
 				break;
 			}
-			g.fill(dx, y + 2, dx + 5, y + 7, 0xFF000000 | seat.colour());
+			g.fill(dx, y + 2, dx + 5, y + 7, fade(0xFF000000 | seat.colour(), alpha));
 			String status = seat.status() == null ? "" : " " + seat.status();
 			int nameWidth = width - 8 - font.width(status);
 			String name = font.plainSubstrByWidth(seat.name(), Math.max(12, nameWidth));
-			HearthDraw.label(g, font, Component.literal(name), dx + 8, y, CREAM);
+			HearthDraw.label(g, font, Component.literal(name), dx + 8, y, fade(CREAM, alpha));
 			if (!status.isEmpty() && font.width(name + status) <= width - 8) {
-				HearthDraw.label(g, font, Component.literal(status), dx + 8 + font.width(name), y, MUTED);
+				HearthDraw.label(g, font, Component.literal(status), dx + 8 + font.width(name), y, fade(MUTED, alpha));
 			}
 			y += 11;
 		}
 		if (state.joinPrompt()) {
-			int gw = HearthDraw.glyph(g, Control.A, state.joinStyle(), dx, joinY);
-			HearthDraw.label(g, font, Component.literal("to join"), dx + gw + 3, joinY + 2, MUTED);
+			int gw = HearthDraw.glyph(g, Control.A, state.joinStyle(), dx, joinY, white);
+			HearthDraw.label(g, font, Component.literal("to join"), dx + gw + 3, joinY + 2, fade(MUTED, alpha));
 		}
 		lastPanel = panel;
 		lastBounds = new Rect(box.x(), box.y(), box.width(), box.height());
 	}
 
+	/** {@code argb} with its alpha scaled by {@code alpha}. */
+	private static int fade(int argb, float alpha) {
+		return Math.round((argb >>> 24) * alpha) << 24 | (argb & 0xFFFFFF);
+	}
+
 	/** A player's arrow: a dark outline with a cream rim, filled with their colour, turned to face their way. */
-	private static void drawArrow(GuiGraphicsExtractor g, float x, float y, float degrees, int size, int colour) {
+	private static void drawArrow(GuiGraphicsExtractor g, float x, float y, float degrees, int size, int colour, float alpha) {
 		int height = size + size / 4;
 		g.pose().pushMatrix();
 		g.pose().translate(x, y);
 		g.pose().rotate((float) Math.toRadians(degrees));
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.MAP_ARROW_RIM, -size / 2, -height / 2, size, height);
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.MAP_ARROW_RIM, -size / 2, -height / 2, size, height,
+				fade(0xFFFFFFFF, alpha));
 		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.MAP_ARROW_FILL, -size / 2, -height / 2, size, height,
-				0xFF000000 | colour);
+				fade(0xFF000000 | colour, alpha));
 		g.pose().popMatrix();
 	}
 

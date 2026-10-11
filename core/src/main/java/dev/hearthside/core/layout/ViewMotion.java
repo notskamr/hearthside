@@ -162,6 +162,12 @@ public final class ViewMotion {
 		return tracks.values().stream().anyMatch(t -> t.moving(now));
 	}
 
+	/** Whether a leaving seat is still fading out. */
+	public boolean fading(long now) {
+		drop(now);
+		return tracks.values().stream().anyMatch(t -> t.goneAt != Long.MAX_VALUE);
+	}
+
 	/** Every seat with a view now, including one still fading out. */
 	public java.util.Set<Integer> seats() {
 		return java.util.Set.copyOf(tracks.keySet());

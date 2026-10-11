@@ -8,39 +8,39 @@ import java.util.Optional;
 /**
  * Each seat's view phase and how much of it the card covers (Spec A sections 3.1(5), 3.2): a joining player's view
  * shows their card, never their game's loading screens, until the game says it is in the world; then the card
- * crossfades into the world. A restarted game brings the card back over its last frame. Times are
- * {@link System#nanoTime()} values. Not thread-safe.
+ * crossfades into the world. A restarted game brings the card back over its last frame. A leaving seat keeps its
+ * phase while its view fades out, so it looks just as it did. Times are {@link System#nanoTime()} values. Not
+ * thread-safe.
  */
 public final class ViewPhases {
 	public static final Duration APPEAR = Duration.ofMillis(200), CROSSFADE = Duration.ofMillis(250),
 			STUCK_AFTER = Duration.ofSeconds(45);
 
-	private record State(ViewPhase phase, long since, float coverWhenLeaving) {}
+	private record State(ViewPhase phase, long since) {}
 
 	private final Map<Integer, State> states = new HashMap<>();
 
 	public void picking(int seat, long now) {
-		states.put(seat, new State(ViewPhase.PICKING, now, 1));
+		states.put(seat, new State(ViewPhase.PICKING, now));
 	}
 
 	public void joining(int seat, long now) {
-		states.put(seat, new State(ViewPhase.JOINING, now, 1));
+		states.put(seat, new State(ViewPhase.JOINING, now));
 	}
 
 	/** The guest is in the world: the card crossfades to its frames. */
 	public void inWorld(int seat, long now) {
-		states.put(seat, new State(ViewPhase.LIVE, now, 0));
+		states.put(seat, new State(ViewPhase.LIVE, now));
 	}
 
 	/** Its game restarted: the card comes back over its last frame. */
 	public void reconnecting(int seat, long now) {
-		states.put(seat, new State(ViewPhase.RECONNECTING, now, 1));
+		states.put(seat, new State(ViewPhase.RECONNECTING, now));
 	}
 
-	/** Fading out: whatever showed (card or world) stays as it was. */
-	public void leaving(int seat, long now) {
-		float cover = cardCover(seat, now, true);
-		states.put(seat, new State(ViewPhase.LEAVING, now, cover));
+	/** Its game gave up restarting: the card stays over its last frame, saying so, until the view fades out. */
+	public void failed(int seat, long now) {
+		states.put(seat, new State(ViewPhase.FAILED, now));
 	}
 
 	public void remove(int seat) {
@@ -65,10 +65,9 @@ public final class ViewPhases {
 			return 0;
 		}
 		return switch (state.phase()) {
-			case PICKING, JOINING -> 1;
+			case PICKING, JOINING, FAILED -> 1;
 			case LIVE -> reduceMotion ? 0 : 1 - progress(state.since(), now, CROSSFADE);
 			case RECONNECTING -> reduceMotion ? 1 : progress(state.since(), now, APPEAR);
-			case LEAVING -> state.coverWhenLeaving();
 		};
 	}
 

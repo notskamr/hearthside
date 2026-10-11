@@ -3,7 +3,6 @@ package dev.hearthside.fabric.client.ui;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
-import dev.hearthside.core.session.ViewPhase;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -23,7 +22,7 @@ import net.minecraft.world.entity.player.PlayerSkin;
  */
 public final class CardPainter {
 	private static final int MUTED = 0xFF7A6A58;
-	private static final int EMBER = 0xFFFF9A4A;
+	private static final int EMBER = 0xFFFF9A4A, ERROR_INK = 0xFFA8321E;
 	private static Model.Simple wide, slim;
 
 	private CardPainter() {}
@@ -40,15 +39,25 @@ public final class CardPainter {
 	}
 
 	/**
-	 * A joining (or reconnecting) player's card filling their view. {@code stuck}: joining has taken too long, so it
-	 * says so and offers Cancel on their controller's B.
+	 * What a joining player's card says: its line (and a shorter one for a small card); whether it sits over their last
+	 * picture, dimmed (their game restarted or gave up), rather than the plank wall; whether the line is bad news; and
+	 * whether their controller's B cancels (joining has taken too long).
 	 */
-	public static void joining(GuiGraphicsExtractor g, Font font, Rect view, Who who, ViewPhase phase, boolean stuck,
-			float cover, long nanos, boolean reduceMotion) {
+	public record Status(String text, String shorter, boolean overLastFrame, boolean failed, boolean offerCancel) {
+		public static final Status JOINING = new Status("Joining…", "Joining…", false, false, false),
+				STILL_JOINING = new Status("Still joining…", "Joining…", false, false, true),
+				RECONNECTING = new Status("Reconnecting…", "Reconnecting…", true, false, false),
+				STILL_RECONNECTING = new Status("Still reconnecting…", "Reconnecting…", true, false, true),
+				COULDNT_START = new Status("Couldn't start", "Can't start", true, true, false);
+	}
+
+	/** A joining (or reconnecting) player's card filling their view. */
+	public static void joining(GuiGraphicsExtractor g, Font font, Rect view, Who who, Status status, float cover, long nanos,
+			boolean reduceMotion) {
 		if (cover <= 0.02f) {
 			return;
 		}
-		if (phase == ViewPhase.RECONNECTING) {
+		if (status.overLastFrame()) {
 			// Their last picture stays, dimmed, behind the card.
 			g.fill(view.x(), view.y(), view.x() + view.width(), view.y() + view.height(), alpha(0.55f * cover) << 24);
 		} else {
@@ -65,21 +74,21 @@ public final class CardPainter {
 		int skinTop = cy + 20;
 		int skinHeight = Math.max(24, ch - 58);
 		if (cover > 0.98f) {
-			float sway = reduceMotion ? 0 : (float) Math.sin(nanos / 1e9 * 0.9) * 25f;
+			float sway = reduceMotion || status.failed() ? 0 : (float) Math.sin(nanos / 1e9 * 0.9) * 25f;
 			skin(g, who.skin(), centre - skinHeight / 4, skinTop, skinHeight / 2, skinHeight, 30f + sway);
 		}
-		String status = stuck ? "Still joining…" : phase == ViewPhase.RECONNECTING ? "Reconnecting…" : "Joining…";
+		String text = font.width(status.text()) <= cw - 6 ? status.text() : font.plainSubstrByWidth(status.shorter(), cw - 6);
 		int statusY = cy + ch - 30;
-		g.text(font, Component.literal(status), centre - font.width(status) / 2, statusY, a << 24 | (HearthDraw.INK & 0xFFFFFF),
-				false);
-		if (stuck) {
+		int ink = status.failed() ? ERROR_INK : HearthDraw.INK;
+		g.text(font, Component.literal(text), centre - font.width(text) / 2, statusY, a << 24 | (ink & 0xFFFFFF), false);
+		if (status.offerCancel()) {
 			// Their controller's B leaves the seat.
 			Component cancel = Component.literal("Cancel");
 			int gw = HearthDraw.glyphWidth(Control.B);
 			int x = centre - (gw + 3 + font.width(cancel)) / 2;
 			HearthDraw.glyph(g, Control.B, who.style(), x, statusY + 11);
 			g.text(font, cancel, x + gw + 3, statusY + 13, a << 24 | (MUTED & 0xFFFFFF), false);
-		} else {
+		} else if (!status.failed()) {
 			embers(g, centre, statusY + 13, a, nanos, reduceMotion);
 		}
 	}

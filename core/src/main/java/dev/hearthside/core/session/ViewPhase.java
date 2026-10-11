@@ -10,6 +10,6 @@ public enum ViewPhase {
 	LIVE,
 	/** Their game restarted: the card over their last frame until it is back. */
 	RECONNECTING,
-	/** Fading out. */
-	LEAVING
+	/** Its game kept crashing and won't be restarted: the card says it couldn't start, over its last frame. */
+	FAILED
 }

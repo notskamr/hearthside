@@ -25,6 +25,11 @@ public final class InWorldSignal {
 		return false;
 	}
 
+	/** Whether it is in the world: from its first frame there until it leaves. */
+	public boolean inWorld() {
+		return in;
+	}
+
 	/** True once when a game that was in the world has lost its connection to it (it quit or was disconnected). */
 	public boolean observeLeft(boolean connected) {
 		if (in && !connected) {

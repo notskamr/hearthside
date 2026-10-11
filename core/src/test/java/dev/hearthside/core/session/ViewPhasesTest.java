@@ -47,11 +47,9 @@ class ViewPhasesTest {
 	}
 
 	@Test
-	void leavingKeepsWhatWasShowing() {
+	void aRemovedSeatShowsNoCard() {
 		var phases = new ViewPhases();
 		phases.joining(1, 0);
-		phases.leaving(1, 1000 * MS);
-		assertThat(phases.phase(1)).contains(ViewPhase.LEAVING);
 		assertThat(phases.cardCover(1, 1100 * MS, false)).isEqualTo(1f);
 		phases.remove(1);
 		assertThat(phases.phase(1)).isEmpty();
@@ -66,5 +64,17 @@ class ViewPhasesTest {
 		assertThat(phases.cardCover(1, 1000 * MS, true)).isEqualTo(0f);
 		phases.reconnecting(1, 2000 * MS);
 		assertThat(phases.cardCover(1, 2000 * MS, true)).isEqualTo(1f);
+	}
+
+	@Test
+	void failedCoversTheViewAndIsNeverStuck() {
+		var phases = new ViewPhases();
+		phases.joining(1, 0);
+		phases.reconnecting(1, 1000 * MS);
+		phases.failed(1, 50_000 * MS);
+		assertThat(phases.phase(1)).contains(ViewPhase.FAILED);
+		assertThat(phases.cardCover(1, 50_000 * MS, false)).isEqualTo(1f);
+		assertThat(phases.cardCover(1, 50_000 * MS, true)).isEqualTo(1f);
+		assertThat(phases.stuck(1, 200_000 * MS)).as("its card says it couldn't start, not still joining").isFalse();
 	}
 }

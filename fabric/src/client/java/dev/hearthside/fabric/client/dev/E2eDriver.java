@@ -170,7 +170,10 @@ public final class E2eDriver {
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
-			step("C7b a fourth player, then back to two, re-lays out without GL errors", () -> sampleGaps(this::fourthAndBack));
+			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
+			step("D5 a leaving view fades out, then the others glide", () -> sampleGaps(this::leavingFades));
+			step("D6 a guest who quits from their own game leaves the party", () -> sampleGaps(this::guestQuitsItself));
+			step("C7c back to two players, re-laid out without GL errors", this::backToTwo);
 			step("G1 no gap or brown shows inside a view while a player joins and leaves", this::noGapsSampled);
 			step("C9 the host's mouse works only inside its own view", this::hostMouseConfined);
 			step("C11 in the world, the host's clicks count wherever the cursor drifted", this::hostWorldClicksAnywhere);
@@ -181,6 +184,7 @@ public final class E2eDriver {
 			long beforeLastLeave = hostLogLength();
 			step("5 leave closes the satellite and leaves the host window as it was", this::leaveClosesSatellite);
 			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
+			step("D7 a guest whose game gives up is shown, then removed", this::gaveUpShownThenRemoved);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
@@ -490,29 +494,89 @@ public final class E2eDriver {
 		windowShot("three-players");
 	}
 
-	/** C7b: a fourth player for the four-view layout, then back to two. */
-	private void fourthAndBack() throws Exception {
-		try {
-			onRender(() -> {
-				Party.current().join("Guest4");
-				return null;
-			});
-			waitFor("4 players", Duration.ofSeconds(180), () -> playerCount() == 4);
-			waitInWorld(3);
-			Thread.sleep(1200);
-			windowShot("four-players");
-		} finally {
-			onRender(() -> {
-				for (String guest : List.of("Guest4", "Guest3")) {
-					try {
-						Party.current().leave(guest);
-					} catch (IllegalArgumentException alreadyGone) {
-						// it never came, or left already
-					}
-				}
-				return null;
-			});
+	/** C7b: a fourth player for the four-view layout. */
+	private void fourthJoins() throws Exception {
+		joinMark = hostLogLength();
+		onRender(() -> {
+			Party.current().join("Guest4");
+			return null;
+		});
+		waitFor("4 players", Duration.ofSeconds(180), () -> playerCount() == 4);
+		waitInWorld(3);
+		Thread.sleep(1200);
+		windowShot("four-players");
+	}
+
+	/** D5: Guest4 leaves: their view fades out where it is, then the others glide into its space. */
+	private void leavingFades() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> {
+			Party.current().leave("Guest4");
+			return null;
+		});
+		Thread.sleep(100);
+		windowShot("leaving");
+		String settled = waitForSettle(mark);
+		int ms = Integer.parseInt(settled);
+		log("   the others settled " + ms + " ms after the leave");
+		check(ms >= 450 && ms <= 650, "the others reach their new places 550 ms (±100) after the leave");
+		// It faded rather than vanished: the compositor drew it at several alphas on the way out.
+		Matcher fade = Pattern.compile("hearthside compositor fade seat=3 alpha=([0-9.]+)").matcher(hostLogSince(mark));
+		java.util.Set<String> alphas = new java.util.TreeSet<>();
+		while (fade.find()) {
+			float alpha = Float.parseFloat(fade.group(1));
+			if (alpha > 0.05f && alpha < 0.95f) {
+				alphas.add(fade.group(1));
+			}
 		}
+		log("   leaving alphas " + alphas);
+		check(alphas.size() >= 3, "the leaving view was drawn fading out (" + alphas.size() + " alphas between 0 and 1)");
+		waitFor("3 players", Duration.ofSeconds(30), () -> playerCount() == 3);
+		check(onRender(() -> !Compositor.active().hasFrame(3)), "the leaving view is gone once it has faded");
+	}
+
+	/** Waits for the host's "layout settled" line after {@code mark}; returns its milliseconds. */
+	private String waitForSettle(long mark) throws Exception {
+		Pattern line = Pattern.compile("hearthside layout settled ([0-9]+) ms after a leave");
+		String[] found = {null};
+		waitFor("the layout settled after the leave", Duration.ofSeconds(10), () -> {
+			Matcher m = line.matcher(hostLogSince(mark));
+			if (m.find()) {
+				found[0] = m.group(1);
+			}
+			return found[0] != null;
+		});
+		return found[0];
+	}
+
+	/** D6: Guest3's own game leaves the world (as its pause menu would): the party lets them go. */
+	private void guestQuitsItself() throws Exception {
+		long mark = hostLogLength();
+		int before = satellites().size();
+		onRender(() -> {
+			Party.current().e2eDisconnectGuest(2);
+			return null;
+		});
+		waitFor("seat 2 left its world", Duration.ofSeconds(30), () -> hostLogSince(mark).contains("hearthside seat 2 left its world"));
+		windowShot("quit-fading");
+		waitForSettle(mark);
+		waitFor("2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
+		waitFor("its game closed", Duration.ofSeconds(15), () -> satellites().size() == before - 1);
+		check(onRender(() -> Party.current().seatedCount()) == 1, "the seat is free");
+	}
+
+	/** C7c: back to two (whoever is still here of Guest3 and Guest4 leaves), with no GL errors throughout. */
+	private void backToTwo() throws Exception {
+		onRender(() -> {
+			for (String guest : List.of("Guest4", "Guest3")) {
+				try {
+					Party.current().leave(guest);
+				} catch (IllegalArgumentException alreadyGone) {
+					// it never came, or left already
+				}
+			}
+			return null;
+		});
 		long back = hostLogLength();
 		waitFor("back to 2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
 		waitForProbe(2, back, Duration.ofSeconds(10));
@@ -655,6 +719,10 @@ public final class E2eDriver {
 		generationBeforeCrash = lastProbeGeneration(2);
 		satellites().forEach(ProcessHandle::destroyForcibly);
 		waitFor("guest dropped", Duration.ofSeconds(30), () -> playerCount() == 1);
+		waitFor("their card says they are reconnecting", Duration.ofSeconds(10),
+				() -> onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.RECONNECTING);
+		Thread.sleep(1500); // the restarted game is starting up: its title and loading screens must not show
+		windowShot("reconnecting");
 		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
 	}
 
@@ -681,6 +749,31 @@ public final class E2eDriver {
 		Rect after = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 		log("   host window " + after + ", before split-screen " + hostWindowBefore);
 		check(after.equals(hostWindowBefore), "host window restored");
+	}
+
+	/** D7: a guest's game crashes and its supervisor gives up: their card says so, then their view fades out. */
+	private void gaveUpShownThenRemoved() throws Exception {
+		System.setProperty("hearthside.e2e.failRestarts", "true");
+		try {
+			joinMark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitInWorld(1);
+			long mark = hostLogLength();
+			satellites().forEach(ProcessHandle::destroyForcibly);
+			waitFor("the card says the game couldn't start", Duration.ofSeconds(30),
+					() -> onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.FAILED);
+			Thread.sleep(400);
+			windowShot("couldnt-start");
+			waitForSettle(mark);
+			check(onRender(() -> Party.current().seatedCount()) == 0, "the seat is free");
+			waitFor("split-screen over", Duration.ofSeconds(10), () -> hostLogSince(mark).contains("virtual size cleared"));
+		} finally {
+			System.clearProperty("hearthside.e2e.failRestarts");
+		}
 	}
 
 	private void closingWorldClosesSatellites() throws Exception {

@@ -43,6 +43,8 @@ final class HostInput implements Runnable {
 	private final InputApplier hostApplier;
 	private final Map<Integer, InputFrame> lastSent = new HashMap<>();
 	private final Map<Integer, Long> lastSentAt = new HashMap<>();
+	/** Buttons a seat stuck joining held last frame (B to cancel needs a fresh press). */
+	private final Map<Integer, Integer> stuckButtons = new HashMap<>();
 	/** Pad style per player, readable from the control-channel threads. */
 	private final Map<Integer, PadStyle> styles = new ConcurrentHashMap<>();
 	/** The host's own options before its controller scheme changed them; null while it has no pad. */
@@ -111,6 +113,11 @@ final class HostInput implements Runnable {
 				HearthsideMod.LOGGER.error("Hearthside join-flow tick failed", e);
 			}
 		}
+		try {
+			session.frame(tickNow);
+		} catch (RuntimeException e) {
+			HearthsideMod.LOGGER.error("Hearthside view update failed", e);
+		}
 		for (RouterEvent event : update.events()) {
 			try {
 				handle(event);
@@ -145,6 +152,14 @@ final class HostInput implements Runnable {
 			} else if (session.hasSeatCard(player)) {
 				// Dropping in: their controller drives the card in their view, not their game (still loading).
 				session.seatCardInput(player, frame, now);
+			} else if (session.joiningStuck(player, now)) {
+				// Their card offers B to cancel: their game has taken too long to come into the world.
+				int before = stuckButtons.getOrDefault(player, frame.buttons()); // held as it got stuck: not a press
+				stuckButtons.put(player, frame.buttons());
+				if ((frame.buttons() & ~before & InputFrame.buttons(PadButton.B)) != 0) {
+					stuckButtons.remove(player);
+					session.cancelJoin(player);
+				}
 			} else if (!Objects.equals(lastSent.get(player), withoutSequence(frame))
 					|| now - lastSentAt.getOrDefault(player, 0L) >= RESEND_NANOS) {
 				session.sendToGuest(player, new ControlMessage.Input(frame));

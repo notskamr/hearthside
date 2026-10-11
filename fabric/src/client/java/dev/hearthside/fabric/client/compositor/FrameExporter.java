@@ -43,6 +43,8 @@ public final class FrameExporter {
 	private final InWorldSignal world = new InWorldSignal();
 	/** When this game last told the host it was in the world (0 once checked). */
 	private long liveSince;
+	/** It left its world: no more frames, so the host fades out its last picture from the world. */
+	private boolean leftWorld;
 	private int generation = FrameNames.firstGeneration() - 1;
 	private SegmentSlotTable table;
 	private FrameSlots slots;
@@ -84,7 +86,14 @@ public final class FrameExporter {
 	/** Copies the finished frame into the next free slot. Called instead of Minecraft's blit to the window. */
 	public void export(int sourceTexture, int sourceWidth, int sourceHeight) {
 		publishFinished();
-		if (transport == null) {
+		if (world.observeLeft(minecraft.getConnection() != null)) {
+			HearthsideMod.LOGGER.info("Hearthside left the world");
+			tell(new ControlMessage.LeftWorld());
+			leftWorld = true;
+		}
+		if (transport == null || leftWorld || (world.inWorld() && minecraft.level == null)) {
+			// Leaving its world (or the server reconfiguring it): the host keeps its last picture from the world, never
+			// the disconnecting and title screens in between.
 			return;
 		}
 		OptionalInt claimed = slots.beginWrite();
@@ -118,6 +127,7 @@ public final class FrameExporter {
 	/** JoinWorld arrived: the first frame exported in the world, past its loading screens, tells the host. */
 	public void joinRequested() {
 		world.joinRequested();
+		leftWorld = false;
 	}
 
 	private void observeWorld() {
@@ -132,10 +142,6 @@ public final class FrameExporter {
 		if (liveSince != 0 && System.nanoTime() - liveSince < 5_000_000_000L && minecraft.gui.overlay() != null) {
 			HearthsideMod.LOGGER.warn("Hearthside loading overlay over a live view");
 			liveSince = 0;
-		}
-		if (world.observeLeft(minecraft.getConnection() != null)) {
-			HearthsideMod.LOGGER.info("Hearthside left the world");
-			tell(new ControlMessage.LeftWorld());
 		}
 	}
 

@@ -40,4 +40,15 @@ class InWorldSignalTest {
 		assertThat(signal.observeLeft(false)).isTrue();
 		assertThat(signal.observeLeft(false)).isFalse();
 	}
+
+	@Test
+	void inWorldFromItsFirstFrameThereUntilItLeaves() {
+		var signal = new InWorldSignal();
+		signal.joinRequested();
+		assertThat(signal.inWorld()).isFalse();
+		signal.observe(true, false, true);
+		assertThat(signal.inWorld()).isTrue();
+		signal.observeLeft(false);
+		assertThat(signal.inWorld()).isFalse();
+	}
 }

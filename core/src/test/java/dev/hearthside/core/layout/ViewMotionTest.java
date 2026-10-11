@@ -81,6 +81,19 @@ class ViewMotionTest {
 	}
 
 	@Test
+	void leavingWithTheOthersStayingOnlyFades() {
+		var motion = twoFrom(0);
+		long t = 1000 * MS;
+		motion.leave(1, Map.of(), t, false);
+		assertThat(motion.fading(t + 125 * MS)).isTrue();
+		assertThat(frame(motion.frames(t + 125 * MS), 0).rect()).isEqualTo(LEFT);
+		assertThat(motion.target(0)).as("the others keep their places until it has gone").contains(LEFT);
+		assertThat(motion.fading(t + 250 * MS)).isFalse();
+		assertThat(motion.moving(t + 250 * MS)).isFalse();
+		assertThat(motion.seats()).containsExactly(0);
+	}
+
+	@Test
 	void windowResizeSnaps() {
 		var motion = twoFrom(0);
 		Rect wideLeft = new Rect(0, 0, 799, 600);
