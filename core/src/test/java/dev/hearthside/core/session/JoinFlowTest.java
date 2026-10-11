@@ -133,6 +133,64 @@ class JoinFlowTest {
 	}
 
 	@Test
+	void loadedWhileDisconnectedLandsAsPlaying() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.profileChosen("pad-1", alex);
+		flow.disconnected("pad-1");
+		flow.loaded("pad-1"); // their game finished loading while the pad was out
+		flow.reconnected("pad-1");
+		assertThat(flow.seats().get("pad-1")).isEqualTo(new SeatState.Playing(alex));
+		assertThat(flow.press("pad-1", Control.B).effects()).as("B must not kill an in-world game").isEmpty();
+	}
+
+	@Test
+	void profileChosenWhileDisconnectedIsKept() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.disconnected("pad-1");
+		flow.profileChosen("pad-1", alex);
+		flow.reconnected("pad-1");
+		assertThat(flow.seats().get("pad-1")).isEqualTo(new SeatState.Ready(alex));
+	}
+
+	@Test
+	void reassignMovesTheSeatWithoutStoppingTheGame() {
+		JoinFlow flow = new JoinFlow(Mode.IN_GAME, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.press("pad-1", Control.A);
+		flow.profileChosen("pad-1", alex);
+		flow.loaded("pad-1");
+		flow.disconnected("pad-1");
+		// The same pad comes back with a new SDL id (or another pad takes over).
+		assertThat(flow.reassign("pad-1", "pad-9").effects()).isEmpty();
+		assertThat(flow.seatOf("pad-1")).isEmpty();
+		assertThat(flow.seatOf("pad-9")).hasValue(0);
+		assertThat(flow.seats().get("pad-9")).isEqualTo(new SeatState.Playing(alex));
+	}
+
+	@Test
+	void reassignToASeatedControllerIsRefused() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.press("pad-2", Control.A);
+		flow.reassign("pad-1", "pad-2");
+		assertThat(flow.seatOf("pad-1")).hasValue(0);
+		assertThat(flow.seatOf("pad-2")).hasValue(1);
+	}
+
+	@Test
+	void enteringTheGameKeepsLobbySeatsAndNeedsDoubleAAfter() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.enterGame();
+		assertThat(flow.seatOf("pad-1")).hasValue(0);
+		assertThat(flow.press("pad-2", Control.A).effects()).containsExactly(new Effect.ShowJoinPrompt("pad-2"));
+		flow.press("pad-2", Control.A);
+		assertThat(flow.seatOf("pad-2")).hasValue(1);
+	}
+
+	@Test
 	void profileStepsOnlyAdvanceInOrder() {
 		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
 		flow.press("pad-1", Control.A);

@@ -43,14 +43,14 @@ public final class JoinFlow {
 	}
 
 	public record Result(List<Effect> effects) {
-		static final Result NONE = new Result(List.of());
+		public static final Result NONE = new Result(List.of());
 
 		public Result {
 			effects = List.copyOf(effects);
 		}
 	}
 
-	private final Mode mode;
+	private Mode mode;
 	private final int seatCount;
 	private final Clock clock;
 	private final Map<String, SeatState> states = new LinkedHashMap<>();
@@ -114,18 +114,58 @@ public final class JoinFlow {
 		return Result.NONE;
 	}
 
+	/** The lobby is over and play has started: keep every seat, and new joins now need A, A. */
+	public void enterGame() {
+		mode = Mode.IN_GAME;
+	}
+
 	public Result profileChosen(String controller, UUID profile) {
-		if (states.get(controller) instanceof SeatState.ChoosingProfile) {
-			states.put(controller, new SeatState.Ready(profile));
-		}
+		advance(controller, state -> state instanceof SeatState.ChoosingProfile ? new SeatState.Ready(profile) : state);
 		return Result.NONE;
 	}
 
+	/** The seat's game reached the world. Applies even while the controller is unplugged. */
 	public Result loaded(String controller) {
-		if (states.get(controller) instanceof SeatState.Ready ready) {
-			states.put(controller, new SeatState.Playing(ready.profile()));
-		}
+		advance(controller, state -> state instanceof SeatState.Ready ready ? new SeatState.Playing(ready.profile()) : state);
 		return Result.NONE;
+	}
+
+	/**
+	 * Moves a seat, with its state, to another controller: the same pad reconnecting under a new id, or another pad
+	 * taking over a disconnected player. Their game keeps running. Refused if {@code to} already has a seat.
+	 */
+	public Result reassign(String from, String to) {
+		Integer seat = seats.get(from);
+		if (seat == null || from.equals(to) || seats.containsKey(to)) {
+			return Result.NONE;
+		}
+		SeatState state = states.remove(from);
+		seats.remove(from);
+		// The new controller is connected, so a dropped seat is live again.
+		if (state instanceof SeatState.Disconnected d) {
+			state = d.before();
+		} else if (state instanceof SeatState.TakeoverOffered t) {
+			state = t.before();
+		}
+		List<Effect> effects = new ArrayList<>();
+		if (states.remove(to) instanceof SeatState.Prompted) {
+			effects.add(new Effect.HideJoinPrompt(to));
+		}
+		seats.put(to, seat);
+		states.put(to, state);
+		return new Result(effects);
+	}
+
+	/** Applies a step to a seat's state, looking through a disconnect so progress made meanwhile isn't lost. */
+	private void advance(String controller, java.util.function.UnaryOperator<SeatState> step) {
+		SeatState state = states.get(controller);
+		if (state instanceof SeatState.Disconnected d) {
+			states.put(controller, new SeatState.Disconnected(step.apply(d.before()), d.since()));
+		} else if (state instanceof SeatState.TakeoverOffered t) {
+			states.put(controller, new SeatState.TakeoverOffered(step.apply(t.before())));
+		} else if (state != null) {
+			states.put(controller, step.apply(state));
+		}
 	}
 
 	public Result leave(String controller) {

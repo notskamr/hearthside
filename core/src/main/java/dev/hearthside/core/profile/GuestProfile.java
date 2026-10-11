@@ -24,7 +24,8 @@ public record GuestProfile(UUID id, String name, SkinRef skin, String preferredC
 	}
 
 	public GuestProfile(UUID id, String name, SkinRef skin, String preferredControllerGuid, ControlScheme controls) {
-		this(id, name, skin, preferredControllerGuid, controls, PlayerColors.DEFAULTS[0], PersonalSettings.DEFAULTS);
+		// Blue is player 1's; a guest made without a colour starts from the next one.
+		this(id, name, skin, preferredControllerGuid, controls, PlayerColors.DEFAULTS[1], PersonalSettings.DEFAULTS);
 	}
 
 	/** A guest with the Bedrock control preset. */

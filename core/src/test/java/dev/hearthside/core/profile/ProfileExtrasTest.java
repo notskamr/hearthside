@@ -25,6 +25,13 @@ class ProfileExtrasTest {
 	}
 
 	@Test
+	void playerOneIsBlueAndNewGuestsAreNot() {
+		assertThat(HostProfile.DEFAULTS.color()).isEqualTo(PlayerColors.DEFAULTS[0]);
+		GuestProfile guest = new GuestProfile(java.util.UUID.randomUUID(), "Sam", SkinRef.defaultSkin("steve"), null);
+		assertThat(guest.color()).isNotEqualTo(PlayerColors.DEFAULTS[0]);
+	}
+
+	@Test
 	void settingsClampOutOfRange() {
 		PersonalSettings s = new PersonalSettings(500, 99, true, false, false, null, 7f);
 		assertThat(s.fov()).isEqualTo(110);

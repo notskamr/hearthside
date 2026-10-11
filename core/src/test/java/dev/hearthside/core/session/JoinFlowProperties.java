@@ -21,7 +21,7 @@ import net.jqwik.api.Property;
 import net.jqwik.api.Provide;
 
 class JoinFlowProperties {
-	enum Kind { A, B, PROFILE, LOADED, LEAVE, DISCONNECT, RECONNECT, TICK, WAIT }
+	enum Kind { A, B, PROFILE, LOADED, LEAVE, DISCONNECT, RECONNECT, TICK, WAIT, REASSIGN, ENTER_GAME }
 
 	record Event(Kind kind, int pad) {}
 
@@ -41,6 +41,11 @@ class JoinFlowProperties {
 				case DISCONNECT -> flow.disconnected(pad);
 				case RECONNECT -> flow.reconnected(pad);
 				case TICK -> flow.tick();
+				case REASSIGN -> flow.reassign(pad, "pad-" + ((e.pad() + 1) % 5));
+				case ENTER_GAME -> {
+					flow.enterGame();
+					yield JoinFlow.Result.NONE;
+				}
 				case WAIT -> {
 					clock.advance(Duration.ofSeconds(7));
 					yield flow.tick();

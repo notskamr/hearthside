@@ -65,8 +65,8 @@ public final class ProfileStore {
 			FileDto dto = GSON.fromJson(root, FileDto.class);
 			List<GuestProfile> profiles = new ArrayList<>();
 			for (ProfileDto p : dto.profiles()) {
-				// v2 files have no colours: hand out the defaults in order.
-				profiles.add(p.toProfile(PlayerColors.DEFAULTS[profiles.size() % PlayerColors.DEFAULTS.length]));
+				// v2 files have no colours: hand out the guest defaults in order (blue is player 1's).
+				profiles.add(p.toProfile(PlayerColors.DEFAULTS[1 + profiles.size() % (PlayerColors.DEFAULTS.length - 1)]));
 			}
 			requireUnique(profiles);
 			HostProfile host = dto.host() != null
@@ -150,13 +150,14 @@ public final class ProfileStore {
 	/** What is written (always the current schema). */
 	private record WrittenFileDto(int schemaVersion, List<ProfileDto> profiles, HostDto host) {}
 
-	private record HostDto(JsonElement controls, SettingsDto settings) {
+	private record HostDto(JsonElement controls, SettingsDto settings, Integer color) {
 		static HostDto from(HostProfile h) {
-			return new HostDto(ControlSchemeJson.toTree(h.controls()), SettingsDto.from(h.settings()));
+			return new HostDto(ControlSchemeJson.toTree(h.controls()), SettingsDto.from(h.settings()), h.color());
 		}
 
 		HostProfile toHost() {
-			return new HostProfile(ControlSchemeJson.fromTree(controls), SettingsDto.toSettings(settings));
+			return new HostProfile(ControlSchemeJson.fromTree(controls), SettingsDto.toSettings(settings),
+					color != null ? color : PlayerColors.DEFAULTS[0]);
 		}
 	}
 

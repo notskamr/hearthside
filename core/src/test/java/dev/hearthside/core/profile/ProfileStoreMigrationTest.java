@@ -55,7 +55,7 @@ class ProfileStoreMigrationTest {
 		ProfileFile loaded = new ProfileStore(file).loadFile();
 		assertThat(loaded.profiles()).extracting(GuestProfile::name).containsExactly("Alex", "Sam");
 		assertThat(loaded.profiles()).extracting(GuestProfile::color)
-				.containsExactly(PlayerColors.DEFAULTS[0], PlayerColors.DEFAULTS[1]);
+				.containsExactly(PlayerColors.DEFAULTS[1], PlayerColors.DEFAULTS[2]); // blue is player 1's
 		assertThat(loaded.profiles()).extracting(GuestProfile::settings)
 				.containsOnly(PersonalSettings.DEFAULTS);
 		assertThat(loaded.profiles().getFirst().skin().slim()).isTrue();
