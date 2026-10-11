@@ -43,6 +43,7 @@ import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.compositor.GlInterop;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.window.WindowPlacer;
@@ -102,6 +103,9 @@ public final class Party {
 	private Rect hostWindowBefore;
 	private boolean pauseOnLostFocusBefore;
 	private Rect workArea;
+	/** Where every player's view is drawn in the one window while compositing (fresh for each split-screen run). */
+	private Views views = new Views();
+	private final ViewOverlay viewOverlay = new ViewOverlay();
 	/** Whether guests render hidden and this window composites them (decided on the render thread at session start). */
 	private volatile boolean composite;
 	/** Player 1's colour, from the host profile. */
@@ -1200,6 +1204,8 @@ public final class Party {
 			return;
 		}
 		splitScreen = false;
+		views = new Views();
+		OverlayPass.unregister(viewOverlay);
 		if (Compositor.active() != null) {
 			Compositor.deactivate(minecraft);
 		} else {
@@ -1225,20 +1231,19 @@ public final class Party {
 		int refresh = WindowPlacer.refreshHz(minecraft.getWindow());
 		if (composite) {
 			// One window: lay every player out inside this window's framebuffer; the window itself stays put.
+			// Spec A's layouts; views glide to them (or jump, when the window itself changed size).
 			Window.FramebufferSize size = minecraft.getWindow().queryFramebufferSize();
-			List<Rect> rects = new ConsoleLayout(TwoPlayerSplit.VERTICAL)
-					.layout(1 + guests.size(), new Rect(0, 0, size.width(), size.height()));
-			Map<Integer, Rect> guestViews = new HashMap<>();
-			for (int i = 0; i < guests.size(); i++) {
-				guestViews.put(guests.get(i).index, rects.get(i + 1));
-			}
+			views.update(guests.stream().map(g -> g.index).toList(), new Rect(0, 0, size.width(), size.height()),
+					System.nanoTime(), hostReduceMotion);
 			Compositor.activate(minecraft, this::afterGuestsChanged,
-					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), rects.get(0), guestViews, size.width(),
-					size.height());
-			for (int i = 0; i < guests.size(); i++) {
-				ControlConnection connection = guests.get(i).connection;
-				if (connection != null) {
-					send(connection, new ControlMessage.SetViewport(rects.get(i + 1), refresh));
+					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), views, size.width(), size.height());
+			OverlayPass.unregister(viewOverlay);
+			OverlayPass.register(viewOverlay);
+			for (Slot guest : guests) {
+				ControlConnection connection = guest.connection;
+				Rect target = views.target(guest.index).orElse(null);
+				if (connection != null && target != null) {
+					send(connection, new ControlMessage.SetViewport(target, refresh));
 				}
 			}
 			return;

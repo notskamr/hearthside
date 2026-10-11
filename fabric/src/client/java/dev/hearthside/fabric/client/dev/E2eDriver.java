@@ -166,9 +166,10 @@ public final class E2eDriver {
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
 			step("C5 copy transport works", this::copyTransportWorks);
-			step("C6 maximise and restore keep the guest composited", this::maximiseAndRestore);
+			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
-			step("C7 a third player and back re-lays out without GL errors", this::thirdPlayerAndBack);
+			step("C7 a third player and back re-lays out without GL errors", () -> sampleGaps(this::thirdPlayerAndBack));
+			step("G1 no gap or brown shows inside a view while a player joins and leaves", this::noGapsSampled);
 			step("C9 the host's mouse works only inside its own view", this::hostMouseConfined);
 			step("C11 in the world, the host's clicks count wherever the cursor drifted", this::hostWorldClicksAnywhere);
 			step("3 crashed satellite is restarted", this::crashedSatelliteRestarts);
@@ -278,7 +279,11 @@ public final class E2eDriver {
 		long mark = hostLogLength();
 		onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), 1280, 720));
 		try {
-			int halfWidth = onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) / 2;
+			int halfWidth = onRender(() -> {
+					var size = minecraft.getWindow().queryFramebufferSize();
+					return dev.hearthside.core.layout.SplitLayout.plan(2, new Rect(0, 0, size.width(), size.height()),
+							dev.hearthside.core.layout.LayoutSettings.DEFAULTS).players().get(1).width();
+			});
 			waitFor("guest re-sized to half the new window", Duration.ofSeconds(10),
 					() -> satelliteLog().contains("hearthside virtual size " + halfWidth + "x"));
 			waitForProbe(2, mark, Duration.ofSeconds(10));
@@ -324,6 +329,29 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.forceCopy");
 		}
+	}
+
+	/** Where the host log stood when gap sampling first started; G1 reads every gap line after it. */
+	private long gapMark = -1;
+
+	/** Runs a step with the compositor checking every view's centre each frame for the bare divider colour. */
+	private void sampleGaps(ThrowingRunnable body) throws Exception {
+		if (gapMark < 0) {
+			gapMark = hostLogLength();
+		}
+		Compositor.e2eGapSampling = true;
+		try {
+			body.run();
+		} finally {
+			Compositor.e2eGapSampling = false;
+		}
+	}
+
+	private void noGapsSampled() throws Exception {
+		check(gapMark >= 0, "gaps were sampled");
+		String log = hostLogSince(gapMark);
+		int gaps = log.split("hearthside compositor gap", -1).length - 1;
+		check(gaps == 0, "no view showed the bare divider colour (" + gaps + " sampled gaps)");
 	}
 
 	private void maximiseAndRestore() throws Exception {

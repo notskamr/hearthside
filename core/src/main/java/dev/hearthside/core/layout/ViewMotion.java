@@ -162,6 +162,11 @@ public final class ViewMotion {
 		return tracks.values().stream().anyMatch(t -> t.moving(now));
 	}
 
+	/** Every seat with a view now, including one still fading out. */
+	public java.util.Set<Integer> seats() {
+		return java.util.Set.copyOf(tracks.keySet());
+	}
+
 	/** Where a seat will be once motion ends (its viewport size, for the game rendering it); empty while leaving. */
 	public Optional<Rect> target(int seat) {
 		Track track = tracks.get(seat);

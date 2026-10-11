@@ -70,6 +70,8 @@ class ViewMotionTest {
 		long t = 1000 * MS;
 		motion.leave(1, Map.of(0, FULL), t, false);
 		assertThat(frame(motion.frames(t + 125 * MS), 1).alpha()).isCloseTo(0.5f, within(0.01f));
+		assertThat(motion.seats()).as("still fading out").containsExactlyInAnyOrder(0, 1);
+		assertThat(motion.target(1)).as("no target while leaving").isEmpty();
 		assertThat(frame(motion.frames(t + 125 * MS), 0).rect()).isEqualTo(LEFT);
 		assertThat(frame(motion.frames(t + 250 * MS), 1)).isNull();
 		assertThat(frame(motion.frames(t + 250 * MS), 0).rect()).isEqualTo(LEFT);
