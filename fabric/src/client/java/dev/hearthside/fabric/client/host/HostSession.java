@@ -33,7 +33,10 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
+import dev.hearthside.core.compositor.Transport;
+import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.GlInterop;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import dev.hearthside.fabric.server.HostServerBridge;
@@ -99,6 +102,8 @@ public final class HostSession {
 	private Rect workArea;
 	/** Whether guests render hidden and this window composites them (decided on the render thread at session start). */
 	private volatile boolean composite;
+	/** GPU sharing or copying, as this machine's probe decided at session start. */
+	private volatile Transport hostTransport = Transport.COPY;
 
 	private static final class Slot {
 		final int index;
@@ -130,6 +135,10 @@ public final class HostSession {
 	private void choosePresentation() {
 		try {
 			composite = Presentation.glSupportsCompositing();
+			if (composite) {
+				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5).
+				hostTransport = TransportChoice.choose(GlInterop.probe(false));
+			}
 		} catch (RuntimeException | LinkageError e) {
 			composite = false; // no GL context (for example Minecraft's Vulkan backend)
 		}
@@ -389,7 +398,9 @@ public final class HostSession {
 		if (!composite) {
 			return SatelliteLaunch.Presentation.TILED;
 		}
-		return Presentation.forceCopy() ? SatelliteLaunch.Presentation.COMPOSITED_COPY : SatelliteLaunch.Presentation.COMPOSITED;
+		return Presentation.forceCopy() || hostTransport == Transport.COPY
+				? SatelliteLaunch.Presentation.COMPOSITED_COPY
+				: SatelliteLaunch.Presentation.COMPOSITED;
 	}
 
 	/** Puts the host window and focus setting back once no guests remain. Render thread. */
@@ -423,7 +434,9 @@ public final class HostSession {
 			for (int i = 0; i < guests.size(); i++) {
 				guestViews.put(guests.get(i).index, rects.get(i + 1));
 			}
-			Compositor.activate(minecraft, this::afterGuestsChanged, rects.get(0), guestViews, size.width(), size.height());
+			Compositor.activate(minecraft, this::afterGuestsChanged,
+					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), rects.get(0), guestViews, size.width(),
+					size.height());
 			for (int i = 0; i < guests.size(); i++) {
 				ControlConnection connection = guests.get(i).connection;
 				if (connection != null) {

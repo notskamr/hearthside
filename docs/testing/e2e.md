@@ -91,9 +91,12 @@ that corner of the guest's view once a second; the steps wait for `ff00ff`.
 | C8 | After a guest crash, the restarted guest's frames come back | PASS |
 | C9 | The host's OS mouse works inside its own view; clicks over a guest's view do nothing | PASS |
 | C10 | When the last guest leaves, the host renders at full window size again | PASS |
+| C11 | In the world, player 1's clicks count wherever the hidden cursor drifted; releases always land | PASS — FAILED before the review fix |
+| C12 | A failed GPU import falls back to copying frames (failure simulated) | PASS |
 
-All 33 steps (walking skeleton, controllers, menus, attack, compositor) pass in one run; force-killing the host still
-ends the satellite (0.8 s).
+All 35 steps (walking skeleton, controllers, menus, attack, compositor) pass in one run; force-killing the host still
+ends the satellite (0.9 s). C6 and C8 require frames from a new import generation, so a stale frame can't pass them.
+Host CPU time to composite one guest: p50 0.044 ms, p95 0.129 ms (929 frames; the GPU work is asynchronous).
 
 Found while building this:
 - Minecraft creates a GL 3.3 context; the compositor's 4.x calls (direct state access, copy image, clear texture) come

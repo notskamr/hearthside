@@ -88,6 +88,12 @@ public sealed interface ControlMessage {
 		}
 	}
 
+	/**
+	 * Type 10, host → satellite: the host could not use this satellite's shared GPU frames; reallocate them with the
+	 * copy transport and keep using it.
+	 */
+	record UseCopyTransport() implements ControlMessage {}
+
 	/** A message whose type this version does not know; produced only by decoding, never written. */
 	record Unknown(int typeId) implements ControlMessage {}
 }

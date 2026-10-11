@@ -46,6 +46,12 @@ public final class FrameExporter {
 	private Path controlFile;
 	private long frame;
 	private int readFbo, drawFbo;
+	// The generation before the current one, kept until the next reallocation (see retireCurrent).
+	private FrameTransport previousTransport;
+	private SegmentSlotTable previousTable;
+	private int previousGeneration = -1;
+	private boolean copyOnly;
+	private Transport probed;
 
 	private FrameExporter(Minecraft minecraft, ControlConnection connection) {
 		this.minecraft = minecraft;
@@ -119,11 +125,34 @@ public final class FrameExporter {
 		}
 	}
 
+	/** The host could not use our shared GPU frames: copy them from now on. Render thread. */
+	public void useCopy() {
+		copyOnly = true;
+		if (transport != null) {
+			reallocate(transport.width(), transport.height(), true);
+		}
+	}
+
+	/** GPU sharing or copying, decided once per process (each probe creates Vulkan instances). */
+	private Transport transportChoice() {
+		if (copyOnly || Presentation.forceCopy()) {
+			return Transport.COPY;
+		}
+		if (probed == null) {
+			probed = TransportChoice.choose(GlInterop.probe(false));
+		}
+		return probed;
+	}
+
 	private void reallocate(int width, int height) {
-		if (transport != null && transport.width() == width && transport.height() == height) {
+		reallocate(width, height, false);
+	}
+
+	private void reallocate(int width, int height, boolean force) {
+		if (!force && transport != null && transport.width() == width && transport.height() == height) {
 			return;
 		}
-		dropAll();
+		retireCurrent();
 		generation++;
 		controlFile = dir.resolve("frames-" + generation + ".slots");
 		try {
@@ -133,7 +162,7 @@ public final class FrameExporter {
 			return;
 		}
 		slots = new FrameSlots(table);
-		Transport choice = TransportChoice.choose(GlInterop.probe(Presentation.forceCopy()));
+		Transport choice = transportChoice();
 		if (choice == Transport.GPU_SHARED) {
 			try {
 				transport = GpuSharedTransport.export(controlFile.toString(), table, width, height);
@@ -154,27 +183,35 @@ public final class FrameExporter {
 		}
 	}
 
-	private void dropAll() {
+	/**
+	 * Stops writing the current generation but keeps it alive until the next reallocation: the host may not have
+	 * imported it yet (two viewport changes in quick succession), and its named memory must still exist when it does.
+	 */
+	private void retireCurrent() {
 		for (Pending p : pending) {
 			glDeleteSync(p.fence());
 		}
 		pending.clear();
-		if (transport != null) {
-			transport.close();
-			transport = null;
+		if (previousTransport != null) {
+			previousTransport.close();
 		}
-		if (table != null) {
-			table.close();
-			table = null;
+		if (previousTable != null) {
+			previousTable.close();
 		}
+		previousTransport = transport;
+		previousTable = table;
+		previousGeneration = transport == null ? -1 : generation;
+		transport = null;
+		table = null;
 		deleteOldFiles();
 	}
 
-	/** Removes slot files from earlier generations; ones the host still has mapped are left for next time. */
+	/** Removes slot files from generations before the previous one; any still open are left for next time. */
 	private void deleteOldFiles() {
 		try (DirectoryStream<Path> files = Files.newDirectoryStream(dir, "frames-*")) {
 			for (Path file : files) {
-				if (controlFile == null || !file.getFileName().toString().startsWith("frames-" + generation + ".")) {
+				String name = file.getFileName().toString();
+				if (!name.startsWith("frames-" + generation + ".") && !name.startsWith("frames-" + previousGeneration + ".")) {
 					try {
 						Files.deleteIfExists(file);
 					} catch (IOException stillMapped) {

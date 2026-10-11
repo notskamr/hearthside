@@ -3,6 +3,7 @@ package dev.hearthside.fabric.client.mixin;
 import dev.hearthside.core.compositor.ViewportMath;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.input.SyntheticMouse;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
 import net.minecraft.client.input.MouseButtonInfo;
 import org.spongepowered.asm.mixin.Mixin;
@@ -37,21 +38,27 @@ abstract class HostMouseMixin {
 
 	@Inject(method = "onButton", at = @At("HEAD"), cancellable = true)
 	private void hearthside$onlyInsideViewport(long handle, MouseButtonInfo info, int action, CallbackInfo ci) {
-		if (hearthside$outsideHostViewport()) {
+		// Releases always go through: dropping one would leave a button (attack, a drag) held down.
+		if (action == 1 && hearthside$pointingAtAnotherView()) {
 			ci.cancel();
 		}
 	}
 
 	@Inject(method = "onScroll", at = @At("HEAD"), cancellable = true)
 	private void hearthside$scrollOnlyInsideViewport(long handle, double x, double y, CallbackInfo ci) {
-		if (hearthside$outsideHostViewport()) {
+		if (hearthside$pointingAtAnotherView()) {
 			ci.cancel();
 		}
 	}
 
-	private static boolean hearthside$outsideHostViewport() {
+	/**
+	 * In a menu, a visible cursor over another player's view must not click player 1's menu. In the world the cursor is
+	 * hidden and grabbed (or about to be), and wherever it has drifted the clicks are player 1's attacks and uses.
+	 */
+	private boolean hearthside$pointingAtAnotherView() {
 		Compositor compositor = Compositor.active();
-		return compositor != null && !SyntheticMouse.active()
+		return compositor != null && !SyntheticMouse.active() && Minecraft.getInstance().gui.screen() != null
+				&& !((MouseHandler) (Object) this).isMouseGrabbed()
 				&& !ViewportMath.contains(hearthside$lastWindowPosition, compositor.hostViewport(), compositor.screenPerFramebuffer());
 	}
 }

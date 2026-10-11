@@ -125,6 +125,13 @@ public final class SatelliteBoot {
 				}
 			});
 			case ControlMessage.Input m -> applier.accept(m.frame());
+			case ControlMessage.UseCopyTransport m -> minecraft.execute(() -> {
+				FrameExporter exporter = FrameExporter.instance();
+				if (exporter != null) {
+					HearthsideMod.LOGGER.warn("Hearthside host could not use shared GPU frames; copying them instead");
+					exporter.useCopy();
+				}
+			});
 			case ControlMessage.SetControls m -> minecraft.execute(() -> {
 				applier.setScheme(ControlSchemeJson.fromJson(m.schemeJson()));
 				applier.applyOptions();

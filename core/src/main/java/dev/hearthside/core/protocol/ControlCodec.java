@@ -31,6 +31,7 @@ public final class ControlCodec {
 	private static final int SET_CONTROLS = 7;
 	private static final int SET_PAD_STYLE = 8;
 	private static final int FRAME_SLOTS_READY = 9;
+	private static final int USE_COPY_TRANSPORT = 10;
 
 	private ControlCodec() {}
 
@@ -80,6 +81,7 @@ public final class ControlCodec {
 				p.writeUTF(m.controlFile());
 				yield FRAME_SLOTS_READY;
 			}
+			case ControlMessage.UseCopyTransport m -> USE_COPY_TRANSPORT;
 			case ControlMessage.Lifecycle m -> {
 				p.writeByte(m.command().ordinal());
 				yield LIFECYCLE;
@@ -128,6 +130,7 @@ public final class ControlCodec {
 						p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat()));
 				case SET_VIEWPORT -> new ControlMessage.SetViewport(new Rect(p.readInt(), p.readInt(), p.readInt(), p.readInt()),
 						p.readUnsignedShort());
+				case USE_COPY_TRANSPORT -> new ControlMessage.UseCopyTransport();
 				case FRAME_SLOTS_READY -> new ControlMessage.FrameSlotsReady(transport(p.readUnsignedByte()), p.readInt(),
 						p.readInt(), p.readInt(), p.readUTF());
 				case LIFECYCLE -> new ControlMessage.Lifecycle(lifecycle(p.readUnsignedByte()));

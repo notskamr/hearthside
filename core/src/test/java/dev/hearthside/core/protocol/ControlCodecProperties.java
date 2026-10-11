@@ -59,6 +59,7 @@ class ControlCodecProperties {
 				Arbitraries.just(ControlSchemeJson.toJson(ControlScheme.BEDROCK)), text).map(ControlMessage.SetControls::new);
 		Arbitrary<ControlMessage> padStyle = Arbitraries.of(PadStyle.class).map(ControlMessage.SetPadStyle::new);
 
-		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld, setControls, padStyle, slotsReady);
+		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld, setControls, padStyle, slotsReady,
+				Arbitraries.just(new ControlMessage.UseCopyTransport()));
 	}
 }

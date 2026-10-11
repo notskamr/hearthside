@@ -124,6 +124,11 @@ class ControlCodecTest {
 	}
 
 	@Test
+	void useCopyTransportRoundTrips() throws IOException {
+		assertThat(roundTrip(new ControlMessage.UseCopyTransport())).isEqualTo(new ControlMessage.UseCopyTransport());
+	}
+
+	@Test
 	void protocolVersionIsTwo() {
 		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(2);
 	}

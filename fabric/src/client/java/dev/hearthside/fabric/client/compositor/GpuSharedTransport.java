@@ -38,8 +38,13 @@ public final class GpuSharedTransport implements FrameTransport {
 		this.handles = new long[slots];
 	}
 
-	/** Guest: allocates and exports {@code table.slots()} images; records each one's size in the table. */
-	public static GpuSharedTransport export(String controlFile, SlotTable table, int width, int height) {
+	/** This process's Vulkan device for exporting frame memory: created once, kept for the process's lifetime. */
+	private static VkDevice sharedDevice;
+
+	private static VkDevice device() {
+		if (sharedDevice != null) {
+			return sharedDevice;
+		}
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			VkPhysicalDevice physical = GlInterop.matchingDevice(stack, GlInterop.glDeviceUuid(stack));
 			if (physical == null) {
@@ -50,12 +55,25 @@ public final class GpuSharedTransport implements FrameTransport {
 			VkDeviceCreateInfo deviceInfo = VkDeviceCreateInfo.calloc(stack).sType$Default().pQueueCreateInfos(queue)
 					.ppEnabledExtensionNames(stack.pointers(stack.UTF8(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME)));
 			PointerBuffer pointer = stack.mallocPointer(1);
-			check(vkCreateDevice(physical, deviceInfo, null, pointer), "vkCreateDevice");
-			VkDevice device = new VkDevice(pointer.get(0), physical, deviceInfo);
+			int result = vkCreateDevice(physical, deviceInfo, null, pointer);
+			if (result != VK_SUCCESS) {
+				vkDestroyInstance(physical.getInstance(), null);
+				throw new IllegalStateException("vkCreateDevice failed: " + result);
+			}
+			sharedDevice = new VkDevice(pointer.get(0), physical, deviceInfo);
+			return sharedDevice;
+		}
+	}
+
+	/** Guest: allocates and exports {@code table.slots()} images; records each one's size in the table. */
+	public static GpuSharedTransport export(String controlFile, SlotTable table, int width, int height) {
+		VkDevice device = device();
+		try (MemoryStack stack = MemoryStack.stackPush()) {
 			GpuSharedTransport transport = new GpuSharedTransport(width, height, table.slots(), device);
 			try {
 				for (int slot = 0; slot < table.slots(); slot++) {
-					transport.exportSlot(stack, physical, slot, FrameNames.gpuMemory(controlFile, table.generation(), slot), table);
+					transport.exportSlot(stack, device.getPhysicalDevice(), slot,
+							FrameNames.gpuMemory(controlFile, table.generation(), slot), table);
 				}
 			} catch (RuntimeException e) {
 				transport.close();
@@ -204,11 +222,7 @@ public final class GpuSharedTransport implements FrameTransport {
 				}
 			}
 		}
-		if (device != null) {
-			VkInstance instance = device.getPhysicalDevice().getInstance();
-			vkDestroyDevice(device, null);
-			vkDestroyInstance(instance, null);
-		}
+		// The device itself is shared by every export in this process and lives as long as it does.
 	}
 
 	private static void check(int result, String what) {

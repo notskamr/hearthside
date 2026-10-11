@@ -8,7 +8,7 @@ import com.mojang.renderpearl.backend.opengl.GlStateManager;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
+import java.lang.foreign.Arena;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -22,7 +22,10 @@ public final class CopyTransport implements FrameTransport {
 	private final int width, height;
 	private final int[] textures;
 	private final int[] pixelBuffers; // guest only
-	private final MappedByteBuffer pixels;
+	// Mapped through an arena so close() unmaps it at once (a MappedByteBuffer waits for GC, and on Windows a mapped file
+	// cannot be deleted).
+	private final Arena arena = Arena.ofShared();
+	private final long pixels;
 	private final long bytesPerSlot;
 
 	private CopyTransport(Path pixelFile, int width, int height, int slots, boolean guest) {
@@ -33,8 +36,9 @@ public final class CopyTransport implements FrameTransport {
 		this.pixelBuffers = new int[guest ? slots : 0];
 		try (FileChannel channel = FileChannel.open(pixelFile, StandardOpenOption.CREATE, StandardOpenOption.READ,
 				StandardOpenOption.WRITE)) {
-			this.pixels = channel.map(FileChannel.MapMode.READ_WRITE, 0, bytesPerSlot * slots);
+			this.pixels = channel.map(FileChannel.MapMode.READ_WRITE, 0, bytesPerSlot * slots, arena).address();
 		} catch (IOException e) {
+			arena.close();
 			throw new UncheckedIOException(e);
 		}
 		for (int slot = 0; slot < slots; slot++) {
@@ -112,7 +116,7 @@ public final class CopyTransport implements FrameTransport {
 			throw new IllegalStateException("Could not map the frame read-back buffer");
 		}
 		try {
-			memCopy(memAddress(mapped), memAddress(pixels) + slot * bytesPerSlot, bytesPerSlot);
+			memCopy(memAddress(mapped), pixels + slot * bytesPerSlot, bytesPerSlot);
 		} finally {
 			glUnmapNamedBuffer(pixelBuffers[slot]);
 		}
@@ -125,7 +129,7 @@ public final class CopyTransport implements FrameTransport {
 		int previous = glGetInteger(GL_PIXEL_UNPACK_BUFFER_BINDING);
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 		glTextureSubImage2D(textures[slot], 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE,
-				memAddress(pixels) + slot * bytesPerSlot);
+				pixels + slot * bytesPerSlot);
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, previous);
 	}
 
@@ -137,5 +141,6 @@ public final class CopyTransport implements FrameTransport {
 		for (int buffer : pixelBuffers) {
 			glDeleteBuffers(buffer);
 		}
+		arena.close();
 	}
 }

@@ -68,6 +68,7 @@ public final class Compositor {
 
 	private final Minecraft minecraft;
 	private final Runnable onWindowResized;
+	private final java.util.function.IntConsumer onImportFailed;
 	private final Map<Integer, Rect> guestViewports = new HashMap<>();
 	private final Map<Integer, Import> imports = new HashMap<>();
 	/** Imports replaced by a newer generation, closed once the GPU has finished drawing from them. */
@@ -84,9 +85,10 @@ public final class Compositor {
 	private int costCount;
 	private long costWindowStart = System.nanoTime();
 
-	private Compositor(Minecraft minecraft, Runnable onWindowResized) {
+	private Compositor(Minecraft minecraft, Runnable onWindowResized, java.util.function.IntConsumer onImportFailed) {
 		this.minecraft = minecraft;
 		this.onWindowResized = onWindowResized;
+		this.onImportFailed = onImportFailed;
 	}
 
 	public static Compositor active() {
@@ -97,10 +99,10 @@ public final class Compositor {
 	 * Starts (or updates) compositing. {@code hostViewport} and {@code guests} (player index → viewport) are in the
 	 * window's framebuffer pixels, laid out for a {@code windowWidth}×{@code windowHeight} framebuffer.
 	 */
-	public static Compositor activate(Minecraft minecraft, Runnable onWindowResized, Rect hostViewport,
-			Map<Integer, Rect> guests, int windowWidth, int windowHeight) {
+	public static Compositor activate(Minecraft minecraft, Runnable onWindowResized, java.util.function.IntConsumer onImportFailed,
+			Rect hostViewport, Map<Integer, Rect> guests, int windowWidth, int windowHeight) {
 		if (active == null) {
-			active = new Compositor(minecraft, onWindowResized);
+			active = new Compositor(minecraft, onWindowResized, onImportFailed);
 		}
 		Compositor c = active;
 		c.hostViewport = hostViewport;
@@ -169,6 +171,9 @@ public final class Compositor {
 		}
 		FrameTransport transport;
 		try {
+			if (ready.transport() == Transport.GPU_SHARED && Boolean.getBoolean("hearthside.e2e.failGpuImport")) {
+				throw new IllegalStateException("E2E: simulated GPU import failure");
+			}
 			transport = ready.transport() == Transport.GPU_SHARED
 					? GpuSharedTransport.importByName(ready.controlFile(), table, ready.width(), ready.height())
 					: CopyTransport.host(CopyTransport.pixelFileFor(Path.of(ready.controlFile())), ready.width(), ready.height(),
@@ -176,6 +181,10 @@ public final class Compositor {
 		} catch (RuntimeException e) {
 			HearthsideMod.LOGGER.error("Could not import player {}'s frames", playerIndex + 1, e);
 			table.close();
+			if (ready.transport() == Transport.GPU_SHARED) {
+				// Spec B section 4: fall back to copying rather than leave this player frozen on their last frame.
+				onImportFailed.accept(playerIndex);
+			}
 			return;
 		}
 		if (previous != null) {
@@ -259,7 +268,7 @@ public final class Compositor {
 
 	private void closeRetired() {
 		// Safe straight away: GL defers freeing a deleted texture or memory object until the GPU has stopped using it,
-		// and the guest owns the underlying memory anyway.
+		// and an imported memory object keeps the shared allocation alive for as long as it exists.
 		while (!retired.isEmpty()) {
 			retired.removeFirst().close();
 		}
@@ -298,7 +307,7 @@ public final class Compositor {
 			}
 			Rect fitted = ViewportMath.letterbox(imp.transport.width(), imp.transport.height(), guest.getValue());
 			glReadPixels(fitted.x() + 4, swapHeight - (fitted.y() + 4) - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probePixel);
-			HearthsideMod.LOGGER.info("Hearthside compositor probe player={} rgb={}", guest.getKey() + 1,
+			HearthsideMod.LOGGER.info("Hearthside compositor probe player={} gen={} rgb={}", guest.getKey() + 1, imp.generation,
 					String.format("%02x%02x%02x", probePixel.get(0) & 0xFF, probePixel.get(1) & 0xFF, probePixel.get(2) & 0xFF));
 		}
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
