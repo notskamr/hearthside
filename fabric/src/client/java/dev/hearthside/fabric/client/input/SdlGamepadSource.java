@@ -6,6 +6,7 @@ import dev.hearthside.core.input.GamepadSource;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadSnapshot;
+import dev.hearthside.core.input.PadFamilies;
 import dev.hearthside.core.input.PadStyle;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
@@ -75,7 +76,7 @@ public final class SdlGamepadSource implements GamepadSource, AutoCloseable {
 						long handle = SDL_OpenGamepad(id);
 						if (handle != 0L) {
 							String name = SDL_GetGamepadNameForID(id);
-							open.put(id, new Open(handle, guidOf(id), name == null ? "Controller" : name, styleOf(SDL_GetGamepadTypeForID(id))));
+							open.put(id, new Open(handle, guidOf(id), name == null ? "Controller" : name, PadFamilies.fromSdl(SDL_GetGamepadTypeForID(id), SDL_GetGamepadVendorForID(id))));
 						}
 					}
 				}
@@ -130,17 +131,4 @@ public final class SdlGamepadSource implements GamepadSource, AutoCloseable {
 		}
 	}
 
-	private static PadStyle styleOf(int type) {
-		if (type == SDL_GAMEPAD_TYPE_XBOX360 || type == SDL_GAMEPAD_TYPE_XBOXONE) {
-			return PadStyle.XBOX;
-		}
-		if (type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5) {
-			return PadStyle.PLAYSTATION;
-		}
-		if (type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO || type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT
-				|| type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT || type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR) {
-			return PadStyle.NINTENDO;
-		}
-		return PadStyle.GENERIC;
-	}
 }
