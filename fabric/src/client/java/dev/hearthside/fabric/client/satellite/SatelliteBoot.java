@@ -51,6 +51,7 @@ public final class SatelliteBoot {
 			return;
 		}
 		minecraft.options.pauseOnLostFocus = false;
+		HearthsideMod.LOGGER.info("Hearthside satellite ignores OS keyboard and mouse");
 		// World audio plays once, from the host; per-player UI sounds return with Plan 5.
 		minecraft.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
 
