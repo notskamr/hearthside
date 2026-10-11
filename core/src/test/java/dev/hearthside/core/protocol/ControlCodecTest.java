@@ -86,4 +86,12 @@ class ControlCodecTest {
 				new DataOutputStream(OutputStream.nullOutputStream())))
 				.isInstanceOf(IllegalArgumentException.class);
 	}
+
+	@Test
+	void malformedStringIsProtocolError() {
+		byte[] payload = ByteBuffer.allocate(12).putInt(1).putInt(1)
+				.putShort((short) 2).put((byte) 0xC0).put((byte) 0x00).array();
+		assertThatThrownBy(() -> ControlCodec.read(input(frame(2 + payload.length, 1, payload))))
+				.isInstanceOf(ProtocolException.class);
+	}
 }

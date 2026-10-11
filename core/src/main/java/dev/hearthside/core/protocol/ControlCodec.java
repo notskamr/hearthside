@@ -8,6 +8,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.UTFDataFormatException;
 
 /**
  * Frames control messages as {@code int length, unsigned short typeId, payload}, where
@@ -107,6 +108,8 @@ public final class ControlCodec {
 			};
 		} catch (EOFException e) {
 			throw new ProtocolException("Payload too short for message type " + type);
+		} catch (UTFDataFormatException e) {
+			throw new ProtocolException("Malformed string in message type " + type);
 		} catch (IllegalArgumentException e) {
 			throw new ProtocolException("Invalid payload for message type " + type + ": " + e.getMessage());
 		}

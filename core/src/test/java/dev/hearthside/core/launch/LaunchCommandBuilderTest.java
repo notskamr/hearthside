@@ -82,4 +82,11 @@ class LaunchCommandBuilderTest {
 		assertThat(lc.command()).doesNotContain("s3cret");
 		assertThat(lc.environment()).containsEntry("HEARTHSIDE_LAUNCH_SECRET", "s3cret");
 	}
+
+	@Test
+	void inheritedJvmOptionVariablesAreRemoved() {
+		// A debugger set through these variables would otherwise be inherited by every satellite.
+		assertThat(LaunchCommandBuilder.build(host, sat).removedEnvironment())
+				.containsExactlyInAnyOrder("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS");
+	}
 }

@@ -7,10 +7,14 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.lang.System.Logger.Level;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -40,21 +44,17 @@ public final class ProfileStore {
 		if (!Files.exists(file)) {
 			return List.of();
 		}
-		String json = Files.readString(file, StandardCharsets.UTF_8);
 		try {
-			JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-			int schema = root.get("schemaVersion").getAsInt();
-			if (schema > SCHEMA_VERSION) {
-				throw new UnsupportedSchemaException(
-						file + " has schemaVersion " + schema + "; this Hearthside supports up to " + SCHEMA_VERSION);
-			}
+			JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject();
+			refuseIfNewer(root);
 			FileDto dto = GSON.fromJson(root, FileDto.class);
 			List<GuestProfile> profiles = new ArrayList<>();
 			for (ProfileDto p : dto.profiles()) {
 				profiles.add(p.toProfile());
 			}
+			requireUnique(profiles);
 			return List.copyOf(profiles);
-		} catch (JsonParseException | IllegalStateException | IllegalArgumentException
+		} catch (CharacterCodingException | JsonParseException | IllegalStateException | IllegalArgumentException
 				| NullPointerException | UnsupportedOperationException e) {
 			Path backup = file.resolveSibling(file.getFileName() + ".corrupt-" + System.currentTimeMillis());
 			Files.move(file, backup);
@@ -63,7 +63,55 @@ public final class ProfileStore {
 		}
 	}
 
+	/**
+	 * Replaces the file atomically. Refuses with {@link UnsupportedSchemaException} if the existing
+	 * file is from a newer schema, so a refused file can never be overwritten by mistake.
+	 */
 	public void save(List<GuestProfile> profiles) throws IOException {
+		requireUnique(profiles);
+		refuseIfExistingFileIsNewer();
+		List<ProfileDto> dtos = profiles.stream().map(ProfileDto::from).toList();
+		byte[] json = GSON.toJson(new FileDto(SCHEMA_VERSION, dtos)).getBytes(StandardCharsets.UTF_8);
+
+		Path parent = file.toAbsolutePath().getParent();
+		Files.createDirectories(parent);
+		Path tmp = Files.createTempFile(parent, file.getFileName().toString(), ".tmp");
+		try {
+			try (FileChannel channel = FileChannel.open(tmp, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+				ByteBuffer buffer = ByteBuffer.wrap(json);
+				while (buffer.hasRemaining()) {
+					channel.write(buffer);
+				}
+				// Reach the disk before the rename, or a crash could leave a renamed but empty file.
+				channel.force(true);
+			}
+			Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+		} finally {
+			Files.deleteIfExists(tmp);
+		}
+	}
+
+	private void refuseIfExistingFileIsNewer() throws IOException {
+		if (!Files.exists(file)) {
+			return;
+		}
+		try {
+			refuseIfNewer(JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject());
+		} catch (CharacterCodingException | JsonParseException | IllegalStateException | NullPointerException
+				| UnsupportedOperationException e) {
+			// Unreadable: not a newer schema we could lose, so it may be replaced.
+		}
+	}
+
+	private void refuseIfNewer(JsonObject root) throws UnsupportedSchemaException {
+		int schema = root.get("schemaVersion").getAsInt();
+		if (schema > SCHEMA_VERSION) {
+			throw new UnsupportedSchemaException(
+					file + " has schemaVersion " + schema + "; this Hearthside supports up to " + SCHEMA_VERSION);
+		}
+	}
+
+	private static void requireUnique(List<GuestProfile> profiles) {
 		Set<UUID> ids = new HashSet<>();
 		Set<String> names = new HashSet<>();
 		for (GuestProfile p : profiles) {
@@ -73,18 +121,6 @@ public final class ProfileStore {
 			if (!names.add(p.name().toLowerCase(Locale.ROOT))) {
 				throw new IllegalArgumentException("Duplicate profile name " + p.name());
 			}
-		}
-		List<ProfileDto> dtos = profiles.stream().map(ProfileDto::from).toList();
-		String json = GSON.toJson(new FileDto(SCHEMA_VERSION, dtos));
-
-		Path parent = file.toAbsolutePath().getParent();
-		Files.createDirectories(parent);
-		Path tmp = Files.createTempFile(parent, file.getFileName().toString(), ".tmp");
-		try {
-			Files.writeString(tmp, json, StandardCharsets.UTF_8);
-			Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-		} finally {
-			Files.deleteIfExists(tmp);
 		}
 	}
 

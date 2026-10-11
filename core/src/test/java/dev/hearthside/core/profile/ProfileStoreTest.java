@@ -86,4 +86,37 @@ class ProfileStoreTest {
 		nested.save(List.of());
 		assertThat(dir.resolve("hearthside/profiles.json")).exists();
 	}
+
+	@Test
+	void undecodableBytesCountAsCorrupt() throws Exception {
+		Files.write(file, new byte[] {(byte) 0xFF, (byte) 0xFE, '{'});
+		assertThat(store.load()).isEmpty();
+		assertThat(file).doesNotExist();
+	}
+
+	@Test
+	void duplicateNamesInFileCountAsCorrupt() throws Exception {
+		Files.writeString(file, "{\"schemaVersion\":1,\"profiles\":["
+				+ "{\"id\":\"" + UUID.randomUUID() + "\",\"name\":\"Alice\",\"skin\":{\"kind\":\"DEFAULT\",\"value\":\"alex\"}},"
+				+ "{\"id\":\"" + UUID.randomUUID() + "\",\"name\":\"alice\",\"skin\":{\"kind\":\"DEFAULT\",\"value\":\"alex\"}}]}");
+		assertThat(store.load()).isEmpty();
+		assertThat(file).doesNotExist();
+	}
+
+	@Test
+	void saveRefusesToOverwriteNewerSchema() throws Exception {
+		String newer = "{\"schemaVersion\":2,\"profiles\":[]}";
+		Files.writeString(file, newer);
+		var a = new GuestProfile(UUID.randomUUID(), "Alice", SkinRef.defaultSkin("alex"), null);
+		assertThatThrownBy(() -> store.save(List.of(a))).isInstanceOf(UnsupportedSchemaException.class);
+		assertThat(Files.readString(file)).isEqualTo(newer);
+	}
+
+	@Test
+	void saveOverwritesCorruptLeftoversOfCurrentSchema() throws Exception {
+		Files.writeString(file, "{\"schemaVersion\":1,\"profiles\":[]}");
+		var a = new GuestProfile(UUID.randomUUID(), "Alice", SkinRef.defaultSkin("alex"), null);
+		store.save(List.of(a));
+		assertThat(store.load()).containsExactly(a);
+	}
 }

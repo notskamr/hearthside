@@ -26,6 +26,13 @@ public final class LaunchCommandBuilder {
 			"--quickPlayPath", "--quickPlaySingleplayer", "--quickPlayMultiplayer", "--quickPlayRealms",
 			"--server", "--port");
 
+	/**
+	 * The JVM reads extra options from these; a debugger configured through them would make every
+	 * satellite fight the host for the same debug port.
+	 */
+	private static final Set<String> INHERITED_JVM_OPTION_VARIABLES =
+			Set.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS");
+
 	private LaunchCommandBuilder() {}
 
 	public static LaunchCommand build(HostJvm host, SatelliteLaunch sat) {
@@ -65,6 +72,6 @@ public final class LaunchCommandBuilder {
 		cmd.add("--accessToken");
 		cmd.add("0");
 
-		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret()));
+		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret()), INHERITED_JVM_OPTION_VARIABLES);
 	}
 }
