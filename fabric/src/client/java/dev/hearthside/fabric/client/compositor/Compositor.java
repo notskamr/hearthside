@@ -79,6 +79,10 @@ public final class Compositor {
 	private int layoutWidth, layoutHeight;
 	private int readFbo;
 	private long lastProbe;
+	// Composition cost, logged as percentiles every 30 s.
+	private final long[] costs = new long[4096];
+	private int costCount;
+	private long costWindowStart = System.nanoTime();
 
 	private Compositor(Minecraft minecraft, Runnable onWindowResized) {
 		this.minecraft = minecraft;
@@ -184,6 +188,7 @@ public final class Compositor {
 
 	/** Draws every view into the window's back buffer. Called in place of Minecraft's blit; the swap follows. */
 	public void present(int hostTexture, int hostWidth, int hostHeight, int swapWidth, int swapHeight) {
+		long start = System.nanoTime();
 		if (swapWidth != layoutWidth || swapHeight != layoutHeight) {
 			layoutWidth = swapWidth;
 			layoutHeight = swapHeight;
@@ -229,6 +234,7 @@ public final class Compositor {
 		if (probe) {
 			probeGuests(swapHeight);
 		}
+		recordCost(System.nanoTime() - start);
 	}
 
 	private void blit(int texture, int width, int height, Rect target, int swapHeight) {
@@ -257,6 +263,23 @@ public final class Compositor {
 		while (!retired.isEmpty()) {
 			retired.removeFirst().close();
 		}
+	}
+
+	private void recordCost(long nanos) {
+		if (costCount < costs.length) {
+			costs[costCount++] = nanos;
+		}
+		long now = System.nanoTime();
+		if (now - costWindowStart < 30_000_000_000L || costCount == 0) {
+			return;
+		}
+		long[] sorted = java.util.Arrays.copyOf(costs, costCount);
+		java.util.Arrays.sort(sorted);
+		HearthsideMod.LOGGER.info("Hearthside compositor cost guests={} p50={} ms p95={} ms frames={}", guestViewports.size(),
+				String.format("%.3f", sorted[sorted.length / 2] / 1e6), String.format("%.3f", sorted[(int) (sorted.length * 0.95)] / 1e6),
+				costCount);
+		costCount = 0;
+		costWindowStart = now;
 	}
 
 	/** E2E: logs the composited colour just inside each guest viewport's top-left corner, once a second. */

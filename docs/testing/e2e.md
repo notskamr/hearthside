@@ -73,6 +73,35 @@ Found while building this:
 - A half-screen window is narrower than vanilla's 379 GUI px, where the recipe book is drawn over the inventory.
   Crafting (X) now only opens the book where it fits.
 
+## Compositor (one window) — 2026-10-11, same machine
+
+Every player is drawn into player 1's window; guests render hidden. In E2E runs each guest paints an 8×8 magenta
+corner into the frames it exports (`HEARTHSIDE_E2E_PATTERN=1`) and the host logs the colour it composited just inside
+that corner of the guest's view once a second; the steps wait for `ff00ff`.
+
+| # | Check | Result |
+|---|---|---|
+| C1 | The guest's window is created hidden | PASS |
+| C2 | The guest's frames reach the host's window (zero-copy GPU sharing) | PASS |
+| C3 | Split-screen no longer moves or resizes the host window | PASS |
+| C4 | Resizing the host window re-lays out the guest (guest re-renders at half the new width) | PASS |
+| C5 | The copy fallback transport works | PASS — FAILED first (see below) |
+| C6 | Maximise and restore keep the guest composited | PASS |
+| C7 | A third player joins and leaves: both guests composited, no GL errors | PASS |
+| C8 | After a guest crash, the restarted guest's frames come back | PASS |
+| C9 | The host's OS mouse works inside its own view; clicks over a guest's view do nothing | PASS |
+| C10 | When the last guest leaves, the host renders at full window size again | PASS |
+
+All 33 steps (walking skeleton, controllers, menus, attack, compositor) pass in one run; force-killing the host still
+ends the satellite (0.8 s).
+
+Found while building this:
+- Minecraft creates a GL 3.3 context; the compositor's 4.x calls (direct state access, copy image, clear texture) come
+  from extensions, which this AMD driver exposes. The host checks them and falls back to tiled windows otherwise.
+- The copy transport showed an empty texture: Minecraft leaves its last upload's `GL_UNPACK_ROW_LENGTH` set. Pixel
+  transfers now set the pixel-store state first (through `GlStateManager`, so its cache stays right).
+- `SDL_WINDOW_NOT_FOCUSABLE` alone does not stop a window activating when first shown; guests also start hidden.
+
 ## Controllers (manual — needs real pads)
 
 Use two physical controllers, ideally two identical ones, and one of a different family if available.
