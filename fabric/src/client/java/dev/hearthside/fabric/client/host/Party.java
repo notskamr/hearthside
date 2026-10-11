@@ -48,6 +48,7 @@ import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.compositor.GlInterop;
 import dev.hearthside.fabric.client.compositor.Presentation;
+import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -186,14 +187,18 @@ public final class Party {
 			HearthsideMod.LOGGER.info("Hearthside guests' backend override \"{}\": guests use {}", override, guestBackend.argument());
 		}
 		try {
-			// E2E: tiled windows, as on a GL without the compositor's extensions or on Vulkan.
-			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Presentation.glSupportsCompositing();
+			// E2E: tiled windows, as where the canvas can't be created.
+			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Compositor.canComposite();
 			if (composite) {
-				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5).
-				hostTransport = TransportChoice.choose(GlInterop.probe(false));
+				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5). On Vulkan
+				// there is no GL to probe: what this game's backend can import decides.
+				hostTransport = own == GraphicsBackend.OPENGL
+						? TransportChoice.choose(GlInterop.probe(false))
+						: TransportChoice.decide(SharedImages.forThisGame().facts(), Presentation.forceCopy()).transport();
 			}
 		} catch (RuntimeException | LinkageError e) {
-			composite = false; // no GL context (for example Minecraft's Vulkan backend)
+			HearthsideMod.LOGGER.error("Hearthside could not set up compositing; tiled windows for this session", e);
+			composite = false;
 		}
 		HearthsideMod.LOGGER.info("Hearthside split-screen presentation: {}", composite ? "one window" : "tiled windows");
 	}
