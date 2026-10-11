@@ -3,6 +3,7 @@ package dev.hearthside.core.protocol;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.ControlSchemeJson;
 import dev.hearthside.core.layout.Rect;
@@ -58,7 +59,7 @@ class ControlCodecTest {
 	@Test
 	void truncatedFrameThrowsEof() throws IOException {
 		var bytes = new ByteArrayOutputStream();
-		ControlCodec.write(new ControlMessage.SetViewport(new Rect(0, 0, 960, 540)), new DataOutputStream(bytes));
+		ControlCodec.write(new ControlMessage.SetViewport(new Rect(0, 0, 960, 540), 60), new DataOutputStream(bytes));
 		byte[] cut = Arrays.copyOf(bytes.toByteArray(), bytes.size() - 3);
 		assertThatThrownBy(() -> ControlCodec.read(input(cut))).isInstanceOf(EOFException.class);
 	}
@@ -71,7 +72,7 @@ class ControlCodecTest {
 
 	@Test
 	void shortPayloadIsRejected() {
-		// SetViewport needs 16 payload bytes; give it 4.
+		// SetViewport needs 20 payload bytes; give it 4.
 		assertThatThrownBy(() -> ControlCodec.read(input(frame(2 + 4, 4, new byte[4]))))
 				.isInstanceOf(ProtocolException.class);
 	}
@@ -87,6 +88,44 @@ class ControlCodecTest {
 		assertThatThrownBy(() -> ControlCodec.write(new ControlMessage.Unknown(7),
 				new DataOutputStream(OutputStream.nullOutputStream())))
 				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	private static ControlMessage roundTrip(ControlMessage message) throws IOException {
+		var bytes = new ByteArrayOutputStream();
+		ControlCodec.write(message, new DataOutputStream(bytes));
+		return ControlCodec.read(input(bytes.toByteArray()));
+	}
+
+	@Test
+	void setViewportRoundTripsRefresh() throws IOException {
+		var message = new ControlMessage.SetViewport(new Rect(960, 0, 960, 1080), 144);
+		assertThat(roundTrip(message)).isEqualTo(message);
+	}
+
+	@Test
+	void setViewportRejectsRefreshOutOfRange() {
+		assertThatThrownBy(() -> new ControlMessage.SetViewport(new Rect(0, 0, 1, 1), 0))
+				.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> new ControlMessage.SetViewport(new Rect(0, 0, 1, 1), 1001))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void frameSlotsReadyRoundTrips() throws IOException {
+		var message = new ControlMessage.FrameSlotsReady(Transport.GPU_SHARED, 960, 1080, 3,
+				"C:\\Users\\me\\.minecraft\\hearthside\\satellite-1\\frames.slots");
+		assertThat(roundTrip(message)).isEqualTo(message);
+	}
+
+	@Test
+	void frameSlotsReadyRejectsNonPositiveSize() {
+		assertThatThrownBy(() -> new ControlMessage.FrameSlotsReady(Transport.COPY, 0, 1080, 1, "f"))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void protocolVersionIsTwo() {
+		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(2);
 	}
 
 	@Test

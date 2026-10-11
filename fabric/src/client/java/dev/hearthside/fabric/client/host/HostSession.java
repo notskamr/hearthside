@@ -382,7 +382,7 @@ public final class HostSession {
 		for (int i = 0; i < guests.size(); i++) {
 			ControlConnection connection = guests.get(i).connection;
 			if (connection != null) {
-				send(connection, new ControlMessage.SetViewport(rects.get(i + 1)));
+				send(connection, new ControlMessage.SetViewport(rects.get(i + 1), WindowPlacer.refreshHz(minecraft.getWindow())));
 			}
 		}
 		WindowPlacer.focus(minecraft.getWindow());

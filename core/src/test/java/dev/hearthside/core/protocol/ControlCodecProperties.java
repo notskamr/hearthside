@@ -2,6 +2,7 @@ package dev.hearthside.core.protocol;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.ControlSchemeJson;
 import dev.hearthside.core.input.InputFrame;
@@ -45,8 +46,11 @@ class ControlCodecProperties {
 						Combinators.combine(trigger, trigger).as((l, r) -> new float[] {l, r}))
 				.as((seq, buttons, lx, ly, rx, ry, t) ->
 						new ControlMessage.Input(new InputFrame(seq, buttons, lx, ly, rx, ry, t[0], t[1])));
-		Arbitrary<ControlMessage> viewport = Combinators.combine(ints, ints, size, size)
-				.as((x, y, w, h) -> new ControlMessage.SetViewport(new Rect(x, y, w, h)));
+		Arbitrary<ControlMessage> viewport = Combinators.combine(ints, ints, size, size, Arbitraries.integers().between(1, 1000))
+				.as((x, y, w, h, hz) -> new ControlMessage.SetViewport(new Rect(x, y, w, h), hz));
+		Arbitrary<Integer> positive = Arbitraries.integers().between(1, 16384);
+		Arbitrary<ControlMessage> slotsReady = Combinators.combine(Arbitraries.of(Transport.class), positive, positive, ints, text)
+				.as(ControlMessage.FrameSlotsReady::new);
 		Arbitrary<ControlMessage> lifecycle = Arbitraries.of(LifecycleCommand.class).map(ControlMessage.Lifecycle::new);
 
 		Arbitrary<ControlMessage> joinWorld = Arbitraries.integers().between(1, 65535).map(ControlMessage.JoinWorld::new);
@@ -55,6 +59,6 @@ class ControlCodecProperties {
 				Arbitraries.just(ControlSchemeJson.toJson(ControlScheme.BEDROCK)), text).map(ControlMessage.SetControls::new);
 		Arbitrary<ControlMessage> padStyle = Arbitraries.of(PadStyle.class).map(ControlMessage.SetPadStyle::new);
 
-		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld, setControls, padStyle);
+		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld, setControls, padStyle, slotsReady);
 	}
 }

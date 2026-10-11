@@ -49,7 +49,7 @@ class ControlChannelTest {
 	@Test
 	void helloIsAcceptedAndMessagesFlowBothWays() throws Exception {
 		var serverReceived = new CompletableFuture<ControlMessage>();
-		var viewport = new ControlMessage.SetViewport(new Rect(960, 0, 960, 1080));
+		var viewport = new ControlMessage.SetViewport(new Rect(960, 0, 960, 1080), 60);
 		var server = server(h -> new HelloVerdict(ACCEPT, conn -> {
 			conn.onMessage(serverReceived::complete);
 			try {
