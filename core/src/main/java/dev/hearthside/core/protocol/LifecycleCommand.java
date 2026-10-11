@@ -4,5 +4,7 @@ package dev.hearthside.core.protocol;
 public enum LifecycleCommand {
 	QUIT,
 	PAUSE,
-	RESUME
+	RESUME,
+	/** Leave the world (back to its idle title), as its own pause menu would. */
+	DISCONNECT
 }

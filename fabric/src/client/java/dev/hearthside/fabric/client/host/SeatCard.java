@@ -7,6 +7,7 @@ import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.ProfileCarousel;
 import dev.hearthside.core.profile.QuickSetup;
 import dev.hearthside.core.ui.KeyboardModel;
+import dev.hearthside.fabric.client.ui.HearthSounds;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
@@ -43,6 +44,8 @@ public final class SeatCard {
 	private GuestProfile keep;
 	/** Opened with X on a ready card: B in More goes straight back to the ready seat. */
 	private final boolean moreOnly;
+	/** False mid-game: X does nothing (More's screens would take over player 1's view). */
+	private boolean moreAllowed = true;
 	private int moreFocus;
 	private final NavRepeater horizontal = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
 	private final NavRepeater vertical = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
@@ -95,7 +98,11 @@ public final class SeatCard {
 
 	private Outcome more(int pressed, int dy) {
 		List<MoreEntry> entries = moreEntries();
+		int before = moreFocus;
 		moreFocus = Math.floorMod(moreFocus + dy, entries.size());
+		if (moreFocus != before) {
+			HearthSounds.play(HearthSounds.Ui.TICK);
+		}
 		if (down(pressed, PadButton.B)) {
 			if (moreOnly) {
 				chosen = keep;
@@ -105,6 +112,7 @@ public final class SeatCard {
 			return Outcome.NONE;
 		}
 		if (down(pressed, PadButton.A)) {
+			HearthSounds.play(HearthSounds.Ui.KNOCK);
 			return entries.get(moreFocus) == MoreEntry.CONTROLS ? Outcome.CONTROLS : Outcome.MANAGE;
 		}
 		return Outcome.NONE;
@@ -121,9 +129,13 @@ public final class SeatCard {
 		if (down(pressed, PadButton.Y)) {
 			carousel.next();
 		}
-		if (down(pressed, PadButton.X)) {
+		if (dx != 0 || down(pressed, PadButton.Y)) {
+			HearthSounds.play(HearthSounds.Ui.PAGE);
+		}
+		if (down(pressed, PadButton.X) && moreAllowed) {
 			stage = Stage.MORE;
 			moreFocus = 0;
+			HearthSounds.play(HearthSounds.Ui.TICK);
 			return Outcome.NONE;
 		}
 		if (down(pressed, PadButton.B)) {
@@ -135,6 +147,7 @@ public final class SeatCard {
 			return Outcome.LEAVE;
 		}
 		if (down(pressed, PadButton.A)) {
+			HearthSounds.play(HearthSounds.Ui.KNOCK);
 			if (carousel.current() instanceof ProfileCarousel.Entry.Profile(GuestProfile profile)) {
 				chosen = profile;
 				return Outcome.CONFIRMED;
@@ -150,6 +163,7 @@ public final class SeatCard {
 				if (dx != 0 || dy != 0) {
 					keyboard.move(dx, dy);
 					keyboardMoved = true;
+					HearthSounds.play(HearthSounds.Ui.TICK);
 				}
 				if (down(pressed, PadButton.B)) {
 					// Back out of quick setup to the carousel.
@@ -163,19 +177,24 @@ public final class SeatCard {
 						acceptName();
 					} else {
 						keyboard.type();
+						HearthSounds.play(HearthSounds.Ui.KEY);
 					}
 				}
 				if (down(pressed, PadButton.X)) {
 					keyboard.delete();
+					HearthSounds.play(HearthSounds.Ui.KEY_DELETE);
 				}
 				if (down(pressed, PadButton.Y)) {
 					keyboard.space();
+					HearthSounds.play(HearthSounds.Ui.KEY);
 				}
 				if (down(pressed, PadButton.LEFT_BUMPER)) {
 					keyboard.previousLayer();
+					HearthSounds.play(HearthSounds.Ui.PAGE);
 				}
 				if (down(pressed, PadButton.RIGHT_BUMPER)) {
 					keyboard.nextLayer();
+					HearthSounds.play(HearthSounds.Ui.PAGE);
 				}
 				if (down(pressed, PadButton.START)) {
 					acceptName();
@@ -189,7 +208,11 @@ public final class SeatCard {
 						setup.previousSkin();
 					}
 				}
+				if (dx != 0) {
+					HearthSounds.play(HearthSounds.Ui.PAGE);
+				}
 				if (down(pressed, PadButton.A) || down(pressed, PadButton.START)) {
+					HearthSounds.play(HearthSounds.Ui.KNOCK);
 					setup.next();
 				} else if (down(pressed, PadButton.B)) {
 					setup.back();
@@ -203,7 +226,11 @@ public final class SeatCard {
 						setup.previousColor();
 					}
 				}
+				if (dx != 0) {
+					HearthSounds.play(HearthSounds.Ui.PAGE);
+				}
 				if (down(pressed, PadButton.A) || down(pressed, PadButton.START)) {
+					HearthSounds.play(HearthSounds.Ui.KNOCK);
 					// Stays on this step: if the party refuses the profile, the card goes back to the name.
 					chosen = setup.build(UUID.randomUUID(), keyboard.text(), controllerGuid);
 					return Outcome.CONFIRMED;
@@ -225,6 +252,7 @@ public final class SeatCard {
 			nameProblem = name + " is taken";
 		} else {
 			nameProblem = null;
+			HearthSounds.play(HearthSounds.Ui.KNOCK);
 			setup.next();
 		}
 	}
@@ -299,6 +327,11 @@ public final class SeatCard {
 
 	private static boolean down(int pressed, PadButton button) {
 		return (pressed & InputFrame.buttons(button)) != 0;
+	}
+
+	/** Mid-game: no More on this card. */
+	public void noMore() {
+		moreAllowed = false;
 	}
 
 	/** More's entries: Controls for a profile (not for New), then Manage profiles. */

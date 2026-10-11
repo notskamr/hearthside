@@ -34,6 +34,7 @@ import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
 import dev.hearthside.core.session.JoinFlow;
 import dev.hearthside.core.session.SatelliteDirectories;
+import dev.hearthside.core.session.ViewPhases;
 import dev.hearthside.core.supervise.RestartPolicy;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
@@ -43,6 +44,7 @@ import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.compositor.GlInterop;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.window.WindowPlacer;
@@ -102,6 +104,24 @@ public final class Party {
 	private Rect hostWindowBefore;
 	private boolean pauseOnLostFocusBefore;
 	private Rect workArea;
+	/** Where every player's view is drawn in the one window while compositing (fresh for each split-screen run). */
+	private Views views = new Views();
+	/** What each guest's view shows: their card while they join, then their game (fresh for each split-screen run). */
+	private ViewPhases phases = new ViewPhases();
+	/** Guests whose views are fading out: who they were (and their card, if they were still picking), drawn as they were. */
+	private record Leaving(dev.hearthside.fabric.client.ui.CardPainter.Who who, SeatCard card) {}
+	private final Map<Integer, Leaving> leaving = new HashMap<>();
+	/** A view is fading out; once it has gone, the others glide into its space. */
+	private boolean relayoutAfterFade;
+	/** The views are gliding after a leave; once they settle it is logged (and with nobody left, split-screen ends). */
+	private boolean settling;
+	/** When the last leave began. */
+	private long leaveAt;
+	private final ViewOverlay viewOverlay = new ViewOverlay(this);
+	/** The party panel's live map: sampled on the server thread, drawn from a texture. */
+	private final MapSampler mapSampler;
+	private final PartyMapTexture mapTexture = new PartyMapTexture();
+	private int lastMarkerCount = -1;
 	/** Whether guests render hidden and this window composites them (decided on the render thread at session start). */
 	private volatile boolean composite;
 	/** Player 1's colour, from the host profile. */
@@ -137,6 +157,7 @@ public final class Party {
 		this.minecraft = minecraft;
 		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
+		this.mapSampler = new MapSampler(minecraft.getUser().getName());
 		this.controlServer = ControlServer.start(this::verifyHello);
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
 		minecraft.execute(this::choosePresentation);
@@ -147,7 +168,8 @@ public final class Party {
 	/** Composite into this window when the GL context supports it; otherwise tile real windows. Render thread. */
 	private void choosePresentation() {
 		try {
-			composite = Presentation.glSupportsCompositing();
+			// E2E: tiled windows, as on a GL without the compositor's extensions or on Vulkan.
+			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Presentation.glSupportsCompositing();
 			if (composite) {
 				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5).
 				hostTransport = TransportChoice.choose(GlInterop.probe(false));
@@ -174,6 +196,9 @@ public final class Party {
 			hostColor = file.host().color();
 			hostReduceMotion = file.host().settings().reduceMotion();
 			ButtonGuideRenderer.setReduceMotion(hostReduceMotion);
+			dev.hearthside.fabric.client.compositor.OverlayPass.setReduceMotion(hostReduceMotion);
+			OverlayPass.unregister(joinToast);
+			OverlayPass.register(joinToast);
 			hostControllerGuid = file.host().preferredControllerGuid();
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not read the host's controls; using Bedrock defaults", e);
@@ -237,6 +262,11 @@ public final class Party {
 		input.armClaim();
 	}
 
+	/** E2E: a guest's game leaves the world, as its own pause menu's Disconnect would. */
+	public void e2eDisconnectGuest(int index) {
+		sendToGuest(index, new ControlMessage.Lifecycle(LifecycleCommand.DISCONNECT));
+	}
+
 	void sendToGuest(int index, ControlMessage message) {
 		Slot slot = slots.get(index);
 		ControlConnection connection = slot == null ? null : slot.connection;
@@ -254,7 +284,27 @@ public final class Party {
 		return new ProfileStore(gameDir.resolve("hearthside").resolve("profiles.json"));
 	}
 
+	/** The join toast for the party, if one is open (the E2E reads it). */
+	public dev.hearthside.fabric.client.ui.JoinToast joinToast() {
+		return joinToast;
+	}
+
 	public static void register() {
+		net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
+			Party party = current;
+			if (party != null) {
+				party.mapSampler.tick(server);
+			}
+		});
+		// When player 1 plays alone there is no overlay pass: the join toast draws on their HUD instead.
+		net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry.attachElementAfter(
+				net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements.CHAT,
+				net.minecraft.resources.Identifier.fromNamespaceAndPath(HearthsideMod.MOD_ID, "join_toast"), (g, delta) -> {
+					Party party = current;
+					if (party != null && Compositor.active() == null) {
+						party.joinToast.draw(g, g.guiWidth(), System.nanoTime());
+					}
+				});
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			if (server instanceof IntegratedServer) {
 				try {
@@ -360,6 +410,9 @@ public final class Party {
 		if (index < 0) {
 			throw new IllegalStateException("All 3 guest slots are taken");
 		}
+		// The seat may still be fading out from whoever had it last: the newcomer starts afresh.
+		leaving.remove(index);
+		phases.remove(index);
 
 		Slot slot = new Slot(index, profile);
 		Path satelliteDir = gameDir.resolve("hearthside").resolve("satellite-" + index);
@@ -373,7 +426,10 @@ public final class Party {
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
-		}, satelliteDir.resolve("logs").resolve("hearthside-launch.log"), RestartPolicy.DEFAULT,
+		}, satelliteDir.resolve("logs").resolve("hearthside-launch.log"),
+				// E2E: no restarts, so the first crash gives up.
+				Boolean.getBoolean("hearthside.e2e.failRestarts") ? new RestartPolicy(List.of(), Duration.ofMinutes(1))
+						: RestartPolicy.DEFAULT,
 				(task, delay) -> scheduler.schedule(task, delay.toMillis(), TimeUnit.MILLISECONDS),
 				Clock.systemUTC(), new SlotListener(slot));
 		if (slots.isEmpty()) {
@@ -390,7 +446,7 @@ public final class Party {
 		return index;
 	}
 
-	/** Removes a guest and closes their satellite. Runs on the render thread. */
+	/** Removes a guest and closes their satellite: their view fades out and the layout glides back. Render thread. */
 	public void leave(String name) {
 		Slot slot = slots.values().stream()
 				.filter(s -> s.profile != null && s.profile.name().equalsIgnoreCase(name))
@@ -423,6 +479,7 @@ public final class Party {
 				input.close();
 				input = null;
 			}
+			OverlayPass.unregister(joinToast);
 			leaveSplitScreen();
 		});
 		HearthsideMod.LOGGER.info("Hearthside session closed");
@@ -447,7 +504,10 @@ public final class Party {
 	private final Map<Integer, String> controllerOfSlot = new ConcurrentHashMap<>();
 	private final Map<String, Integer> instanceOf = new HashMap<>();
 	private final Map<String, String> guidOf = new HashMap<>();
-	private final Map<String, GuestProfile> chosen = new HashMap<>();
+	/** Each unassigned controller's family, so the join toast names its own button. */
+	private final Map<String, PadStyle> styleOfController = new HashMap<>();
+	/** The drop-in prompt (over the views, or on player 1's HUD when they play alone). */
+	final dev.hearthside.fabric.client.ui.JoinToast joinToast = new dev.hearthside.fabric.client.ui.JoinToast();
 	/** Controllers whose lobby card opens once their seat's game has started. */
 	private final java.util.Set<String> pendingCards = new java.util.HashSet<>();
 	/** Lobby cards of seats still choosing a profile, by player index. */
@@ -462,6 +522,8 @@ public final class Party {
 		String controller = controllerId(instanceId);
 		instanceOf.put(controller, instanceId);
 		guidOf.put(controller, guid);
+		HostInput currentInput = input;
+		styleOfController.put(controller, currentInput == null ? PadStyle.GENERIC : currentInput.styleOfPad(instanceId));
 		apply(flow.press(controller, button == PadButton.A ? Control.A : Control.B));
 	}
 
@@ -544,6 +606,10 @@ public final class Party {
 		if (current == null) {
 			return PadStyle.XBOX;
 		}
+		Leaving gone = player > 0 ? gone(player) : null;
+		if (gone != null) {
+			return gone.who().style(); // their controller has gone already; their fading card still shows its buttons
+		}
 		if (player >= 0) {
 			return current.hasPadFor(player) ? current.styleFor(player) : PadStyle.XBOX;
 		}
@@ -581,6 +647,22 @@ public final class Party {
 		return driver >= 0 && current.hasPadFor(driver) ? current.styleFor(driver) : padStyleOf(-1);
 	}
 
+	/** How long a card says a game couldn't start before the view fades out. */
+	private static final Duration FAILED_SHOWN = Duration.ofMillis(2500);
+
+	/** Keeps showing a seat's last picture from its game (it crashed) until its restarted game is in the world. */
+	private static void holdLastFrame(int seat, boolean hold) {
+		Compositor compositor = Compositor.active();
+		if (compositor != null) {
+			compositor.holdLastFrame(seat, hold);
+		}
+	}
+
+	/** A seat whose player has left and whose view is still fading out, or null. */
+	private Leaving gone(int seat) {
+		return slots.containsKey(seat) ? null : leaving.get(seat);
+	}
+
 	/** A guest's chosen profile, or null while they are choosing (or the seat is free). */
 	public GuestProfile profileOf(int index) {
 		Slot slot = slots.get(index);
@@ -592,6 +674,13 @@ public final class Party {
 	/** The card of a seat still choosing its profile, or null. */
 	public SeatCard seatCard(int player) {
 		return cards.get(player);
+	}
+
+	/** The card drawn in a seat's view: theirs while they pick, or the one they left with while their view fades. */
+	SeatCard drawnCard(int seat) {
+		SeatCard card = cards.get(seat);
+		Leaving gone = gone(seat);
+		return card != null || gone == null ? card : gone.card();
 	}
 
 	boolean hasSeatCard(int player) {
@@ -800,6 +889,10 @@ public final class Party {
 		if (player == 0) {
 			return hostColor;
 		}
+		Leaving gone = gone(player);
+		if (gone != null) {
+			return gone.who().colour();
+		}
 		Slot slot = slots.get(player);
 		GuestProfile profile = slot == null ? null : slot.profile;
 		return displayColor(player,
@@ -851,6 +944,9 @@ public final class Party {
 		}
 		slot.profile = profile;
 		cards.remove(index);
+		if (world != null && phases.phase(index).orElse(null) == dev.hearthside.core.session.ViewPhase.PICKING) {
+			phases.joining(index, System.nanoTime());
+		}
 		if (controller != null) {
 			apply(flow.profileChosen(controller, profile.id()));
 		}
@@ -960,22 +1056,211 @@ public final class Party {
 			}
 		});
 		try {
-			WorldsScreen.coopStore(gameDir).played(link.levelId(), System.currentTimeMillis(), names);
+			WorldsScreen.coopStore(gameDir).played(link.levelId(), System.currentTimeMillis(), names, link.openedAt());
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not record the co-op world", e);
 		}
 	}
 
-	/** Once a second: expire join prompts, offer take-overs, and mark guests who reached the world. Render thread. */
+	/** Once a second: expire join prompts, offer take-overs, and record co-op worlds guests reached. Render thread. */
+	// ---- What a guest's view shows (for ViewOverlay) ----
+
+	/** How much a seat's card covers their view: 1 = only the card, 0 = only their game. */
+	float cardCover(int seat, long now, boolean reduceMotion) {
+		return phases.cardCover(seat, now, reduceMotion);
+	}
+
+	// ---- The party panel (three players) ----
+
+	/** Where the party panel is drawn now (the free quarter with three players, in window pixels) and how opaque. */
+	java.util.Optional<Views.PanelDraw> panelAt(long now, boolean reduceMotion) {
+		return views.panelAt(now, reduceMotion);
+	}
+
+	/** How much of the party map has ground on it. For the E2E. */
+	public float mapFilled() {
+		return mapTexture.filled();
+	}
+
+	/** What the party panel shows this frame (and asks the sampler for its area). Render thread. */
+	dev.hearthside.fabric.client.ui.PartyPanel.State panelState() {
+		MapSampler.Snapshot snap = mapSampler.snapshot;
+		String host = minecraft.getUser().getName();
+		List<dev.hearthside.core.map.PartyMapView.Player> players = new ArrayList<>();
+		Map<String, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>> elsewhere = new HashMap<>();
+		if (snap != null) {
+			for (MapSampler.PlayerAt p : snap.players()) {
+				if (!p.dimension().equals(snap.hostDimension())) {
+					elsewhere.put(p.name(), p.dimension());
+					continue;
+				}
+				var player = new dev.hearthside.core.map.PartyMapView.Player(p.name(), colourOfPlayer(p.name()), p.x(), p.z(), p.yaw());
+				if (p.name().equals(host)) {
+					players.addFirst(player);
+				} else {
+					players.add(player);
+				}
+			}
+		}
+		var view = dev.hearthside.core.map.PartyMapView.frame(players);
+		mapSampler.want(view, snap != null ? snap.hostDimension() : net.minecraft.world.level.Level.OVERWORLD);
+		mapTexture.drain(mapSampler.rows);
+		var markers = players.stream().map(view::marker).toList();
+		if (markers.size() != lastMarkerCount) {
+			lastMarkerCount = markers.size();
+			HearthsideMod.LOGGER.info("Hearthside party map markers={}", markers.size());
+		}
+		List<dev.hearthside.fabric.client.ui.PartyPanel.Seat> seats = new ArrayList<>();
+		seats.add(new dev.hearthside.fabric.client.ui.PartyPanel.Seat(host, colorOf(0), placeOf(elsewhere.get(host))));
+		new java.util.TreeMap<>(slots).forEach((index, slot) -> {
+			String name = slot.profile != null ? slot.profile.name() : slot.displayName();
+			String status = switch (viewPhase(index)) {
+				case PICKING -> "picking…";
+				case JOINING -> "joining…";
+				case RECONNECTING -> "reconnecting…";
+				case FAILED -> "couldn't start";
+				case LIVE -> placeOf(elsewhere.get(name));
+			};
+			seats.add(new dev.hearthside.fabric.client.ui.PartyPanel.Seat(name, colorOf(index), status));
+		});
+		var weather = snap == null || !snap.raining() ? dev.hearthside.fabric.client.ui.PartyPanel.Weather.CLEAR
+				: snap.thundering() ? dev.hearthside.fabric.client.ui.PartyPanel.Weather.THUNDER
+				: dev.hearthside.fabric.client.ui.PartyPanel.Weather.RAIN;
+		return new dev.hearthside.fabric.client.ui.PartyPanel.State(mapTexture.ready() ? PartyMapTexture.ID : null, markers,
+				seats, snap == null ? 0 : snap.dayTime(), weather, freeControllers() > 0, joinStyle());
+	}
+
+	/** "in the Nether" or "in the End" for a player away from player 1's dimension, else null. */
+	private static String placeOf(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+		if (dimension == null) {
+			return null;
+		}
+		return dimension.equals(net.minecraft.world.level.Level.NETHER) ? "in the Nether"
+				: dimension.equals(net.minecraft.world.level.Level.END) ? "in the End" : "elsewhere";
+	}
+
+	private int colourOfPlayer(String name) {
+		if (name.equals(minecraft.getUser().getName())) {
+			return colorOf(0);
+		}
+		for (Slot slot : slots.values()) {
+			if (slot.profile != null && slot.profile.name().equalsIgnoreCase(name)) {
+				return colorOf(slot.index);
+			}
+		}
+		return 0x8A7A6A;
+	}
+
+	/** When the views were last laid out anew. */
+	long layoutChangedAt() {
+		return views.changedAt();
+	}
+
+	/** When a guest's game came into the world (their current phase's start). */
+	long liveSince(int seat) {
+		return phases.since(seat);
+	}
+
+	/** A player's name as their tag shows it: player 1's account name, or a guest's profile. */
+	String nameOf(int seat) {
+		if (seat == 0) {
+			return minecraft.getUser().getName();
+		}
+		return who(seat).name();
+	}
+
+	/** What a seat's view shows now (for the E2E and the overlay). */
+	public dev.hearthside.core.session.ViewPhase viewPhaseOf(int seat) {
+		return viewPhase(seat);
+	}
+
+	/** A picking newcomer's card colour: quick setup's pick, else the profile on their carousel, else their seat's. */
+	int pickerColour(int seat) {
+		SeatCard card = drawnCard(seat);
+		if (card != null && card.setup() != null) {
+			return card.setup().color();
+		}
+		if (card != null && card.carousel().current() instanceof ProfileCarousel.Entry.Profile(GuestProfile p)) {
+			return displayColor(seat, p.color());
+		}
+		return colorOf(seat);
+	}
+
+	/** A picking newcomer's skin, as their card shows it. */
+	net.minecraft.world.entity.player.PlayerSkin pickerSkin(int seat) {
+		SeatCard card = drawnCard(seat);
+		dev.hearthside.core.profile.SkinRef skin = null;
+		if (card != null && card.setup() != null) {
+			skin = card.setup().skin();
+		} else if (card != null && card.carousel().current() instanceof ProfileCarousel.Entry.Profile(GuestProfile p)) {
+			skin = p.skin();
+		}
+		return LobbyScreen.skin(skin);
+	}
+
+	dev.hearthside.core.session.ViewPhase viewPhase(int seat) {
+		return phases.phase(seat).orElse(dev.hearthside.core.session.ViewPhase.JOINING);
+	}
+
+	boolean joiningStuck(int seat, long now) {
+		return phases.stuck(seat, now);
+	}
+
+	/** Whether a seat's card sits over their last picture (dimmed) rather than on the plank wall. For the E2E. */
+	public boolean cardOverLastFrame(int seat) {
+		return cardStatus(seat, System.nanoTime()).overLastFrame();
+	}
+
+	/** What a seat's card says while their game joins, restarts or gives up. */
+	dev.hearthside.fabric.client.ui.CardPainter.Status cardStatus(int seat, long now) {
+		boolean stuck = phases.stuck(seat, now);
+		return switch (viewPhase(seat)) {
+			case RECONNECTING -> stuck ? dev.hearthside.fabric.client.ui.CardPainter.Status.STILL_RECONNECTING
+					: dev.hearthside.fabric.client.ui.CardPainter.Status.RECONNECTING;
+			case FAILED -> phases.overLastFrame(seat) ? dev.hearthside.fabric.client.ui.CardPainter.Status.COULDNT_START
+					: dev.hearthside.fabric.client.ui.CardPainter.Status.COULDNT_START_JOINING;
+			case PICKING, JOINING, LIVE -> stuck ? dev.hearthside.fabric.client.ui.CardPainter.Status.STILL_JOINING
+					: dev.hearthside.fabric.client.ui.CardPainter.Status.JOINING;
+		};
+	}
+
+	/** Who a seat is, for their card: name, skin, colour and controller family. */
+	dev.hearthside.fabric.client.ui.CardPainter.Who who(int seat) {
+		Leaving gone = gone(seat);
+		return gone != null ? gone.who() : who(seat, slots.get(seat));
+	}
+
+	private dev.hearthside.fabric.client.ui.CardPainter.Who who(int seat, Slot slot) {
+		GuestProfile profile = slot == null ? null : slot.profile;
+		String name = profile != null ? profile.name() : slot != null ? slot.displayName() : "Player " + (seat + 1);
+		return new dev.hearthside.fabric.client.ui.CardPainter.Who(name, LobbyScreen.skin(profile == null ? null : profile.skin()),
+				colorOf(seat), padStyleOf(seat));
+	}
+
+	/** A guest's game says it is in the world (past its loading screens). Render thread. */
+	private void guestInWorld(int index) {
+		HearthsideMod.LOGGER.info("Hearthside seat {} in world", index);
+		phases.inWorld(index, System.nanoTime());
+		holdLastFrame(index, false); // a restarted game's own frames now (its card crossfades into them)
+		String controller = controllerOfSlot.get(index);
+		if (controller != null) {
+			apply(flow.loaded(controller));
+		}
+	}
+
 	void tickFlow() {
 		WorldLink link = world;
 		controllerOfSlot.forEach((index, controller) -> {
 			Slot slot = slots.get(index);
 			GuestProfile profile = slot == null ? null : slot.profile;
 			if (link != null && profile != null && link.hasPlayer(profile.name())) {
-				flow.loaded(controller);
 				if (recordedInWorld.add(profile.id())) {
 					recordCoopWorld(link);
+				}
+				if (!composite) {
+					// With tiled windows no game reports being in the world (that comes with its frames): the server
+					// having them is enough.
+					apply(flow.loaded(controller));
 				}
 			}
 		});
@@ -985,21 +1270,13 @@ public final class Party {
 	private void apply(JoinFlow.Result result) {
 		for (JoinFlow.Effect effect : result.effects()) {
 			switch (effect) {
-				case JoinFlow.Effect.ShowJoinPrompt prompt -> minecraft.gui.toastManager().addToast(new SystemToast(
-						SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal("New controller"),
-						Component.literal("Press A again to join")));
+				case JoinFlow.Effect.ShowJoinPrompt prompt -> joinToast.show(prompt.controller(),
+						styleOfController.getOrDefault(prompt.controller(), PadStyle.GENERIC), System.nanoTime(),
+						JoinFlow.CONFIRM_WINDOW, hostReduceMotion);
 				case JoinFlow.Effect.OpenProfilePicker pick -> {
-					if (world == null) {
-						// In the lobby the player picks on their card, which opens once their seat's game starts.
-						pendingCards.add(pick.controller());
-					} else {
-						// In a world (drop-in), the profile last used on this controller (the in-view picker is 5c).
-						GuestProfile profile = profileFor(guidOf.get(pick.controller()));
-						if (profile != null) {
-							chosen.put(pick.controller(), profile);
-							flow.profileChosen(pick.controller(), profile.id());
-						}
-					}
+					// The player picks on their card, which opens once their seat's game starts: on the lobby's card, or
+					// (dropping in) inside their own new view while everyone else plays on.
+					pendingCards.add(pick.controller());
 				}
 				case JoinFlow.Effect.StartGuestGame start -> startForController(start.controller());
 				case JoinFlow.Effect.StopGuestGame stop -> {
@@ -1014,15 +1291,23 @@ public final class Party {
 				case JoinFlow.Effect.OfferTakeover offer -> chat(Component.literal(
 						"A player's controller is still disconnected. Plug it back in to carry on.")
 						.withStyle(ChatFormatting.YELLOW));
-				case JoinFlow.Effect.HideJoinPrompt hide -> { }
-				case JoinFlow.Effect.ClaimSeat claim -> { }
+				case JoinFlow.Effect.HideJoinPrompt hide -> joinToast.hide(hide.controller(), System.nanoTime());
+				// A crackle as the fire takes another player.
+				case JoinFlow.Effect.ClaimSeat claim -> dev.hearthside.fabric.client.ui.HearthSounds.play(
+						dev.hearthside.fabric.client.ui.HearthSounds.Ui.JOIN);
 			}
 		}
 	}
 
 	private void startForController(String controller) {
-		GuestProfile profile = chosen.remove(controller);
 		boolean card = pendingCards.remove(controller);
+		GuestProfile profile = null;
+		if (world != null && !composite) {
+			// Tiled windows: nothing draws a card over a guest's own window, so they come in as their controller's
+			// profile straight away (as before Plan 5c1).
+			card = false;
+			profile = profileFor(guidOf.get(controller));
+		}
 		Integer instanceId = instanceOf.get(controller);
 		if ((profile == null && !card) || instanceId == null) {
 			apply(flow.leave(controller));
@@ -1031,8 +1316,18 @@ public final class Party {
 		try {
 			int index = startGuest(profile);
 			controllerOfSlot.put(index, controller);
+			if (profile != null) {
+				apply(flow.profileChosen(controller, profile.id()));
+			}
 			if (card) {
-				cards.put(index, newCard(index, controller, null));
+				SeatCard newCard = newCard(index, controller, null);
+				cards.put(index, newCard);
+				if (world != null) {
+					// Mid-game, More's screens would take over player 1's view: the card offers just the profiles.
+					newCard.noMore();
+					// Their view shows this card (the layout may already have run, inside startGuest, before it existed).
+					phases.picking(index, System.nanoTime());
+				}
 			}
 			HostInput currentInput = input;
 			if (currentInput != null) {
@@ -1090,9 +1385,15 @@ public final class Party {
 		minecraft.gui.chatListener().handleSystemMessage(message, false);
 	}
 
+	/** A guest's seat is free again. In the world their view fades out where it is, then the others glide. */
 	private void removeSlot(Slot slot) {
+		if (slots.get(slot.index) != slot) {
+			return; // already gone
+		}
+		// Who they were, while their view fades: read while the seat still has its profile, colour and controller.
+		dev.hearthside.fabric.client.ui.CardPainter.Who who = who(slot.index, slot);
 		slots.remove(slot.index, slot);
-		cards.remove(slot.index);
+		SeatCard card = cards.remove(slot.index);
 		String controller = controllerOfSlot.remove(slot.index);
 		if (controller != null) {
 			minecraft.execute(() -> flow.leave(controller));
@@ -1102,11 +1403,69 @@ public final class Party {
 			link.remove(slot.index);
 		}
 		minecraft.execute(() -> {
+			// A snuff as their light goes out.
+			dev.hearthside.fabric.client.ui.HearthSounds.play(dev.hearthside.fabric.client.ui.HearthSounds.Ui.LEAVE);
 			if (input != null) {
 				input.release(slot.index);
 			}
-			afterGuestsChanged();
+			if (slots.containsKey(slot.index)) {
+				afterGuestsChanged(); // someone new has the seat already
+			} else if (!fadeOut(slot.index, new Leaving(who, card))) {
+				phases.remove(slot.index);
+				afterGuestsChanged();
+			}
 		});
+	}
+
+	/**
+	 * Fades a leaving guest's view out where it is, looking just as it did, while everyone else plays on; the others
+	 * glide into its space once it has gone ({@link #frame}). False when there is no view to fade (no world, tiled
+	 * windows, reduce motion). Render thread.
+	 */
+	private boolean fadeOut(int seat, Leaving who) {
+		if (!composite || world == null || hostReduceMotion || Compositor.active() == null || !views.seats().contains(seat)) {
+			return false;
+		}
+		long now = System.nanoTime();
+		leaving.put(seat, who);
+		views.leave(seat, now);
+		relayoutAfterFade = true;
+		leaveAt = now;
+		return true;
+	}
+
+	/**
+	 * Each frame: once a leaving view has faded out, the others glide into its space (with nobody left, player 1's view
+	 * glides back to the whole window); once they settle, split-screen ends if nobody is left. Render thread.
+	 */
+	void frame(long now) {
+		if (relayoutAfterFade && !views.fading(now)) {
+			relayoutAfterFade = false;
+			for (Integer seat : List.copyOf(leaving.keySet())) {
+				if (!slots.containsKey(seat)) {
+					leaving.remove(seat);
+					phases.remove(seat);
+				}
+			}
+			settling = true;
+			afterGuestsChanged();
+		} else if (settling && !relayoutAfterFade && !views.moving(now)) {
+			settling = false;
+			HearthsideMod.LOGGER.info("Hearthside layout settled {} ms after a leave", (now - leaveAt) / 1_000_000L);
+			if (slots.isEmpty()) {
+				leaveSplitScreen();
+			}
+		}
+	}
+
+	/** B on a card stuck joining: that player gives up their seat. Render thread. */
+	void cancelJoin(int seat) {
+		Slot slot = slots.get(seat);
+		if (slot != null) {
+			HearthsideMod.LOGGER.info("Hearthside seat {} gave up joining", seat);
+			endSlot(slot);
+			removeSlot(slot);
+		}
 	}
 
 	private void stopAllSatellites() {
@@ -1131,10 +1490,25 @@ public final class Party {
 				connection -> {
 					slot.connection = connection;
 					connection.onMessage(message -> {
-						if (message instanceof ControlMessage.FrameSlotsReady ready) {
+						if (message instanceof ControlMessage.InWorld) {
+							minecraft.execute(() -> {
+								if (slots.get(slot.index) == slot) {
+									guestInWorld(slot.index);
+								}
+							});
+						} else if (message instanceof ControlMessage.LeftWorld) {
+							minecraft.execute(() -> {
+								HearthsideMod.LOGGER.info("Hearthside seat {} left its world", slot.index);
+								// Left from their own game (its pause menu): the player leaves the party.
+								if (slots.get(slot.index) == slot && world != null) {
+									endSlot(slot);
+									removeSlot(slot);
+								}
+							});
+						} else if (message instanceof ControlMessage.FrameSlotsReady ready) {
 							minecraft.execute(() -> {
 								Compositor compositor = Compositor.active();
-								if (compositor != null) {
+								if (compositor != null && slots.get(slot.index) == slot) {
 									compositor.onGuestSlots(slot.index, ready);
 								}
 							});
@@ -1187,6 +1561,13 @@ public final class Party {
 			return;
 		}
 		splitScreen = false;
+		views = new Views();
+		phases = new ViewPhases();
+		leaving.clear();
+		relayoutAfterFade = false;
+		settling = false;
+		mapTexture.close();
+		OverlayPass.unregister(viewOverlay);
 		if (Compositor.active() != null) {
 			Compositor.deactivate(minecraft);
 		} else {
@@ -1205,27 +1586,37 @@ public final class Party {
 			}
 			return;
 		}
-		if (guests.isEmpty()) {
+		if (guests.isEmpty() && !(composite && settling && Compositor.active() != null)) {
 			leaveSplitScreen();
 			return;
 		}
+		// (After the last guest's view has faded out, player 1's glides back to the whole window before split-screen ends.)
 		int refresh = WindowPlacer.refreshHz(minecraft.getWindow());
 		if (composite) {
 			// One window: lay every player out inside this window's framebuffer; the window itself stays put.
+			// Spec A's layouts; views glide to them (or jump, when the window itself changed size).
 			Window.FramebufferSize size = minecraft.getWindow().queryFramebufferSize();
-			List<Rect> rects = new ConsoleLayout(TwoPlayerSplit.VERTICAL)
-					.layout(1 + guests.size(), new Rect(0, 0, size.width(), size.height()));
-			Map<Integer, Rect> guestViews = new HashMap<>();
-			for (int i = 0; i < guests.size(); i++) {
-				guestViews.put(guests.get(i).index, rects.get(i + 1));
+			long now = System.nanoTime();
+			views.update(guests.stream().map(g -> g.index).toList(), new Rect(0, 0, size.width(), size.height()), now,
+					hostReduceMotion);
+			for (Slot guest : guests) {
+				if (phases.phase(guest.index).isEmpty()) {
+					// Their card shows until their game says it is in the world, never its loading screens.
+					if (cards.containsKey(guest.index)) {
+						phases.picking(guest.index, now);
+					} else {
+						phases.joining(guest.index, now);
+					}
+				}
 			}
 			Compositor.activate(minecraft, this::afterGuestsChanged,
-					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), rects.get(0), guestViews, size.width(),
-					size.height());
-			for (int i = 0; i < guests.size(); i++) {
-				ControlConnection connection = guests.get(i).connection;
-				if (connection != null) {
-					send(connection, new ControlMessage.SetViewport(rects.get(i + 1), refresh));
+					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), views, size.width(), size.height());
+			OverlayPass.register(viewOverlay);
+			for (Slot guest : guests) {
+				ControlConnection connection = guest.connection;
+				Rect target = views.target(guest.index).orElse(null);
+				if (connection != null && target != null) {
+					send(connection, new ControlMessage.SetViewport(target, refresh));
 				}
 			}
 			return;
@@ -1290,6 +1681,14 @@ public final class Party {
 		@Override
 		public void restarting(int consecutiveFailures, Duration delay) {
 			HearthsideMod.LOGGER.warn("Satellite for {} stopped; restarting in {}s", slot.displayName(), delay.toSeconds());
+			minecraft.execute(() -> {
+				if (slots.get(slot.index) == slot) {
+					// Their card comes back over the last picture from their game, which stays until the new one is in (a
+					// player still joining keeps their card as it is).
+					phases.reconnecting(slot.index, System.nanoTime());
+					holdLastFrame(slot.index, true);
+				}
+			});
 			chat(Component.literal(slot.displayName() + "'s game stopped; restarting in " + delay.toSeconds() + "s")
 					.withStyle(ChatFormatting.YELLOW));
 		}
@@ -1299,13 +1698,22 @@ public final class Party {
 			HearthsideMod.LOGGER.error("Satellite for {} keeps crashing (exit {}); giving up", slot.displayName(), exitCode);
 			chat(Component.literal(slot.displayName() + "'s game keeps crashing. See hearthside/satellite-" + slot.index
 					+ "/logs for details.").withStyle(ChatFormatting.RED));
+			minecraft.execute(() -> {
+				if (slots.get(slot.index) == slot) {
+					HearthsideMod.LOGGER.info("Hearthside seat {} couldn't start", slot.index);
+					phases.failed(slot.index, System.nanoTime());
+					holdLastFrame(slot.index, true);
+				}
+			});
+			// Their card says so for a moment; then their view fades out.
+			scheduler.schedule(() -> minecraft.execute(() -> removeSlot(slot)), FAILED_SHOWN.toMillis(), TimeUnit.MILLISECONDS);
 		}
 
 		@Override
 		public void ended() {
 			HearthsideMod.LOGGER.info("{} closed their game window", slot.displayName());
 			chat(Component.literal(slot.displayName() + " left."));
-			removeSlot(slot);
+			minecraft.execute(() -> removeSlot(slot));
 		}
 
 		private void chat(Component message) {

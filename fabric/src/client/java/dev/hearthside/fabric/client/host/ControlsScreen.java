@@ -10,6 +10,7 @@ import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.fabric.client.menu.MenuNavigator;
 import dev.hearthside.fabric.client.menu.SeatScreen;
 import dev.hearthside.fabric.client.ui.HearthDraw;
+import dev.hearthside.fabric.client.ui.HearthSounds;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.HintChip;
 import java.util.ArrayList;
@@ -20,6 +21,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -62,6 +64,11 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 		ActionRow(int x, int y, int width, Action action) {
 			super(x, y, width, ROW_H, Component.literal(RemapModel.label(action)), b -> listen(action), DEFAULT_NARRATION);
 			this.action = action;
+		}
+
+		@Override
+		public void playDownSound(SoundManager soundManager) {
+			HearthSounds.play(HearthSounds.Ui.KNOCK);
 		}
 
 		@Override
@@ -175,6 +182,7 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 			if (!pressed.isEmpty()) {
 				Control control = pressed.iterator().next();
 				model.press(control);
+				HearthSounds.play(HearthSounds.Ui.KNOCK);
 				tried = control;
 			} else if (nanos - listenStarted > LISTEN_NANOS) {
 				model.cancel();
@@ -187,11 +195,14 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 		}
 		if (pressed.contains(Control.LEFT_BUMPER)) {
 			model.previousPreset();
+			HearthSounds.play(HearthSounds.Ui.PAGE);
 		}
 		if (pressed.contains(Control.RIGHT_BUMPER)) {
 			model.nextPreset();
+			HearthSounds.play(HearthSounds.Ui.PAGE);
 		}
 		if (pressed.contains(Control.START)) {
+			HearthSounds.play(HearthSounds.Ui.KNOCK);
 			save();
 			return true;
 		}

@@ -7,6 +7,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.ComponentPath;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.gui.navigation.FocusNavigationEvent;
 import net.minecraft.network.chat.Component;
 
@@ -31,6 +32,12 @@ public final class HintChip extends Button {
 		super(x, y, width(control, label), HEIGHT, label, onPress, DEFAULT_NARRATION);
 		this.control = control;
 		this.style = style;
+	}
+
+	/** Hearthside's knock, not vanilla's click. */
+	@Override
+	public void playDownSound(SoundManager soundManager) {
+		HearthSounds.play(HearthSounds.Ui.KNOCK);
 	}
 
 	public static final int HEIGHT = 15;

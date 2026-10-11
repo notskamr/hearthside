@@ -116,6 +116,12 @@ public final class E2eDriver {
 			waitFor("resources loaded", Duration.ofSeconds(180),
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
+			onRender(() -> {
+				// Every sound the host plays from here on, for S1 and S2.
+				minecraft.getSoundManager().addListener((sound, events, range) ->
+						heard.add(new Heard(System.nanoTime(), sound.getIdentifier().toString())));
+				return null;
+			});
 			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
@@ -136,6 +142,7 @@ public final class E2eDriver {
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
 				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
+				long lobbySounds = System.nanoTime();
 				step("L2 Y and the D-pad cycle profiles on the card; A confirms", this::cardCyclesAndConfirms);
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
@@ -151,6 +158,7 @@ public final class E2eDriver {
 				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
 				step("B5 Menu on a seated controller opens the world picker", this::lobbyToPicker);
 				step("W1 the world picker puts the last co-op world first, focused, with who played it", this::pickerFocusesLastCoopWorld);
+				step("S1 Hearthside's screens, cards and keyboards make their warm sounds", () -> screensMakeSounds(lobbySounds));
 				step("W2 A on it opens the world; the guests come in by name; the co-op record has them", this::pickerOpensWorld);
 			}
 			if (onRender(() -> minecraft.level == null)) {
@@ -162,12 +170,19 @@ public final class E2eDriver {
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
 			step("C1 guest window is hidden", this::guestWindowHidden);
 			step("C2 guest frames reach the host's window", this::guestFramesComposited);
+			step("O1 the overlay pass draws over every view", this::overlayDrawsOverViews);
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
 			step("C5 copy transport works", this::copyTransportWorks);
-			step("C6 maximise and restore keep the guest composited", this::maximiseAndRestore);
+			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
-			step("C7 a third player and back re-lays out without GL errors", this::thirdPlayerAndBack);
+			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
+			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
+			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
+			step("D5 a leaving view fades out, then the others glide", () -> sampleGaps(this::leavingFades));
+			step("D6 a guest who quits from their own game leaves the party", () -> sampleGaps(this::guestQuitsItself));
+			step("C7c back to two players, re-laid out without GL errors", this::backToTwo);
+			step("G1 no gap or brown shows inside a view while a player joins and leaves", this::noGapsSampled);
 			step("C9 the host's mouse works only inside its own view", this::hostMouseConfined);
 			step("C11 in the world, the host's clicks count wherever the cursor drifted", this::hostWorldClicksAnywhere);
 			step("3 crashed satellite is restarted", this::crashedSatelliteRestarts);
@@ -177,10 +192,16 @@ public final class E2eDriver {
 			long beforeLastLeave = hostLogLength();
 			step("5 leave closes the satellite and leaves the host window as it was", this::leaveClosesSatellite);
 			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
+			step("D7 a guest whose game gives up is shown, then removed", this::gaveUpShownThenRemoved);
+			step("D8 a guest whose game dies while joining keeps their card on the plank wall", this::gaveUpWhileJoining);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
+				long dropInSounds = System.nanoTime();
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
+				step("D3 the drop-in toast shows that controller's own button and slides", this::toastShowsTheControllersButton);
 				step("B3 the join prompt expires after 5 s", this::joinPromptExpires);
+				step("D2 a newcomer picks their profile inside their own view", this::pickInOwnView);
+				step("D1 a joining guest's view shows the card, never its loading screens, until it is in the world", this::joiningShowsTheCard);
 				step("P1 A, A on a new controller adds Player2", this::startJoins);
 				step("P2 left stick moves the guest", this::stickMoves);
 				step("P3 right stick turns the guest", this::stickTurns);
@@ -197,11 +218,19 @@ public final class E2eDriver {
 				step("A3 LT places a block", this::triggerPlaces);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
 				step("P9 Player2 leaves", this::player2Leaves);
+				step("S2 the join prompt, a drop-in and a leave make their warm sounds", () -> dropInMakesSounds(dropInSounds));
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
+			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				// The last session tiles real windows, as on a machine that can't composite (D9 and step 7 run in it).
+				System.setProperty("hearthside.e2e.forceTiled", "true");
+			}
 			openWorld();
 			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
+			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("D9 with tiled windows, a drop-in joins as its controller's profile, with no card", this::tiledDropIn);
+			}
 			onRender(() -> {
 				Party.current().join(GUEST);
 				return null;
@@ -215,11 +244,32 @@ public final class E2eDriver {
 		}
 	}
 
+	/** Where the host log stood when the last guest was asked in (its "seat N in world" line comes after). */
+	private long joinMark;
+
+	/** Waits for the host to hear from a guest's game that it is in the world (past its loading screens). */
+	private void waitInWorld(int seat) throws Exception {
+		waitFor("seat " + seat + " in world", Duration.ofSeconds(120),
+				() -> hostLogSince(joinMark).contains("hearthside seat " + seat + " in world"));
+	}
+
+	/** Saves the whole window as players see it (every view and Hearthside's overlay), unlike a game screenshot. */
+	private void windowShot(String name) throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("screenshots").resolve(name + ".png");
+		Files.deleteIfExists(file);
+		Compositor.e2eCapture = file;
+		waitFor("window capture " + name, Duration.ofSeconds(5), () -> Files.exists(file) && Files.size(file) > 0);
+		Thread.sleep(200);
+	}
+
 	private void guestJoins() throws Exception {
+		joinMark = hostLogLength();
 		onRender(() -> {
 			Party.current().join(GUEST);
 			return null;
 		});
+		Thread.sleep(3000);
+		windowShot("joining");
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
 	}
 
@@ -234,7 +284,32 @@ public final class E2eDriver {
 
 	/** The guest paints its frame's top-left corner magenta in E2E; the host logs what it composited there. */
 	private void guestFramesComposited() throws Exception {
+		waitInWorld(1);
 		waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+		windowShot("two-players");
+		check(!satelliteLog().contains("hearthside loading overlay over a live view"),
+				"the guest's view went live only once Minecraft's loading screen was gone");
+		check(satelliteLog().contains("hearthside skipped the chat-verification toast"),
+				"a guest arriving isn't greeted with Minecraft's chat-verification warning");
+	}
+
+	private void overlayDrawsOverViews() throws Exception {
+		int[] scale = {0};
+		dev.hearthside.fabric.client.compositor.OverlayLayer square = (g, context) -> {
+			g.fill(20, 20, 26, 26, 0xFF00FFFF);
+			scale[0] = context.guiScale();
+		};
+		dev.hearthside.fabric.client.compositor.OverlayPass.register(square);
+		try {
+			waitFor("the overlay layer drawn", Duration.ofSeconds(5), () -> scale[0] > 0);
+			long mark = hostLogLength();
+			Compositor.e2eProbePoint = new int[] {23 * scale[0], 23 * scale[0]};
+			waitFor("the overlay over the views", Duration.ofSeconds(10),
+					() -> hostLogSince(mark).contains("hearthside overlay probe rgb=00ffff"));
+		} finally {
+			dev.hearthside.fabric.client.compositor.OverlayPass.unregister(square);
+			Compositor.e2eProbePoint = null;
+		}
 	}
 
 	private void hostWindowUntouched() throws Exception {
@@ -247,7 +322,11 @@ public final class E2eDriver {
 		long mark = hostLogLength();
 		onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), 1280, 720));
 		try {
-			int halfWidth = onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) / 2;
+			int halfWidth = onRender(() -> {
+					var size = minecraft.getWindow().queryFramebufferSize();
+					return dev.hearthside.core.layout.SplitLayout.plan(2, new Rect(0, 0, size.width(), size.height()),
+							dev.hearthside.core.layout.LayoutSettings.DEFAULTS).players().get(1).width();
+			});
 			waitFor("guest re-sized to half the new window", Duration.ofSeconds(10),
 					() -> satelliteLog().contains("hearthside virtual size " + halfWidth + "x"));
 			waitForProbe(2, mark, Duration.ofSeconds(10));
@@ -293,6 +372,29 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.forceCopy");
 		}
+	}
+
+	/** Where the host log stood when gap sampling first started; G1 reads every gap line after it. */
+	private long gapMark = -1;
+
+	/** Runs a step with the compositor checking every view's centre each frame for the bare divider colour. */
+	private void sampleGaps(ThrowingRunnable body) throws Exception {
+		if (gapMark < 0) {
+			gapMark = hostLogLength();
+		}
+		Compositor.e2eGapSampling = true;
+		try {
+			body.run();
+		} finally {
+			Compositor.e2eGapSampling = false;
+		}
+	}
+
+	private void noGapsSampled() throws Exception {
+		check(gapMark >= 0, "gaps were sampled");
+		String log = hostLogSince(gapMark);
+		int gaps = log.split("hearthside compositor gap", -1).length - 1;
+		check(gaps == 0, "no view showed the bare divider colour (" + gaps + " sampled gaps)");
 	}
 
 	private void maximiseAndRestore() throws Exception {
@@ -376,26 +478,147 @@ public final class E2eDriver {
 		Thread.sleep(100);
 	}
 
-	private void thirdPlayerAndBack() throws Exception {
-		long mark = hostLogLength();
+	private long sevenMark;
+
+	/** C7: a third player joins (and a fresh pad's join toast over split play). */
+	private void thirdPlayerJoins() throws Exception {
+		sevenMark = hostLogLength();
+		joinMark = sevenMark;
 		onRender(() -> {
 			Party.current().join("Guest3");
 			return null;
 		});
-		try {
-			waitFor("3 players", Duration.ofSeconds(180), () -> playerCount() == 3);
-			waitForProbe(3, mark, Duration.ofSeconds(30));
-			waitForProbe(2, mark, Duration.ofSeconds(10));
-		} finally {
-			onRender(() -> {
-				Party.current().leave("Guest3");
-				return null;
-			});
+		waitFor("3 players", Duration.ofSeconds(180), () -> playerCount() == 3);
+		waitInWorld(2);
+		waitForProbe(3, sevenMark, Duration.ofSeconds(30));
+		waitForProbe(2, sevenMark, Duration.ofSeconds(10));
+		// The join toast over split play (a pad nobody uses yet presses A once).
+		PADS.plug(110, "fake-toast-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		press(110, PadButton.A);
+		Thread.sleep(400);
+		windowShot("toast-split");
+		PADS.unplug(110);
+	}
+
+	/** D4: with three players the free quarter shows the party panel and its live map. */
+	private void partyPanelShows() throws Exception {
+		waitFor("the party map filled in", Duration.ofSeconds(5), () -> onRender(() -> Party.current().mapFilled()) >= 0.4f);
+		check(hostLogSince(sevenMark).contains("hearthside party map markers=3"), "an arrow for each of the three players");
+		Rect panel = dev.hearthside.fabric.client.ui.PartyPanel.lastPanel;
+		Rect bounds = dev.hearthside.fabric.client.ui.PartyPanel.lastBounds;
+		check(panel != null && bounds != null && panel.contains(bounds), "everything on the panel stays inside its quarter");
+		Thread.sleep(4500); // past the name tags, for a calm picture
+		windowShot("three-players");
+	}
+
+	/** C7b: a fourth player for the four-view layout. */
+	private void fourthJoins() throws Exception {
+		joinMark = hostLogLength();
+		onRender(() -> {
+			Party.current().join("Guest4");
+			return null;
+		});
+		waitFor("4 players", Duration.ofSeconds(180), () -> playerCount() == 4);
+		waitInWorld(3);
+		Thread.sleep(1200);
+		windowShot("four-players");
+	}
+
+	/** D5: Guest4 leaves: their view fades out where it is, then the others glide into its space. */
+	private void leavingFades() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> {
+			Party.current().leave("Guest4");
+			return null;
+		});
+		Thread.sleep(100);
+		windowShot("leaving");
+		String settled = waitForSettle(mark);
+		int ms = Integer.parseInt(settled);
+		log("   the others settled " + ms + " ms after the leave");
+		check(ms >= 450 && ms <= 650, "the others reach their new places 550 ms (±100) after the leave");
+		// It faded rather than vanished: the compositor drew it at several alphas on the way out.
+		Matcher fade = Pattern.compile("hearthside compositor fade seat=3 alpha=([0-9.]+)").matcher(hostLogSince(mark));
+		java.util.Set<String> alphas = new java.util.TreeSet<>();
+		while (fade.find()) {
+			float alpha = Float.parseFloat(fade.group(1));
+			if (alpha > 0.05f && alpha < 0.95f) {
+				alphas.add(fade.group(1));
+			}
 		}
+		log("   leaving alphas " + alphas);
+		check(alphas.size() >= 3, "the leaving view was drawn fading out (" + alphas.size() + " alphas between 0 and 1)");
+		waitFor("3 players", Duration.ofSeconds(30), () -> playerCount() == 3);
+		check(onRender(() -> !Compositor.active().hasFrame(3)), "the leaving view is gone once it has faded");
+		checkPanelFaded(mark, true);
+	}
+
+	/** Waits for the host's "layout settled" line after {@code mark}; returns its milliseconds. */
+	private String waitForSettle(long mark) throws Exception {
+		Pattern line = Pattern.compile("hearthside layout settled ([0-9]+) ms after a leave");
+		String[] found = {null};
+		waitFor("the layout settled after the leave", Duration.ofSeconds(10), () -> {
+			Matcher m = line.matcher(hostLogSince(mark));
+			if (m.find()) {
+				found[0] = m.group(1);
+			}
+			return found[0] != null;
+		});
+		return found[0];
+	}
+
+	/** D6: Guest3's own game leaves the world (as its pause menu would): the party lets them go. */
+	private void guestQuitsItself() throws Exception {
+		long mark = hostLogLength();
+		int before = satellites().size();
+		onRender(() -> {
+			Party.current().e2eDisconnectGuest(2);
+			return null;
+		});
+		waitFor("seat 2 left its world", Duration.ofSeconds(30), () -> hostLogSince(mark).contains("hearthside seat 2 left its world"));
+		windowShot("quit-fading");
+		waitForSettle(mark);
+		waitFor("2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
+		waitFor("its game closed", Duration.ofSeconds(15), () -> satellites().size() == before - 1);
+		check(onRender(() -> Party.current().seatedCount()) == 1, "the seat is free");
+		checkPanelFaded(mark, false);
+	}
+
+	/** The party panel was drawn at several alphas between 0 and 1 since {@code mark}, rising (in) or falling (out). */
+	private void checkPanelFaded(long mark, boolean in) throws Exception {
+		Matcher m = Pattern.compile("hearthside panel alpha=([0-9.]+)").matcher(hostLogSince(mark));
+		List<Float> alphas = new ArrayList<>();
+		while (m.find()) {
+			float alpha = Float.parseFloat(m.group(1));
+			if (alpha > 0.05f && alpha < 0.95f) {
+				alphas.add(alpha);
+			}
+		}
+		log("   panel alphas " + alphas);
+		boolean direction = alphas.size() >= 2 && (in ? alphas.getFirst() < alphas.getLast() : alphas.getFirst() > alphas.getLast());
+		check(direction, "the party panel faded " + (in ? "in" : "out") + " (" + alphas.size() + " alphas between 0 and 1)");
+	}
+
+	/** C7c: back to two (whoever is still here of Guest3 and Guest4 leaves), with no GL errors throughout. */
+	private void backToTwo() throws Exception {
+		onRender(() -> {
+			for (String guest : List.of("Guest4", "Guest3")) {
+				try {
+					Party.current().leave(guest);
+				} catch (IllegalArgumentException alreadyGone) {
+					// it never came, or left already
+				}
+			}
+			return null;
+		});
 		long back = hostLogLength();
 		waitFor("back to 2 players", Duration.ofSeconds(30), () -> playerCount() == 2);
 		waitForProbe(2, back, Duration.ofSeconds(10));
-		check(!hostLogSince(mark).contains("gl error"), "no GL errors while re-laying out");
+		// The E2E's own report lines mention "GL errors": look only at the game's lines.
+		boolean glErrors = hostLogSince(sevenMark).lines().filter(l -> !l.contains("[e2e]") && !l.contains("e2e step failed"))
+				.anyMatch(l -> l.contains("gl error"));
+		check(!glErrors, "no GL errors while re-laying out");
 	}
 
 	private int generationBeforeCrash = -1;
@@ -531,6 +754,10 @@ public final class E2eDriver {
 		generationBeforeCrash = lastProbeGeneration(2);
 		satellites().forEach(ProcessHandle::destroyForcibly);
 		waitFor("guest dropped", Duration.ofSeconds(30), () -> playerCount() == 1);
+		waitFor("their card says they are reconnecting", Duration.ofSeconds(10),
+				() -> onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.RECONNECTING);
+		Thread.sleep(1500); // the restarted game is starting up: its title and loading screens must not show
+		windowShot("reconnecting");
 		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
 	}
 
@@ -559,6 +786,86 @@ public final class E2eDriver {
 		check(after.equals(hostWindowBefore), "host window restored");
 	}
 
+	/**
+	 * D8: a guest's game dies while it is still starting and the supervisor gives up: there is no picture of theirs
+	 * to show, so their card says "Couldn't start" on the plank wall (never over their loading screens), then fades.
+	 */
+	private void gaveUpWhileJoining() throws Exception {
+		System.setProperty("hearthside.e2e.failRestarts", "true");
+		try {
+			long mark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("its game starting", Duration.ofSeconds(30), () -> !satellites().isEmpty());
+			Thread.sleep(2000); // still starting up: nowhere near the world
+			check(onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.JOINING,
+					"still joining");
+			satellites().forEach(ProcessHandle::destroyForcibly);
+			waitFor("the card says the game couldn't start", Duration.ofSeconds(30),
+					() -> onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.FAILED);
+			check(!onRender(() -> Party.current().cardOverLastFrame(1)),
+					"the card stays on the plank wall: they have no picture from the world to show");
+			Thread.sleep(300);
+			windowShot("couldnt-start-joining");
+			waitForSettle(mark);
+			check(onRender(() -> Party.current().seatedCount()) == 0, "the seat is free");
+			waitFor("split-screen over", Duration.ofSeconds(10), () -> hostLogSince(mark).contains("virtual size cleared"));
+		} finally {
+			System.clearProperty("hearthside.e2e.failRestarts");
+		}
+	}
+
+	private static final int TILED_PAD = 130;
+
+	/** D9: with tiled windows nothing would draw a card, so A, A joins straight away as that controller's profile. */
+	private void tiledDropIn() throws Exception {
+		check(onRender(() -> Compositor.active() == null), "windows are tiled in this session");
+		PADS.plug(TILED_PAD, "fake-tiled-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			press(TILED_PAD, PadButton.A);
+			press(TILED_PAD, PadButton.A);
+			waitFor("a seat taken", Duration.ofSeconds(10), () -> onRender(() -> Party.current().seatedCount()) == 1);
+			check(onRender(() -> Party.current().seatCard(1)) == null, "no card: nothing would draw it");
+			check(onRender(() -> Party.current().profileOf(1)) != null, "a profile was picked for the controller");
+			waitFor("the newcomer in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+		} finally {
+			onRender(() -> {
+				Party.current().leaveAll();
+				return null;
+			});
+			PADS.unplug(TILED_PAD);
+			waitFor("back to 1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
+		}
+	}
+
+	/** D7: a guest's game crashes and its supervisor gives up: their card says so, then their view fades out. */
+	private void gaveUpShownThenRemoved() throws Exception {
+		System.setProperty("hearthside.e2e.failRestarts", "true");
+		try {
+			joinMark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitInWorld(1);
+			long mark = hostLogLength();
+			satellites().forEach(ProcessHandle::destroyForcibly);
+			waitFor("the card says the game couldn't start", Duration.ofSeconds(30),
+					() -> onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.FAILED);
+			Thread.sleep(400);
+			windowShot("couldnt-start");
+			waitForSettle(mark);
+			check(onRender(() -> Party.current().seatedCount()) == 0, "the seat is free");
+			waitFor("split-screen over", Duration.ofSeconds(10), () -> hostLogSince(mark).contains("virtual size cleared"));
+		} finally {
+			System.clearProperty("hearthside.e2e.failRestarts");
+		}
+	}
+
 	private void closingWorldClosesSatellites() throws Exception {
 		onRender(() -> {
 			Party.current().join(GUEST);
@@ -585,7 +892,8 @@ public final class E2eDriver {
 		ProfileStore store = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
 		List<GuestProfile> profiles = new ArrayList<>(store.load());
 		profiles.removeIf(p -> p.name().equalsIgnoreCase("Player2"));
-		profiles.add(new GuestProfile(UUID.randomUUID(), "Player2", SkinRef.defaultSkin("alex"), null,
+		// Last used on the drop-in pad, so its card shows Player2 first.
+		profiles.add(new GuestProfile(UUID.randomUUID(), "Player2", SkinRef.defaultSkin("alex"), PAD_GUID,
 				ControlScheme.BEDROCK.withBinding(Action.JUMP, Control.Y)));
 		store.save(profiles);
 	}
@@ -1043,6 +1351,15 @@ public final class E2eDriver {
 		check(onRender(() -> minecraft.getSingleplayerServer().getWorldData().getLevelName()).equals(name),
 				"the world has the name typed");
 		check(onRender(() -> minecraft.player.isCreative()), "and is Creative");
+		// Mods' data (recipes, tags, worldgen) comes with the quick path too: every required pack is selected.
+		log("   data packs: " + onRender(() -> minecraft.getSingleplayerServer().getPackRepository().getSelectedIds()));
+		check(onRender(() -> {
+			var packs = minecraft.getSingleplayerServer().getPackRepository();
+			var selected = packs.getSelectedIds();
+			return packs.getAvailablePacks().stream().filter(net.minecraft.server.packs.repository.Pack::isRequired)
+					.allMatch(pack -> selected.contains(pack.getId()))
+					&& selected.stream().anyMatch(id -> !id.equals("vanilla"));
+		}), "the world has every mod's data pack");
 		// Clean up: leave, delete it, and go back to the lobby for the next step.
 		onRender(() -> {
 			minecraft.disconnectFromWorld(Component.literal("E2E"));
@@ -1470,6 +1787,64 @@ public final class E2eDriver {
 		screenshot("worlds");
 	}
 
+	/** A sound the host played: when, and which event. */
+	private record Heard(long nanos, String id) {}
+
+	private final List<Heard> heard = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+	private java.util.Set<String> heardSince(long since) {
+		return heard.stream().filter(h -> h.nanos() >= since).map(Heard::id)
+				.collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new));
+	}
+
+	private long timesHeard(long since, String id) {
+		return heard.stream().filter(h -> h.nanos() >= since && h.id().equals(id)).count();
+	}
+
+	/**
+	 * S1: since the lobby cards (L2 on): the carousel's page turns, the keyboard's taps, the knock of Hearthside's buttons
+	 * and of confirming a card, a seat's crackle and snuff, and never vanilla's click. Then on the picker: a D-pad move
+	 * ticks, and six moves inside 100 ms tick at most three times.
+	 */
+	private void screensMakeSounds(long since) throws Exception {
+		java.util.Set<String> lobby = heardSince(since);
+		log("   heard since the cards: " + lobby);
+		for (String id : List.of("hearthside:ui.page", "hearthside:ui.knock", "hearthside:ui.key", "hearthside:ui.key_delete",
+				"hearthside:ui.tick", "hearthside:ui.join", "hearthside:ui.leave")) {
+			check(lobby.contains(id), id + " was heard");
+		}
+		check(!lobby.contains("minecraft:ui.button.click"), "no vanilla click on Hearthside's screens");
+		long move = System.nanoTime();
+		press(LOBBY_PAD, PadButton.DPAD_DOWN);
+		press(LOBBY_PAD, PadButton.DPAD_UP);
+		check(timesHeard(move, "hearthside:ui.tick") >= 1, "a D-pad move on the picker ticks");
+		long burst = System.nanoTime();
+		onRender(() -> {
+			for (int i = 0; i < 6; i++) {
+				dev.hearthside.fabric.client.menu.MenuNavigator.apply(minecraft, minecraft.gui.screen(),
+						i % 2 == 0 ? dev.hearthside.core.input.MenuNav.Action.DOWN : dev.hearthside.core.input.MenuNav.Action.UP,
+						0x3F7FD0);
+				Thread.sleep(15);
+			}
+			return null;
+		});
+		long ticks = timesHeard(burst, "hearthside:ui.tick");
+		log("   six moves in 90 ms ticked " + ticks + " times");
+		check(ticks >= 1 && ticks <= 3, "six quick moves tick at most three times");
+		check(WORLD.equals(onRender(() -> ((WorldsScreen) minecraft.gui.screen()).focusedLevelId())),
+				"focus is back on the E2E world for W2");
+	}
+
+	/** S2: since B2: the join prompt slides in and out, a drop-in confirm crackles, and a leave snuffs. */
+	private void dropInMakesSounds(long since) throws Exception {
+		java.util.Set<String> world = heardSince(since);
+		log("   heard since B2: " + world);
+		for (String id : List.of("hearthside:ui.prompt_in", "hearthside:ui.prompt_out", "hearthside:ui.join",
+				"hearthside:ui.leave")) {
+			check(world.contains(id), id + " was heard");
+		}
+	}
+
 	private void pickerOpensWorld() throws Exception {
 		if (onRender(() -> minecraft.gui.screen() instanceof WorldsScreen)) {
 			press(LOBBY_PAD, PadButton.A);
@@ -1503,6 +1878,23 @@ public final class E2eDriver {
 		check(guest("Player2") == null && satellites().isEmpty(), "one A only asks; nobody joined");
 	}
 
+	private void toastShowsTheControllersButton() throws Exception {
+		var toast = onRender(() -> Party.current().joinToast());
+		check(onRender(toast::visible), "the join toast is up");
+		check(hostLogSince(0).contains("hearthside toast glyph playstation"), "it shows the PlayStation controller's own button");
+		check(onRender(() -> minecraft.gui.toastManager().getToast(net.minecraft.client.gui.components.toasts.SystemToast.class,
+				net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId.PERIODIC_NOTIFICATION)) == null,
+				"Minecraft's own toast is gone");
+		long since = onRender(toast::shownSince);
+		float mid = onRender(() -> toast.offset(since + 90_000_000L));
+		float done = onRender(() -> toast.offset(since + 180_000_000L));
+		check(mid < 0 && done == 0, "it slides down into place within 180 ms (" + mid + ", " + done + ")");
+		var still = new dev.hearthside.fabric.client.ui.JoinToast();
+		still.show("e2e", PadStyle.XBOX, 0, Duration.ofSeconds(5), true);
+		check(still.offset(0) == 0, "with reduce motion it is simply there");
+		screenshot("toast");
+	}
+
 	private void joinPromptExpires() throws Exception {
 		Thread.sleep(3500); // past the 5 s window of B2's press
 		press(101, PadButton.A); // a fresh prompt, not a confirmation
@@ -1510,11 +1902,52 @@ public final class E2eDriver {
 		check(guest("Player2") == null && satellites().isEmpty(), "an A after the prompt expired only asks again");
 	}
 
-	private void startJoins() throws Exception {
+	/** The latest composited colour logged at a guest's view corner ("" if none). */
+	private String lastProbeRgb(int player) throws IOException {
+		Matcher m = Pattern.compile("hearthside compositor probe player=" + player + " gen=[0-9]+ rgb=([0-9a-f]{6})")
+				.matcher(hostLogSince(0));
+		String last = "";
+		while (m.find()) {
+			last = m.group(1);
+		}
+		return last;
+	}
+
+	private void pickInOwnView() throws Exception {
 		Thread.sleep(5500); // let B3's prompt expire
+		joinMark = hostLogLength();
 		press(101, PadButton.A);
 		press(101, PadButton.A);
+		waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		check(onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.PICKING,
+				"their view is picking a profile");
+		check(onRender(() -> cardShows(1)).equals("Player2"), "the card shows the profile last used on this controller");
+		Thread.sleep(800);
+		windowShot("drop-in-picker");
+		press(101, PadButton.DPAD_RIGHT);
+		check(!onRender(() -> cardShows(1)).equals("Player2"), "their controller drives the card in their view");
+		pressUntil(101, PadButton.DPAD_LEFT, 8, () -> cardShows(1).equals("Player2"));
+		press(101, PadButton.A);
+		check(onRender(() -> card(1) == null
+				&& Party.current().viewPhaseOf(1) == dev.hearthside.core.session.ViewPhase.JOINING), "A picks it: joining");
+	}
+
+	private void joiningShowsTheCard() throws Exception {
+		Thread.sleep(1500);
+		windowShot("drop-in-joining");
+		waitInWorld(1);
+		String log = hostLogSince(joinMark);
+		String beforeIn = log.substring(0, log.indexOf("hearthside seat 1 in world"));
+		check(!Pattern.compile("probe player=2 gen=[0-9]+ rgb=ff00ff").matcher(beforeIn).find(),
+				"while joining, the view showed the card, never the guest's own frames (its loading screens)");
+		waitFor("the guest's world in their view", Duration.ofSeconds(5), () -> lastProbeRgb(2).equals("ff00ff"));
+		check(!satelliteLog().contains("hearthside loading overlay over a live view"),
+				"no loading screen after the card went");
+	}
+
+	private void startJoins() throws Exception {
 		waitFor("Player2 in the world", Duration.ofSeconds(180), () -> guest("Player2") != null);
+		waitInWorld(1);
 		// The server counts the guest as joined while its client still shows the terrain-loading
 		// screen; controller input only drives the player once that screen is gone.
 		waitFor("satellite in world mode", Duration.ofSeconds(60),

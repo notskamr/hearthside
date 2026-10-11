@@ -1,0 +1,66 @@
+package dev.hearthside.core.session;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+
+class InWorldSignalTest {
+	@Test
+	void inWorldIsSentOncePerJoin() {
+		var signal = new InWorldSignal();
+		assertThat(signal.observe(true, false, true)).as("not before JoinWorld").isFalse();
+		signal.joinRequested();
+		assertThat(signal.observe(true, true, true)).as("still on a loading screen").isFalse();
+		assertThat(signal.observe(true, false, true)).isTrue();
+		assertThat(signal.observe(true, false, true)).isFalse();
+		// A portal: a loading screen, then the world again. Not a new join.
+		assertThat(signal.observe(true, true, true)).isFalse();
+		assertThat(signal.observe(true, false, true)).isFalse();
+		signal.joinRequested();
+		assertThat(signal.observe(true, false, true)).isTrue();
+	}
+
+	@Test
+	void notBeforeAFrame() {
+		var signal = new InWorldSignal();
+		signal.joinRequested();
+		assertThat(signal.observe(true, false, false)).isFalse();
+		assertThat(signal.observe(false, false, true)).isFalse();
+		assertThat(signal.observe(true, false, true)).isTrue();
+	}
+
+	@Test
+	void leftWorldAfterBeingIn() {
+		var signal = new InWorldSignal();
+		assertThat(signal.observeLeft(false, false)).as("never in").isFalse();
+		signal.joinRequested();
+		assertThat(signal.observeLeft(false, false)).as("joining, not yet connected").isFalse();
+		signal.observe(true, false, true);
+		assertThat(signal.observeLeft(true, false)).isFalse();
+		assertThat(signal.observeLeft(false, false)).isTrue();
+		assertThat(signal.observeLeft(false, false)).isFalse();
+	}
+
+	@Test
+	void inWorldFromItsFirstFrameThereUntilItLeaves() {
+		var signal = new InWorldSignal();
+		signal.joinRequested();
+		assertThat(signal.inWorld()).isFalse();
+		signal.observe(true, false, true);
+		assertThat(signal.inWorld()).isTrue();
+		signal.observeLeft(false, false);
+		assertThat(signal.inWorld()).isFalse();
+	}
+
+	@Test
+	void aServerReconfigurationIsNotLeaving() {
+		// Minecraft drops its player (so its connection reads as gone) while the server reconfigures it.
+		var signal = new InWorldSignal();
+		signal.joinRequested();
+		signal.observe(true, false, true);
+		assertThat(signal.observeLeft(false, true)).isFalse();
+		assertThat(signal.inWorld()).as("still in the world").isTrue();
+		assertThat(signal.observeLeft(true, false)).isFalse();
+		assertThat(signal.observeLeft(false, false)).as("a real disconnect afterwards still counts").isTrue();
+	}
+}

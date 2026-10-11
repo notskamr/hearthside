@@ -11,6 +11,7 @@ import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.ViewportMath;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.protocol.ControlMessage;
+import dev.hearthside.core.session.InWorldSignal;
 import dev.hearthside.fabric.HearthsideMod;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -39,6 +40,11 @@ public final class FrameExporter {
 	private final Path dir;
 	private final boolean pattern = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
 	private final ArrayDeque<Pending> pending = new ArrayDeque<>();
+	private final InWorldSignal world = new InWorldSignal();
+	/** When this game last told the host it was in the world (0 once checked). */
+	private long liveSince;
+	/** It left its world: no more frames, so the host fades out its last picture from the world. */
+	private boolean leftWorld;
 	private int generation = FrameNames.firstGeneration() - 1;
 	private SegmentSlotTable table;
 	private FrameSlots slots;
@@ -80,7 +86,16 @@ public final class FrameExporter {
 	/** Copies the finished frame into the next free slot. Called instead of Minecraft's blit to the window. */
 	public void export(int sourceTexture, int sourceWidth, int sourceHeight) {
 		publishFinished();
-		if (transport == null) {
+		// A server reconfiguring this player drops Minecraft's player (its connection reads as gone) behind this screen.
+		boolean reconfiguring = minecraft.gui.screen() instanceof net.minecraft.client.gui.screens.multiplayer.ServerReconfigScreen;
+		if (world.observeLeft(minecraft.getConnection() != null, reconfiguring)) {
+			HearthsideMod.LOGGER.info("Hearthside left the world");
+			tell(new ControlMessage.LeftWorld());
+			leftWorld = true;
+		}
+		if (transport == null || leftWorld || (world.inWorld() && minecraft.level == null)) {
+			// Leaving its world (or the server reconfiguring it): the host keeps its last picture from the world, never
+			// the disconnecting and title screens in between.
 			return;
 		}
 		OptionalInt claimed = slots.beginWrite();
@@ -108,6 +123,36 @@ public final class FrameExporter {
 		// No buffer swap follows (the window is hidden), so make sure the GPU actually gets this frame's work.
 		glFlush();
 		pending.addLast(new Pending(slot, fence, ++frame));
+		observeWorld();
+	}
+
+	/** JoinWorld arrived: the first frame exported in the world, past its loading screens, tells the host. */
+	public void joinRequested() {
+		world.joinRequested();
+		leftWorld = false;
+	}
+
+	private void observeWorld() {
+		// In the world means nothing covers it: no screen, and not Minecraft's loading overlay (a game that has just
+		// started may still be finishing its first resource load, drawn over everything as the Mojang screen).
+		boolean covered = minecraft.gui.screen() != null || minecraft.gui.overlay() != null;
+		if (world.observe(minecraft.level != null && minecraft.player != null, covered, true)) {
+			HearthsideMod.LOGGER.info("Hearthside in world");
+			tell(new ControlMessage.InWorld());
+			liveSince = System.nanoTime();
+		}
+		if (liveSince != 0 && System.nanoTime() - liveSince < 5_000_000_000L && minecraft.gui.overlay() != null) {
+			HearthsideMod.LOGGER.warn("Hearthside loading overlay over a live view");
+			liveSince = 0;
+		}
+	}
+
+	private void tell(ControlMessage message) {
+		try {
+			connection.send(message);
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.warn("Could not tell the host {}: {}", message, e.toString());
+		}
 	}
 
 	/** Publishes, in order, every pending frame the GPU has finished. */

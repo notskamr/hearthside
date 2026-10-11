@@ -65,6 +65,16 @@ class ControlCodecTest {
 	}
 
 	@Test
+	void disconnectIsAppendedToLifecycleCommands() throws IOException {
+		// Append-only: the ordinal is the wire format.
+		assertThat(LifecycleCommand.DISCONNECT.ordinal()).isEqualTo(3);
+		var bytes = new ByteArrayOutputStream();
+		ControlCodec.write(new ControlMessage.Lifecycle(LifecycleCommand.DISCONNECT), new DataOutputStream(bytes));
+		assertThat(ControlCodec.read(input(bytes.toByteArray())))
+				.isEqualTo(new ControlMessage.Lifecycle(LifecycleCommand.DISCONNECT));
+	}
+
+	@Test
 	void badLifecycleOrdinalIsRejected() {
 		assertThatThrownBy(() -> ControlCodec.read(input(frame(3, 5, (byte) 200))))
 				.isInstanceOf(ProtocolException.class);
@@ -129,8 +139,14 @@ class ControlCodecTest {
 	}
 
 	@Test
-	void protocolVersionIsThree() {
-		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(3);
+	void protocolVersionIsFour() {
+		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(4);
+	}
+
+	@Test
+	void inWorldAndLeftWorldRoundTrip() throws IOException {
+		assertThat(roundTrip(new ControlMessage.InWorld())).isEqualTo(new ControlMessage.InWorld());
+		assertThat(roundTrip(new ControlMessage.LeftWorld())).isEqualTo(new ControlMessage.LeftWorld());
 	}
 
 	@Test

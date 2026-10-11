@@ -173,6 +173,49 @@ Found while building this:
   transfers now set the pixel-store state first (through `GlStateManager`, so its cache stays right).
 - `SDL_WINDOW_NOT_FOCUSABLE` alone does not stop a window activating when first shown; guests also start hidden.
 
+## Seamless drop-in (Plan 5c1) — 2026-10-11, same machine
+
+A joining guest's view never shows their game's loading screens: Hearthside's own GUI pass draws over every view (a
+card while they join, the join prompt, name tags, borders, the party panel), views glide to each new layout, and a
+leaving view fades out before the others glide into its space. Window captures (`windowShot`) save the whole
+composited window, so they show every view and the overlay; the small magenta squares are the E2E's probe corners.
+
+| # | Check | Result |
+|---|---|---|
+| O1 | Hearthside's overlay draws over every view, at the full window's GUI scale | PASS |
+| D3 | One A on a new controller: the join prompt slides in with that controller's own button (PlayStation ✕) | PASS |
+| D2 | A, A mid-game: the newcomer picks their profile on a card inside their own new view while everyone plays on | PASS — FAILED before (the card opened before the view existed) |
+| D1 | A joining guest's view shows their card ("Joining…", their skin turning), never their game's loading screens, and crossfades into the world when their game says it is in | PASS |
+| D4 | With three players the free quarter shows the party panel: a live map with an arrow per player, the day, the weather and who is playing, all inside its quarter | PASS |
+| C7, C7b | A third, then a fourth player joins; the views glide to each layout; no GL errors | PASS |
+| D5 | Guest4 leaves: their view fades out where it is (alphas 0.15 → 0.82), then the others glide; settled 579 ms after the leave (550 ± 100); the party panel fades in (0.12 → 0.90) | PASS — FAILED before (the layout snapped) |
+| D6 | Guest3's own game leaves the world (as its pause menu's Disconnect does): their view fades, their game closes and the seat is free; the panel fades out (0.88 → 0.11) | PASS — FAILED before (the view froze) |
+| C7c | Back to two players, no GL errors throughout | PASS |
+| G1 | No bare divider colour inside a settled view while players join and leave (views fading on purpose are skipped) | PASS — FAILED before the overlay (47 gaps) |
+| 3, C8 | A crashed guest's card says "Reconnecting…" over their last frame, dimmed, never their restarting game's screens; their frames come back | PASS |
+| D7 | A guest whose game gives up: their card says "Couldn't start", then their view fades out and the seat is free | PASS — FAILED before (the seat stayed) |
+| D8 | A guest whose game dies while it is still joining: their card says "Couldn't start" on the plank wall (never dimmed over their loading screens), then fades | PASS — FAILED before (from the final review: dimmed over a loading-screen frame) |
+| S1 | Since the lobby cards: page turns, key taps (and the lower delete tap), ticks, knocks, a crackle and a snuff, and never vanilla's click on Hearthside's screens; six moves in 90 ms tick twice (at most three) | PASS — FAILED before |
+| S2 | In the world: the join prompt slides in and out, a drop-in crackles, a leave snuffs | PASS — FAILED before |
+| D9 | The last session forces tiled windows, as on a machine that can't composite: A, A joins straight away as the controller's profile, with no card (nothing would draw it) | PASS — FAILED before (from the final review: the newcomer got a card that nothing drew) |
+| 7 | Force-killing the host (in the tiled session): the guest's game exits by itself | PASS (858 ms) |
+
+All 85 steps pass in one run with fake pads, plus step 7. Screenshots are in `docs/screenshots/5c1/`: `joining`,
+`drop-in-picker`, `drop-in-joining`, `toast` (player 1 alone), `toast-split`, `two-players`, `three-players`,
+`four-players`, `leaving` (mid-fade), `quit-fading`, `reconnecting`, `couldnt-start` and `couldnt-start-joining`.
+
+Found while building this:
+- A guest's game could still be drawing Minecraft's loading overlay (the Mojang screen) for a moment after it joined:
+  it now says it is in the world only once nothing covers its view.
+- Hearthside's overlay first drew at player 1's GUI scale, so cards were tiny in a quarter; it uses the full window's.
+- A fading view briefly showed the guest's "disconnecting" screen: a satellite stops sending frames once its world is
+  gone, and the host fades out the last picture from the world.
+- A restarting guest's title and loading screens showed through the dimmed "Reconnecting…" card: the host now holds
+  the last frame until the restarted game is in the world.
+- The view borders drew over the join prompt in split play (every relayout re-registered the views' layer above the
+  prompt's): overlay layers now have an order, and each covers everything before it.
+- Plain game screenshots show only player 1's view; the E2E captures the composited window instead.
+
 ## Controllers (manual — needs real pads)
 
 Use two physical controllers, ideally two identical ones, and one of a different family if available.

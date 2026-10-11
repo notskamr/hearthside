@@ -64,6 +64,9 @@ public final class SatelliteBoot {
 			return;
 		}
 		minecraft.options.pauseOnLostFocus = false;
+		// Vanilla's first-play tutorial says "Move with W, A, S and D": wrong for someone on a controller.
+		minecraft.options.tutorialStep = net.minecraft.client.tutorial.TutorialSteps.NONE;
+		minecraft.getTutorial().setStep(net.minecraft.client.tutorial.TutorialSteps.NONE);
 		HearthsideMod.LOGGER.info("Hearthside satellite ignores OS keyboard and mouse");
 		// World audio plays once, from the host; per-player UI sounds return with Plan 5.
 		minecraft.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
@@ -115,6 +118,10 @@ public final class SatelliteBoot {
 			});
 			case ControlMessage.JoinWorld m -> minecraft.execute(() -> {
 				loginToken = m.loginToken();
+				FrameExporter exporter = FrameExporter.instance();
+				if (exporter != null) {
+					exporter.joinRequested();
+				}
 				if (!minecraft.getUser().getName().equals(m.playerName())) {
 					// Started under a placeholder (pre-warmed before a profile was chosen): join as the player.
 					((MinecraftUserAccessor) minecraft).hearthside$setUser(new User(m.playerName(),
@@ -125,6 +132,12 @@ public final class SatelliteBoot {
 						new ServerData("Hearthside", "127.0.0.1:" + m.port(), ServerData.Type.LAN), false, null);
 			});
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.QUIT -> minecraft.execute(minecraft::stop);
+			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.DISCONNECT -> minecraft.execute(() -> {
+				// As its own pause menu's Disconnect does; the host hears it left and lets the player go.
+				if (minecraft.level != null) {
+					minecraft.disconnectFromWorld(net.minecraft.client.multiplayer.ClientLevel.DEFAULT_QUIT_MESSAGE);
+				}
+			});
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.PAUSE -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite paused (controller disconnected)");
 				applier.release();

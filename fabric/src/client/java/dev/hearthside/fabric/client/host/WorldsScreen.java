@@ -11,6 +11,7 @@ import dev.hearthside.fabric.client.menu.MenuNavigator;
 import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.ui.EmberLayer;
 import dev.hearthside.fabric.client.ui.HearthDraw;
+import dev.hearthside.fabric.client.ui.HearthSounds;
 import dev.hearthside.fabric.client.ui.HintChip;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -26,6 +27,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.client.input.KeyEvent;
@@ -310,6 +312,12 @@ public final class WorldsScreen extends Screen implements PadScreen {
 				}
 			}
 			this.playedWith = with;
+		}
+
+		/** Hearthside's knock, not vanilla's click. */
+		@Override
+		public void playDownSound(SoundManager soundManager) {
+			HearthSounds.play(HearthSounds.Ui.KNOCK);
 		}
 
 		@Override

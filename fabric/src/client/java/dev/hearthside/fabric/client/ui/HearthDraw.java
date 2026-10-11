@@ -113,8 +113,13 @@ public final class HearthDraw {
 
 	/** Draws a control's glyph for this controller family; returns its width. */
 	public static int glyph(GuiGraphicsExtractor g, Control control, PadStyle style, int x, int y) {
+		return glyph(g, control, style, x, y, 0xFFFFFFFF);
+	}
+
+	/** A button glyph tinted by {@code argb} (white at some alpha, to fade it). */
+	public static int glyph(GuiGraphicsExtractor g, Control control, PadStyle style, int x, int y, int argb) {
 		int width = glyphWidth(control);
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.glyph(control, style), x, y, width, GLYPH_HEIGHT);
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.glyph(control, style), x, y, width, GLYPH_HEIGHT, argb);
 		return width;
 	}
 }
