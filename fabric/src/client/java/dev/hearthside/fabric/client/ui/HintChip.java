@@ -5,7 +5,9 @@ import dev.hearthside.core.input.PadStyle;
 import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.ComponentPath;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.navigation.FocusNavigationEvent;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -15,6 +17,15 @@ import net.minecraft.network.chat.Component;
 public final class HintChip extends Button {
 	private final Control control;
 	private final Supplier<PadStyle> style;
+
+	/**
+	 * Never reached with arrow keys or Tab: a hint is pressed with its button (or clicked), and focus landing on one
+	 * would sit in the way of the screen's own items.
+	 */
+	@Override
+	public ComponentPath nextFocusPath(FocusNavigationEvent event) {
+		return null;
+	}
 
 	public HintChip(int x, int y, Control control, Supplier<PadStyle> style, Component label, OnPress onPress) {
 		super(x, y, width(control, label), HEIGHT, label, onPress, DEFAULT_NARRATION);

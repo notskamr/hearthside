@@ -225,10 +225,16 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 		if (down(pressed, PadButton.START)) {
 			name = keyboard.text();
 			nameBox.setValue(name);
-			keyboard = null;
+			closeKeyboard();
 		} else if (down(pressed, PadButton.B)) {
-			keyboard = null;
+			closeKeyboard();
 		}
+	}
+
+	/** The button that closed the keyboard is still down: a fresh MenuNav ignores it, so it doesn't also press here. */
+	private void closeKeyboard() {
+		keyboard = null;
+		navs.remove(keyboardPlayer);
 	}
 
 	private static int direction(InputFrame frame, PadButton negative, PadButton positive, float axis) {

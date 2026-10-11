@@ -24,6 +24,7 @@ import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.ui.HearthTextField;
+import dev.hearthside.fabric.client.menu.TitleInput;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
@@ -120,10 +121,17 @@ public final class E2eDriver {
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
+				step("T4 with Minecraft in the background, a controller does nothing on the title screen", this::titleIgnoresBackgroundPad);
 				step("T1 a controller moves focus on the title screen and A on Co-op opens the lobby", this::titleControllerOpensLobby);
 				step("T2 the controller that opened Co-op is player 1's, not seated, and remembered", this::titleControllerIsPlayerOne);
 				step("L5 player 1's card claims a controller; it drives the host and is not seated", this::hostCardClaims);
 				step("W3 a controller creates a Creative world named on the keyboard; it loads; it is cleaned up", this::createWorldWithController);
+				step("W4 the picker scrolls down to Create past worlds that don't fit; Down stops there", this::pickerScrolls);
+				step("W5 a world deleted in More… is gone from the picker on return", this::pickerRefreshesAfterMore);
+				step("W6 B on New World goes back one screen, not two", this::newWorldBackOnce);
+				step("W7 B on the name keyboard closes only the keyboard", this::keyboardBackOnce);
+				step("W8 with no worlds yet the picker shows one Create card", this::pickerWithNoWorlds);
+				step("W9 back in the lobby with player 1's controller", this::ensureLobby);
 				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
@@ -728,6 +736,26 @@ public final class E2eDriver {
 	private static final int TITLE_PAD = 109;
 	private static final String TITLE_GUID = "fake-title-pad";
 
+	private void titleIgnoresBackgroundPad() throws Exception {
+		PADS.plug(TITLE_PAD, TITLE_GUID, PadStyle.PLAYSTATION);
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		Thread.sleep(500);
+		TitleInput.e2eBackground = true;
+		try {
+			Object before = onRender(() -> minecraft.gui.screen().getFocused());
+			press(TITLE_PAD, PadButton.DPAD_DOWN);
+			press(TITLE_PAD, PadButton.DPAD_DOWN);
+			check(onRender(() -> minecraft.gui.screen() instanceof TitleScreen && minecraft.gui.screen().getFocused() == before),
+					"the D-pad moved nothing while Minecraft was in the background");
+		} finally {
+			TitleInput.e2eBackground = false;
+			PADS.unplug(TITLE_PAD);
+		}
+	}
+
 	private void titleControllerOpensLobby() throws Exception {
 		PADS.plug(TITLE_PAD, TITLE_GUID, PadStyle.PLAYSTATION);
 		onRender(() -> {
@@ -795,6 +823,173 @@ public final class E2eDriver {
 		ButtonGuideRenderer.drewOn = null;
 		Thread.sleep(300);
 		check(ButtonGuideRenderer.drewOn != screen, "only " + where + "'s own hint chips are drawn");
+	}
+
+	/** Backs out of the picker, New World or Minecraft's world list to the lobby (never closing the lobby itself). */
+	private void backToLobby() throws Exception {
+		for (int i = 0; i < 4; i++) {
+			boolean closed = onRender(() -> {
+				Screen screen = minecraft.gui.screen();
+				if (screen instanceof WorldsScreen || screen instanceof NewWorldScreen
+						|| screen instanceof net.minecraft.client.gui.screens.worldselection.SelectWorldScreen) {
+					screen.onClose();
+					return true;
+				}
+				return false;
+			});
+			if (!closed) {
+				return;
+			}
+			Thread.sleep(300);
+		}
+	}
+
+	/** In the party's lobby with player 1's controller, whatever the step before left behind. */
+	private void ensureLobby() throws Exception {
+		backToLobby();
+		if (!onRender(() -> Party.current() != null && minecraft.gui.screen() instanceof LobbyScreen)) {
+			openLobby();
+		}
+		waitFor("player 1's controller in the lobby", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
+		Thread.sleep(300);
+	}
+
+	private WorldsScreen openPicker() throws Exception {
+		press(HOST_PAD, PadButton.START);
+		waitFor("the world picker", Duration.ofSeconds(15),
+				() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+		return onRender(() -> (WorldsScreen) minecraft.gui.screen());
+	}
+
+	/** Adds listable copies of the E2E world (its level.dat only), to have more worlds than fit. */
+	private List<Path> copyWorlds(int count) throws IOException {
+		Path saves = minecraft.gameDirectory.toPath().resolve("saves");
+		Path levelDat = saves.resolve(WORLD).resolve("level.dat");
+		check(Files.exists(levelDat), "the E2E world exists to copy");
+		List<Path> copies = new ArrayList<>();
+		for (int i = 1; i <= count; i++) {
+			Path dir = saves.resolve(WORLD + "-copy-" + i);
+			Files.createDirectories(dir);
+			Files.copy(levelDat, dir.resolve("level.dat"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			copies.add(dir);
+		}
+		return copies;
+	}
+
+	private static void deleteTree(Path dir) throws IOException {
+		if (!Files.exists(dir)) {
+			return;
+		}
+		try (var walk = Files.walk(dir)) {
+			for (Path p : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+				Files.deleteIfExists(p);
+			}
+		}
+	}
+
+	private void pickerScrolls() throws Exception {
+		ensureLobby();
+		List<Path> copies = copyWorlds(5);
+		try {
+			WorldsScreen picker = openPicker();
+			check(onRender(picker::cardLevelIds).size() >= 7, "the picker lists every world and Create");
+			pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 20, () -> "".equals(picker.focusedLevelId()));
+			check("".equals(onRender(picker::focusedLevelId)), "Down reaches Create past the worlds that don't fit");
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check("".equals(onRender(picker::focusedLevelId)), "Down stops at Create (focus never lands on a hint chip)");
+		} finally {
+			backToLobby();
+			for (Path copy : copies) {
+				deleteTree(copy);
+			}
+		}
+	}
+
+	private void pickerRefreshesAfterMore() throws Exception {
+		ensureLobby();
+		List<Path> copies = copyWorlds(1);
+		String gone = copies.getFirst().getFileName().toString();
+		try {
+			WorldsScreen picker = openPicker();
+			check(onRender(picker::cardLevelIds).contains(gone), "the copy is listed");
+			press(HOST_PAD, PadButton.X);
+			check(onRender(() -> minecraft.gui.screen() instanceof net.minecraft.client.gui.screens.worldselection.SelectWorldScreen), "X opens Minecraft's world list");
+			deleteTree(copies.getFirst());
+			onRender(() -> {
+				minecraft.gui.screen().onClose();
+				return null;
+			});
+			waitFor("the picker again", Duration.ofSeconds(15),
+					() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+			check(!onRender(() -> ((WorldsScreen) minecraft.gui.screen()).cardLevelIds()).contains(gone),
+					"the world deleted there is gone from the picker");
+		} finally {
+			backToLobby();
+			deleteTree(copies.getFirst());
+		}
+	}
+
+	/** From the lobby to New World with player 1's controller. */
+	private NewWorldScreen openNewWorld() throws Exception {
+		WorldsScreen picker = openPicker();
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 12, () -> "".equals(picker.focusedLevelId()));
+		press(HOST_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof NewWorldScreen), "Create opens New World");
+		return onRender(() -> (NewWorldScreen) minecraft.gui.screen());
+	}
+
+	private void newWorldBackOnce() throws Exception {
+		ensureLobby();
+		try {
+			openNewWorld();
+			press(HOST_PAD, PadButton.B);
+			Thread.sleep(600);
+			check(onRender(() -> minecraft.gui.screen() instanceof WorldsScreen), "one B is one screen back: the picker");
+		} finally {
+			backToLobby();
+		}
+	}
+
+	private void keyboardBackOnce() throws Exception {
+		ensureLobby();
+		try {
+			NewWorldScreen screen = openNewWorld();
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> screen.focusedRow().equals("name"));
+			press(HOST_PAD, PadButton.A);
+			check(onRender(screen::typing), "A on the name opens the keyboard");
+			press(HOST_PAD, PadButton.B);
+			Thread.sleep(600);
+			check(onRender(() -> minecraft.gui.screen() == screen && !screen.typing()),
+					"B closes the keyboard and stays on New World");
+		} finally {
+			backToLobby();
+		}
+	}
+
+	private void pickerWithNoWorlds() throws Exception {
+		ensureLobby();
+		Path empty = Files.createTempDirectory("hearthside-no-worlds").resolve("saves");
+		Files.createDirectories(empty);
+		// Opened the way a player opens it (Menu, from the controller's frame hook), not from a queued task: an empty
+		// list finishes loading at once only there.
+		WorldsScreen.e2eSource = net.minecraft.world.level.storage.LevelStorageSource.createDefault(empty);
+		try {
+			press(HOST_PAD, PadButton.START);
+			waitFor("the picker", Duration.ofSeconds(10),
+					() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+			long cards = onRender(() -> minecraft.gui.screen().children().stream()
+					.filter(c -> c.getClass().getSimpleName().equals("WorldCard")).count());
+			long chips = onRender(() -> minecraft.gui.screen().children().stream()
+					.filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance).count());
+			check(cards == 1 && chips == 3, "one Create card and one set of hints (cards " + cards + ", chips " + chips + ")");
+			check("".equals(onRender(() -> ((WorldsScreen) minecraft.gui.screen()).focusedLevelId())), "Create is focused");
+		} finally {
+			WorldsScreen.e2eSource = null;
+			backToLobby();
+			deleteTree(empty.getParent());
+		}
 	}
 
 	/** Presses a direction until the condition holds (at most {@code tries} times). */
@@ -1053,6 +1248,19 @@ public final class E2eDriver {
 		hold(LOBBY_PAD, PadButton.Y, 2000);
 		check(stored("Birch") && onRender(screen::problem) != null && onRender(screen::problem).contains("playing"),
 				"Birch is seat 2's: holding Y is refused, and the card says why");
+		// Still holding Y while moving to Spare must not start deleting it: a delete takes a fresh press.
+		PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y), 0, 0, 0, 0, 0, 0));
+		Thread.sleep(300);
+		for (int i = 0; i < 4 && !"Spare".equals(onRender(screen::focusedName)); i++) {
+			PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y, PadButton.DPAD_LEFT), 0, 0, 0, 0, 0, 0));
+			Thread.sleep(250);
+			PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y), 0, 0, 0, 0, 0, 0));
+			Thread.sleep(150);
+		}
+		Thread.sleep(2000);
+		PADS.set(LOBBY_PAD, InputFrame.NEUTRAL);
+		Thread.sleep(200);
+		check(stored("Spare"), "a Y held over from another card deletes nothing");
 		pressUntil(LOBBY_PAD, PadButton.DPAD_LEFT, 8, () -> "Spare".equals(screen.focusedName()));
 		hold(LOBBY_PAD, PadButton.Y, 600);
 		check(stored("Spare") && onRender(screen::progress) == 0, "letting go early keeps it");

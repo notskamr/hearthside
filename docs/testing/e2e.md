@@ -72,18 +72,26 @@ Screenshots of the lobby are saved to `fabric/run-e2e/screenshots/` (`lobby-empt
 ## Worlds, title and profile tools (scripted) — 2026-10-11, same machine
 
 Plan 5b3: controllers on the title screen, the Cozy-hearth title, the world picker and world creation, the controls
-screen and Manage Profiles. The full run is 63/63, plus step 7 (the guest's game exits 1.07 s after the host is force-killed) (it includes every step above).
+screen and Manage Profiles. After the final-review fixes the full run is 70/70, plus step 7 (the guest's game exits
+1.06 s after the host is force-killed); it includes every step above. Every step marked "FAILED before" was watched
+failing on the code before its fix.
 
 | # | Check | Result |
 |---|---|---|
 | T3 | The title screen draws Hearthside's plank wall, firelight and wooden buttons (no panorama) | PASS — FAILED before (panorama drawn) |
+| T4 | With Minecraft in the background, a controller moves nothing on the title screen | PASS — FAILED before (the D-pad moved focus) |
 | T1 | A controller moves focus on the title screen (D-pad), and A on Co-op opens the lobby | PASS — FAILED before (focus never reached Co-op) |
 | T2 | That controller is player 1's in the lobby, takes no seat, and is remembered | PASS |
 | W3 | Menu in the lobby opens the picker focused on its first card; Create opens the new-world screen with a free name and focus on Create; A on the name opens the keyboard (X deletes, Menu keeps); right on Mode picks Creative; Create makes and opens the world; the generic hints stay off screens with their own chips; the name sits on parchment | PASS (13 s) — FAILED before three fixes (the picker closed on the press that opened it; vanilla's initial focus skipped Create) |
+| W4 | With more worlds than fit, Down scrolls the picker to Create, and stops there (never onto a hint chip, whose A used to recurse until the game crashed) | PASS — FAILED before (cards out of view couldn't take focus) |
+| W5 | A world deleted in More… (Minecraft's list) is gone from the picker on return | PASS — FAILED before (the list was cached) |
+| W6 | B on New World goes back one screen, to the picker | PASS — FAILED before (the held B also closed the picker) |
+| W7 | B on the name keyboard closes only the keyboard | PASS — FAILED before (it also closed New World and the picker) |
+| W8 | With no worlds yet, the picker shows one Create card and one row of hints, Create focused (opened with Menu, as a player does) | PASS — FAILED before (two Create cards, six chips) |
 | W1 | The picker puts the last co-op world first and focused, with "Last played with Ember and Birch" | PASS |
 | W2 | A on it opens the world; the guests come in by name; the co-op record has them | PASS (15 s) |
 | R1 | X on a ready card opens More (nothing in the lobby looks selected; the footer has only Back and Start); Controls is that seat's: A then Y makes Y Jump (Inventory takes A); RB to Southpaw (sticks swapped) and LB back to the edit; Menu saves to the profile, the seat and the guest's game; RB from Custom is Bedrock again | PASS (8 s) |
-| M1 | More → Profiles: holding Y on a profile in use is refused with a reason; letting go early keeps a profile; holding 1.5 s deletes it (and nothing else) | PASS (9 s) |
+| M1 | More → Profiles: holding Y on a profile in use is refused with a reason; a Y still held while moving to another card deletes nothing; letting go early keeps a profile; holding 1.5 s deletes it (and nothing else) | PASS (11 s) — the held-over Y FAILED before (it deleted the next card) |
 
 Screenshots: `title`, `title-focus`, `worlds`, `new-world`, `controls`, `manage-profiles`, `lobby-ready`, `lobby-more`.
 

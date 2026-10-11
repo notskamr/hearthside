@@ -25,6 +25,8 @@ public final class TitleInput implements Runnable {
 	private final Map<Integer, MenuNav> navs = new HashMap<>();
 	private GamepadSource source;
 	private boolean unavailable;
+	/** E2E only: act as if Minecraft were in the background (the E2E window's real focus can't be relied on). */
+	public static volatile boolean e2eBackground;
 	/** The controller whose A is being applied right now, for the Co-op button to hand to player 1. */
 	private static Integer pressingPad;
 
@@ -37,6 +39,17 @@ public final class TitleInput implements Runnable {
 		FrameHook.register(new TitleInput(minecraft));
 	}
 
+	/**
+	 * Whether Minecraft is in the background: controllers keep reporting there (SDL is told to, for the party), and
+	 * someone playing something else mustn't drive the title screen blind. The E2E's window can't count on focus.
+	 */
+	private boolean inBackground() {
+		if (e2eBackground) {
+			return true;
+		}
+		return !Boolean.getBoolean("hearthside.e2e") && !minecraft.isWindowActive();
+	}
+
 	/** The controller pressing A right now, or null (the mouse or keyboard). Render thread. */
 	public static Integer pressingPad() {
 		return pressingPad;
@@ -45,7 +58,7 @@ public final class TitleInput implements Runnable {
 	@Override
 	public void run() {
 		Screen screen = minecraft.gui.screen();
-		if (Party.current() != null || minecraft.level != null || screen == null || unavailable) {
+		if (Party.current() != null || minecraft.level != null || screen == null || unavailable || inBackground()) {
 			// A fresh start next time, so buttons held now don't count as presses then.
 			navs.clear();
 			return;

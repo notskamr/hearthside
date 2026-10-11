@@ -156,8 +156,23 @@ final class HostInput implements Runnable {
 	 * controller continues from the lobby, B gives up its seat, and otherwise whoever is using a controller moves the
 	 * host's cursor, which takes their colour.
 	 */
+	/** The screen the shared input last went to. */
+	private Screen lastSharedScreen;
+
 	private void driveSharedScreen(Map<Integer, InputFrame> frames) {
 		Screen screen = minecraft.gui.screen();
+		if (screen != lastSharedScreen) {
+			// A new screen: a button already down on the frame before was pressed for the old screen (the B that closed
+			// New World must not also close the picker it went back to, nor the A on a world click the next vanilla
+			// screen). One first pressed on this frame is a real press on the new screen.
+			frames.forEach((player, frame) -> {
+				int carried = frame.buttons() & sharedButtons.getOrDefault(player, 0);
+				if (carried != 0) {
+					heldFromCard.merge(player, carried, (a, b) -> a | b);
+				}
+			});
+			lastSharedScreen = screen;
+		}
 		LobbyScreen lobby = screen instanceof LobbyScreen l ? l : null;
 		int start = InputFrame.buttons(PadButton.START);
 		int b = InputFrame.buttons(PadButton.B);

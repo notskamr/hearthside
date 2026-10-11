@@ -25,9 +25,12 @@ import java.util.Map;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.storage.LevelStorageSource;
 import net.minecraft.world.level.storage.LevelSummary;
 
 /**
@@ -48,6 +51,13 @@ public final class WorldsScreen extends Screen implements PadScreen {
 	private List<CoopWorld> coop = List.of();
 	private final List<WorldCard> cards = new ArrayList<>();
 	private boolean loading;
+	/** The selected card's index: focus moves by index, since cards scrolled out of view can't take focus. */
+	private int selected;
+	/** Set while {@link #init()} runs: a list that finishes loading at once must not rebuild the screen inside it. */
+	private boolean initializing;
+	private boolean shownBefore;
+	/** E2E only: list worlds from here instead of Minecraft's saves folder (an empty one, for "no worlds yet"). */
+	public static volatile LevelStorageSource e2eSource;
 
 	public WorldsScreen(Screen parent, Party party) {
 		super(Component.literal("Choose a world"));
@@ -60,8 +70,27 @@ public final class WorldsScreen extends Screen implements PadScreen {
 		return new CoopWorldsStore(gameDir.resolve("hearthside").resolve("coop-worlds.json"));
 	}
 
+	/** Shown again (back from More…, New World or a world that didn't open): list the worlds afresh. */
+	@Override
+	public void added() {
+		if (shownBefore) {
+			worlds = null;
+		}
+		shownBefore = true;
+		super.added();
+	}
+
 	@Override
 	protected void init() {
+		initializing = true;
+		try {
+			build();
+		} finally {
+			initializing = false;
+		}
+	}
+
+	private void build() {
 		if (worlds == null) {
 			load();
 		}
@@ -96,8 +125,45 @@ public final class WorldsScreen extends Screen implements PadScreen {
 	@Override
 	protected void setInitialFocus() {
 		if (!loading && !cards.isEmpty()) {
-			setInitialFocus(cards.getFirst());
+			selected = Math.clamp(selected, 0, cards.size() - 1);
+			setFocused(cards.get(selected));
 		}
+	}
+
+	@Override
+	public void setFocused(GuiEventListener listener) {
+		super.setFocused(listener);
+		if (listener instanceof WorldCard card && cards.contains(card)) {
+			selected = cards.indexOf(card);
+		}
+	}
+
+	/** Up and down (arrow keys, and controllers through them) move along the cards by index, scrolling the list. */
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		if (event.isUp() || event.isDown()) {
+			move(event.isUp() ? -1 : 1);
+			return true;
+		}
+		return super.keyPressed(event);
+	}
+
+	@Override
+	public boolean mouseScrolled(double x, double y, double scrollX, double scrollY) {
+		if (scrollY != 0) {
+			move(scrollY > 0 ? -1 : 1);
+			return true;
+		}
+		return super.mouseScrolled(x, y, scrollX, scrollY);
+	}
+
+	private void move(int step) {
+		if (cards.isEmpty()) {
+			return;
+		}
+		selected = Math.clamp(selected + step, 0, cards.size() - 1);
+		setFocused(cards.get(selected));
+		layOut();
 	}
 
 	private void load() {
@@ -108,11 +174,13 @@ public final class WorldsScreen extends Screen implements PadScreen {
 			HearthsideMod.LOGGER.warn("Could not read the co-op worlds record", e);
 		}
 		try {
-			var source = minecraft.getLevelSource();
+			var source = e2eSource != null ? e2eSource : minecraft.getLevelSource();
 			source.loadLevelSummaries(source.findLevelCandidates()).whenComplete((list, error) -> minecraft.execute(() -> {
 				worlds = error == null ? list.stream().filter(s -> !s.isLocked()).toList() : List.of();
 				loading = false;
-				rebuildWidgets();
+				if (!initializing) {
+					rebuildWidgets();
+				}
 			}));
 		} catch (Exception e) {
 			HearthsideMod.LOGGER.error("Could not list worlds", e);
@@ -135,8 +203,8 @@ public final class WorldsScreen extends Screen implements PadScreen {
 	}
 
 	private void pressFocused() {
-		if (getFocused() instanceof Button button) {
-			button.onPress(new net.minecraft.client.input.KeyEvent(0, 0, 0));
+		if (!cards.isEmpty()) {
+			cards.get(Math.clamp(selected, 0, cards.size() - 1)).onPress(new KeyEvent(0, 0, 0));
 		}
 	}
 
@@ -192,7 +260,10 @@ public final class WorldsScreen extends Screen implements PadScreen {
 
 	/** Stacks the cards, scrolled so the focused one is on screen. */
 	private void layOut() {
-		int focused = Math.max(0, cards.indexOf(getFocused()));
+		if (cards.isEmpty()) {
+			return;
+		}
+		int focused = Math.clamp(selected, 0, cards.size() - 1);
 		int area = height - TOP - BOTTOM;
 		int y = TOP;
 		int focusTop = TOP;

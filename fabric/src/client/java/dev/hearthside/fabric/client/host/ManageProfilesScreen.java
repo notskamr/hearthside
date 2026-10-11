@@ -122,6 +122,7 @@ public final class ManageProfilesScreen extends Screen implements SeatScreen {
 		if (y && party.profileInUse(focused.id())) {
 			problem = focused.name() + " is playing — leave the seat first";
 			progress = hold.step(false, nanos);
+			releaseFirst = true;
 			return true;
 		}
 		progress = hold.step(y, nanos);
@@ -149,6 +150,8 @@ public final class ManageProfilesScreen extends Screen implements SeatScreen {
 		problem = null;
 		hold = new HoldToConfirm(HOLD);
 		progress = 0;
+		// A Y held while moving was meant for the card before: deleting this one takes a fresh press.
+		releaseFirst = true;
 	}
 
 	private GuestProfile focused() {
