@@ -21,6 +21,7 @@ import dev.hearthside.core.process.SatelliteSupervisor;
 import dev.hearthside.core.profile.GuestNames;
 import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.GuestUuids;
+import dev.hearthside.core.profile.PlayerColors;
 import dev.hearthside.core.profile.ProfileStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.core.protocol.ControlCodec;
@@ -467,7 +468,10 @@ public final class HostSession {
 				return p;
 			}
 		}
-		GuestProfile created = new GuestProfile(UUID.randomUUID(), name, SkinRef.defaultSkin("steve"), null);
+		List<Integer> taken = new ArrayList<>(profiles.stream().map(GuestProfile::color).toList());
+		taken.add(store.loadFile().host().color());
+		GuestProfile created = new GuestProfile(UUID.randomUUID(), name, SkinRef.defaultSkin("steve"), null)
+				.withColor(PlayerColors.firstFree(taken));
 		profiles.add(created);
 		store.save(profiles);
 		return created;

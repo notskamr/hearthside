@@ -34,7 +34,7 @@ import java.util.UUID;
  * controls and are written back as version 2.
  */
 public final class ProfileStore {
-	public static final int SCHEMA_VERSION = 2;
+	public static final int SCHEMA_VERSION = 3;
 
 	private static final System.Logger LOG = System.getLogger(ProfileStore.class.getName());
 	private static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
@@ -49,9 +49,9 @@ public final class ProfileStore {
 		return loadFile().profiles();
 	}
 
-	/** Replaces the guest profiles, keeping the stored host controls. */
+	/** Replaces the guest profiles, keeping the stored host profile. */
 	public void save(List<GuestProfile> profiles) throws IOException {
-		ControlScheme host = Files.exists(file) ? loadFile().hostControls() : ControlScheme.BEDROCK;
+		HostProfile host = Files.exists(file) ? loadFile().host() : HostProfile.DEFAULTS;
 		saveFile(new ProfileFile(profiles, host));
 	}
 
@@ -65,10 +65,14 @@ public final class ProfileStore {
 			FileDto dto = GSON.fromJson(root, FileDto.class);
 			List<GuestProfile> profiles = new ArrayList<>();
 			for (ProfileDto p : dto.profiles()) {
-				profiles.add(p.toProfile());
+				// v2 files have no colours: hand out the guest defaults in order (blue is player 1's).
+				profiles.add(p.toProfile(PlayerColors.DEFAULTS[1 + profiles.size() % (PlayerColors.DEFAULTS.length - 1)]));
 			}
 			requireUnique(profiles);
-			return new ProfileFile(profiles, ControlSchemeJson.fromTree(dto.hostControls()));
+			HostProfile host = dto.host() != null
+					? dto.host().toHost()
+					: new HostProfile(ControlSchemeJson.fromTree(dto.hostControls()), PersonalSettings.DEFAULTS); // v2
+			return new ProfileFile(profiles, host);
 		} catch (CharacterCodingException | JsonParseException | IllegalStateException | IllegalArgumentException
 				| NullPointerException | UnsupportedOperationException e) {
 			Path backup = file.resolveSibling(file.getFileName() + ".corrupt-" + System.currentTimeMillis());
@@ -86,7 +90,7 @@ public final class ProfileStore {
 		requireUnique(contents.profiles());
 		refuseIfExistingFileIsNewer();
 		List<ProfileDto> dtos = contents.profiles().stream().map(ProfileDto::from).toList();
-		FileDto dto = new FileDto(SCHEMA_VERSION, dtos, ControlSchemeJson.toTree(contents.hostControls()));
+		WrittenFileDto dto = new WrittenFileDto(SCHEMA_VERSION, dtos, HostDto.from(contents.host()));
 		byte[] json = GSON.toJson(dto).getBytes(StandardCharsets.UTF_8);
 
 		Path parent = file.toAbsolutePath().getParent();
@@ -140,19 +144,61 @@ public final class ProfileStore {
 		}
 	}
 
-	private record FileDto(int schemaVersion, List<ProfileDto> profiles, JsonElement hostControls) {}
+	/** What is read: v3 has {@code host}; v2 had {@code hostControls}. */
+	private record FileDto(int schemaVersion, List<ProfileDto> profiles, JsonElement hostControls, HostDto host) {}
 
-	private record SkinDto(String kind, String value) {}
+	/** What is written (always the current schema). */
+	private record WrittenFileDto(int schemaVersion, List<ProfileDto> profiles, HostDto host) {}
 
-	private record ProfileDto(String id, String name, SkinDto skin, String preferredControllerGuid, JsonElement controls) {
-		static ProfileDto from(GuestProfile p) {
-			return new ProfileDto(p.id().toString(), p.name(), new SkinDto(p.skin().kind().name(), p.skin().value()),
-					p.preferredControllerGuid(), ControlSchemeJson.toTree(p.controls()));
+	private record HostDto(JsonElement controls, SettingsDto settings, Integer color) {
+		static HostDto from(HostProfile h) {
+			return new HostDto(ControlSchemeJson.toTree(h.controls()), SettingsDto.from(h.settings()), h.color());
 		}
 
-		GuestProfile toProfile() {
-			return new GuestProfile(UUID.fromString(id), name, new SkinRef(SkinRef.Kind.valueOf(skin.kind()), skin.value()),
-					preferredControllerGuid, ControlSchemeJson.fromTree(controls));
+		HostProfile toHost() {
+			return new HostProfile(ControlSchemeJson.fromTree(controls), SettingsDto.toSettings(settings),
+					color != null ? color : PlayerColors.DEFAULTS[0]);
+		}
+	}
+
+	/** Boxed so a missing member reads as null and takes the default. */
+	private record SettingsDto(Integer fov, Integer guiScale, Boolean buttonHints, Boolean reduceMotion, Boolean subtitles,
+			String audioDevice, Float volume) {
+		static SettingsDto from(PersonalSettings s) {
+			return new SettingsDto(s.fov(), s.guiScale(), s.buttonHints(), s.reduceMotion(), s.subtitles(), s.audioDevice(),
+					s.volume());
+		}
+
+		static PersonalSettings toSettings(SettingsDto dto) {
+			PersonalSettings d = PersonalSettings.DEFAULTS;
+			if (dto == null) {
+				return d;
+			}
+			return new PersonalSettings(or(dto.fov, d.fov()), or(dto.guiScale, d.guiScale()), or(dto.buttonHints, d.buttonHints()),
+					or(dto.reduceMotion, d.reduceMotion()), or(dto.subtitles, d.subtitles()), dto.audioDevice,
+					or(dto.volume, d.volume()));
+		}
+
+		private static <T> T or(T value, T fallback) {
+			return value != null ? value : fallback;
+		}
+	}
+
+	private record SkinDto(String kind, String value, Boolean slim) {}
+
+	private record ProfileDto(String id, String name, SkinDto skin, String preferredControllerGuid, JsonElement controls,
+			Integer color, SettingsDto settings) {
+		static ProfileDto from(GuestProfile p) {
+			return new ProfileDto(p.id().toString(), p.name(),
+					new SkinDto(p.skin().kind().name(), p.skin().value(), p.skin().slim()), p.preferredControllerGuid(),
+					ControlSchemeJson.toTree(p.controls()), p.color(), SettingsDto.from(p.settings()));
+		}
+
+		GuestProfile toProfile(int defaultColor) {
+			SkinRef.Kind kind = SkinRef.Kind.valueOf(skin.kind());
+			SkinRef skinRef = skin.slim() == null ? new SkinRef(kind, skin.value()) : new SkinRef(kind, skin.value(), skin.slim());
+			return new GuestProfile(UUID.fromString(id), name, skinRef, preferredControllerGuid,
+					ControlSchemeJson.fromTree(controls), color != null ? color : defaultColor, SettingsDto.toSettings(settings));
 		}
 	}
 }
