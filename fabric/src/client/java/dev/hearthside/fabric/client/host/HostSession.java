@@ -56,16 +56,18 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.HttpUtil;
 
 /**
- * One split-screen session, alive while the host has a singleplayer world open: a loopback game
- * listener for guests, the control channel, the guest roster and one supervisor per satellite.
+ * One split-screen session, alive while the host has a singleplayer world open: the guest roster,
+ * the control channel, one supervisor per satellite and, once the first guest joins, a loopback-only
+ * game listener for guests. The host's window and pause-on-focus-loss setting are changed only while
+ * at least one guest is present.
  */
 public final class HostSession {
 	private static final SecureRandom RANDOM = new SecureRandom();
 	private static volatile HostSession current;
 
 	private final Minecraft minecraft;
+	private final MinecraftServer server;
 	private final Path gameDir;
-	private final int gamePort;
 	private final GuestTokenAuthority tokens = GuestTokenAuthority.withRandomSecret(Clock.systemUTC());
 	private final GuestRoster roster;
 	private final ControlServer controlServer;
@@ -73,7 +75,13 @@ public final class HostSession {
 			Thread.ofPlatform().daemon().name("hearthside-restarts").factory());
 	private final Map<Integer, Slot> slots = new ConcurrentSkipListMap<>();
 	private final Thread shutdownHook = new Thread(this::stopAllSatellites, "hearthside-shutdown");
-	private boolean savedPauseOnLostFocus;
+	/** Loopback port guests join on; 0 until the first guest needs it. */
+	private volatile int gamePort;
+
+	// Render-thread state for split-screen mode.
+	private boolean splitScreen;
+	private Rect hostWindowBefore;
+	private boolean pauseOnLostFocusBefore;
 	private Rect workArea;
 
 	private static final class Slot {
@@ -91,28 +99,20 @@ public final class HostSession {
 
 	private HostSession(Minecraft minecraft, MinecraftServer server) throws IOException {
 		this.minecraft = minecraft;
+		this.server = server;
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
-		this.gamePort = HttpUtil.getAvailablePort();
-		server.getConnection().startTcpServerListener(InetAddress.getLoopbackAddress(), gamePort);
 		this.roster = new GuestRoster(server.getSingleplayerProfile().name());
 		this.controlServer = ControlServer.start(this::verifyHello);
-		HostServerBridge.activate(new HostServerBridge.Active(roster, tokens));
+		HostServerBridge.activate(new HostServerBridge.Active(roster, tokens, this::reopenGuestListener));
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
-		minecraft.execute(() -> {
-			savedPauseOnLostFocus = minecraft.options.pauseOnLostFocus;
-			// Satellite windows take focus as they appear; the host must not pause because of it.
-			minecraft.options.pauseOnLostFocus = false;
-		});
-		HearthsideMod.LOGGER.info("Hearthside session open: guests join on 127.0.0.1:{}, control channel on {}",
-				gamePort, controlServer.port());
+		HearthsideMod.LOGGER.info("Hearthside session open: control channel on {}", controlServer.port());
 	}
 
 	public static void register() {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-			Minecraft minecraft = Minecraft.getInstance();
 			if (server instanceof IntegratedServer && current == null) {
 				try {
-					current = new HostSession(minecraft, server);
+					current = new HostSession(Minecraft.getInstance(), server);
 				} catch (IOException e) {
 					HearthsideMod.LOGGER.error("Could not open a Hearthside session", e);
 				}
@@ -135,6 +135,7 @@ public final class HostSession {
 	public void join(String name) throws IOException, UnsupportedLauncherException {
 		GuestNames.requireValid(name);
 		HostJvm host = HostJvm.capture(HostLaunchFacts.read());
+		ensureGuestListener();
 		GuestProfile profile = loadOrCreateProfile(name);
 		int index = roster.freeIndex().orElseThrow(() -> new IllegalStateException("All 3 guest slots are taken"));
 		roster.register(index, profile);
@@ -153,15 +154,17 @@ public final class HostSession {
 		}, satelliteDir.resolve("logs").resolve("hearthside-launch.log"), RestartPolicy.DEFAULT,
 				(task, delay) -> scheduler.schedule(task, delay.toMillis(), TimeUnit.MILLISECONDS),
 				Clock.systemUTC(), new SlotListener(slot));
+		if (slots.isEmpty()) {
+			enterSplitScreen();
+		}
 		slots.put(index, slot);
 		try {
 			slot.supervisor.start();
 		} catch (IOException | RuntimeException e) {
-			slots.remove(index);
-			roster.remove(index);
+			removeSlot(slot);
 			throw e;
 		}
-		minecraft.execute(this::retile);
+		minecraft.execute(this::afterGuestsChanged);
 	}
 
 	/** Removes a guest and closes their satellite. Runs on the render thread. */
@@ -171,9 +174,7 @@ public final class HostSession {
 				.findFirst()
 				.orElseThrow(() -> new IllegalArgumentException(name + " isn't playing"));
 		endSlot(slot);
-		slots.remove(slot.index);
-		roster.remove(slot.index);
-		minecraft.execute(this::retile);
+		removeSlot(slot);
 	}
 
 	private void close() {
@@ -189,8 +190,32 @@ public final class HostSession {
 		} catch (IllegalStateException alreadyShuttingDown) {
 			// the hook is running or about to; nothing to undo
 		}
-		minecraft.execute(() -> minecraft.options.pauseOnLostFocus = savedPauseOnLostFocus);
+		minecraft.execute(this::leaveSplitScreen);
 		HearthsideMod.LOGGER.info("Hearthside session closed");
+	}
+
+	private void ensureGuestListener() throws IOException {
+		if (gamePort == 0) {
+			int port = HttpUtil.getAvailablePort();
+			server.getConnection().startTcpServerListener(InetAddress.getLoopbackAddress(), port);
+			gamePort = port;
+			HearthsideMod.LOGGER.info("Hearthside guests join on 127.0.0.1:{}", port);
+		}
+	}
+
+	/** Vanilla's Stop Sharing closed every TCP listener, including the guests'; open it again. */
+	private void reopenGuestListener() {
+		int port = gamePort;
+		if (port == 0) {
+			return;
+		}
+		try {
+			server.getConnection().startTcpServerListener(InetAddress.getLoopbackAddress(), port);
+			HearthsideMod.LOGGER.info("Reopened the Hearthside guest listener on 127.0.0.1:{}", port);
+		} catch (IOException e) {
+			gamePort = 0;
+			HearthsideMod.LOGGER.error("Could not reopen the Hearthside guest listener", e);
+		}
 	}
 
 	private void endSlot(Slot slot) {
@@ -203,6 +228,12 @@ public final class HostSession {
 			}
 		}
 		slot.supervisor.stop();
+	}
+
+	private void removeSlot(Slot slot) {
+		slots.remove(slot.index, slot);
+		roster.remove(slot.index);
+		minecraft.execute(this::afterGuestsChanged);
 	}
 
 	private void stopAllSatellites() {
@@ -232,14 +263,37 @@ public final class HostSession {
 						}
 					});
 					send(connection, new ControlMessage.JoinWorld(gamePort));
-					minecraft.execute(this::retile);
+					minecraft.execute(this::afterGuestsChanged);
 				});
 	}
 
-	/** Tiles the host and every guest across the primary display. Runs on the render thread. */
-	private void retile() {
+	/** Remembers the host window and focus setting before the first guest arrives. Render thread. */
+	private void enterSplitScreen() {
+		if (splitScreen) {
+			return;
+		}
+		splitScreen = true;
+		hostWindowBefore = WindowPlacer.bounds(minecraft.getWindow());
+		pauseOnLostFocusBefore = minecraft.options.pauseOnLostFocus;
+		// Satellite windows take focus as they appear; the host must not pause because of it.
+		minecraft.options.pauseOnLostFocus = false;
+	}
+
+	/** Puts the host window and focus setting back once no guests remain. Render thread. */
+	private void leaveSplitScreen() {
+		if (!splitScreen) {
+			return;
+		}
+		splitScreen = false;
+		WindowPlacer.restore(minecraft.getWindow(), hostWindowBefore);
+		minecraft.options.pauseOnLostFocus = pauseOnLostFocusBefore;
+	}
+
+	/** Re-tiles, or leaves split-screen mode when the last guest has gone. Render thread. */
+	private void afterGuestsChanged() {
 		List<Slot> guests = new ArrayList<>(slots.values());
 		if (guests.isEmpty()) {
+			leaveSplitScreen();
 			return;
 		}
 		if (workArea == null) {
@@ -308,6 +362,13 @@ public final class HostSession {
 			HearthsideMod.LOGGER.error("Satellite for {} keeps crashing (exit {}); giving up", slot.profile.name(), exitCode);
 			chat(Component.literal(slot.profile.name() + "'s game keeps crashing. See hearthside/satellite-" + slot.index
 					+ "/logs for details.").withStyle(ChatFormatting.RED));
+		}
+
+		@Override
+		public void ended() {
+			HearthsideMod.LOGGER.info("{} closed their game window", slot.profile.name());
+			chat(Component.literal(slot.profile.name() + " left."));
+			removeSlot(slot);
 		}
 
 		private void chat(Component message) {

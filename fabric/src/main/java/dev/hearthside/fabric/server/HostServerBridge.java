@@ -6,7 +6,11 @@ import java.util.Optional;
 
 /** Hands the active host session's guest data to server-side login code. */
 public final class HostServerBridge {
-	public record Active(GuestRoster roster, GuestTokenAuthority tokens) {}
+	/**
+	 * @param tcpListenersClosed called after vanilla closes every TCP listener (Stop Sharing / unpublish),
+	 *     so the session can reopen its loopback listener
+	 */
+	public record Active(GuestRoster roster, GuestTokenAuthority tokens, Runnable tcpListenersClosed) {}
 
 	private static volatile Active active;
 

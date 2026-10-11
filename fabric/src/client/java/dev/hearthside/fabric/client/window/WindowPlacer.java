@@ -2,6 +2,7 @@ package dev.hearthside.fabric.client.window;
 
 import com.mojang.blaze3d.platform.Window;
 import dev.hearthside.core.layout.Rect;
+import java.nio.IntBuffer;
 import org.lwjgl.sdl.SDLVideo;
 import org.lwjgl.sdl.SDL_Rect;
 import org.lwjgl.system.MemoryStack;
@@ -24,12 +25,30 @@ public final class WindowPlacer {
 		}
 	}
 
+	/** The window's current position and size. */
+	public static Rect bounds(Window window) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			IntBuffer x = stack.mallocInt(1), y = stack.mallocInt(1), w = stack.mallocInt(1), h = stack.mallocInt(1);
+			SDLVideo.SDL_GetWindowPosition(window.handle(), x, y);
+			SDLVideo.SDL_GetWindowSize(window.handle(), w, h);
+			return new Rect(x.get(0), y.get(0), w.get(0), h.get(0));
+		}
+	}
+
 	/** Makes the window borderless and fits it exactly into {@code rect}. */
 	public static void place(Window window, Rect rect) {
 		long handle = window.handle();
 		SDLVideo.SDL_SetWindowBordered(handle, false);
 		SDLVideo.SDL_SetWindowPosition(handle, rect.x(), rect.y());
 		SDLVideo.SDL_SetWindowSize(handle, rect.width(), rect.height());
+	}
+
+	/** Gives the window its border back and returns it to {@code rect}. */
+	public static void restore(Window window, Rect rect) {
+		long handle = window.handle();
+		SDLVideo.SDL_SetWindowBordered(handle, true);
+		SDLVideo.SDL_SetWindowSize(handle, rect.width(), rect.height());
+		SDLVideo.SDL_SetWindowPosition(handle, rect.x(), rect.y());
 	}
 
 	public static void focus(Window window) {

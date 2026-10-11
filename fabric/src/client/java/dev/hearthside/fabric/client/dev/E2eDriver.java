@@ -7,7 +7,6 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.host.HostSession;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
-import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,12 +21,12 @@ import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.util.HttpUtil;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
-import org.lwjgl.sdl.SDLVideo;
-import org.lwjgl.system.MemoryStack;
 
 /**
  * Developer-only end-to-end check of the walking skeleton, enabled with {@code -Dhearthside.e2e=true}.
@@ -40,6 +39,7 @@ public final class E2eDriver {
 
 	private final Minecraft minecraft;
 	private final Path report;
+	private Rect hostWindowBefore;
 
 	private E2eDriver(Minecraft minecraft) {
 		this.minecraft = minecraft;
@@ -64,11 +64,13 @@ public final class E2eDriver {
 
 			openWorld();
 			waitFor("host session", Duration.ofSeconds(180), () -> HostSession.current() != null);
+			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
 			step("3 crashed satellite is restarted", this::crashedSatelliteRestarts);
 			step("4 guest named like the host is refused", this::hostNameRefused);
-			step("5 leave closes the satellite", this::leaveClosesSatellite);
+			step("4b opening and closing LAN keeps the guest", this::lanToggleKeepsGuest);
+			step("5 leave closes the satellite and restores the host window", this::leaveClosesSatellite);
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
 			openWorld();
@@ -94,19 +96,18 @@ public final class E2eDriver {
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
 		// The host window should now fill the left half of the primary display's usable area.
 		Rect expected = new ConsoleLayout(TwoPlayerSplit.VERTICAL).layout(2, onRender(WindowPlacer::primaryWorkArea)).get(0);
-		Rect actual = onRender(this::hostWindowRect);
+		Rect actual = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 		log("   host window " + actual + ", expected " + expected);
 		check(actual.equals(expected), "host window tiled into the left half");
 	}
 
-	private Rect hostWindowRect() {
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			IntBuffer x = stack.mallocInt(1), y = stack.mallocInt(1), w = stack.mallocInt(1), h = stack.mallocInt(1);
-			long handle = minecraft.getWindow().handle();
-			SDLVideo.SDL_GetWindowPosition(handle, x, y);
-			SDLVideo.SDL_GetWindowSize(handle, w, h);
-			return new Rect(x.get(0), y.get(0), w.get(0), h.get(0));
-		}
+	private void lanToggleKeepsGuest() throws Exception {
+		int lanPort = HttpUtil.getAvailablePort();
+		check(onRender(() -> minecraft.getSingleplayerServer().publishServer(MinecraftServer.MultiplayerScope.LAN, lanPort)),
+				"world opened to LAN");
+		check(onRender(() -> minecraft.getSingleplayerServer().unpublishServer()), "world closed to LAN");
+		Thread.sleep(3000);
+		check(playerCount() == 2, "guest still in the world after Stop Sharing");
 	}
 
 	private void satelliteHasCompatMods() throws IOException {
@@ -143,6 +144,9 @@ public final class E2eDriver {
 		});
 		waitFor("1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
 		waitFor("satellite exit", Duration.ofSeconds(15), () -> satellites().isEmpty());
+		Rect after = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
+		log("   host window " + after + ", before split-screen " + hostWindowBefore);
+		check(after.equals(hostWindowBefore), "host window restored");
 	}
 
 	private void closingWorldClosesSatellites() throws Exception {

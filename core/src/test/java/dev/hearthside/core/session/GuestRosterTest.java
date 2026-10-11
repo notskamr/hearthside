@@ -63,6 +63,14 @@ class GuestRosterTest {
 	}
 
 	@Test
+	void recognisesGuestsByInGameUuid() {
+		roster.register(1, alice);
+		assertThat(roster.isGuest(GuestUuids.forProfile(alice.id()))).isTrue();
+		assertThat(roster.isGuest(GuestUuids.forProfile(bob.id()))).isFalse();
+		assertThat(roster.hostName()).isEqualTo("Steve");
+	}
+
+	@Test
 	void removedGuestIsNoLongerExpected() {
 		roster.register(1, alice);
 		assertThat(roster.remove(1)).contains(alice);

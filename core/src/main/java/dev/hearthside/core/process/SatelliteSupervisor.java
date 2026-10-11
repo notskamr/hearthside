@@ -24,6 +24,9 @@ public final class SatelliteSupervisor {
 		void restarting(int consecutiveFailures, Duration delay);
 
 		void gaveUp(int exitCode);
+
+		/** The satellite exited cleanly by itself (the player closed it); it is not restarted. */
+		void ended();
 	}
 
 	private final ProcessLauncher launcher;
@@ -85,6 +88,11 @@ public final class SatelliteSupervisor {
 			return;
 		}
 		current = null;
+		if (exitCode == 0) {
+			stopped = true;
+			listener.ended();
+			return;
+		}
 		if (policy.resetsFailures(Duration.between(startedAt, clock.instant()))) {
 			consecutiveFailures = 0;
 		}

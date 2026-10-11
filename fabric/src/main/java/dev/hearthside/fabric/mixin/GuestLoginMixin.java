@@ -8,7 +8,9 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.UUID;
 import net.minecraft.network.Connection;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.login.ServerboundHelloPacket;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerLoginPacketListenerImpl;
 import net.minecraft.util.StringUtil;
 import org.jspecify.annotations.Nullable;
@@ -21,35 +23,51 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Local guests have no Mojang account, so a loopback login using a name the host's roster expects
- * skips encryption and Mojang authentication. {@link GuestLoginHooks} then holds the login at a
- * one-time token query and disconnects it unless the token proves it is that guest.
+ * While a Hearthside session is open, every login's first Hello is decided by
+ * {@link GuestAdmission#decide}: local guests skip Mojang authentication (and are then held at a
+ * one-time token query by {@code GuestLoginHooks}), the host's name and unexpected connections to a
+ * world not open to LAN are refused, and everything else is left to vanilla.
  */
 @Mixin(ServerLoginPacketListenerImpl.class)
 abstract class GuestLoginMixin implements GuestLoginState {
 	@Shadow @Final private Connection connection;
+	@Shadow @Final private MinecraftServer server;
 	@Shadow private @Nullable String requestedUsername;
 
 	@Shadow
 	protected abstract void startClientVerification(GameProfile profile);
 
+	@Shadow
+	public abstract void disconnect(Component reason);
+
 	@Unique private @Nullable UUID hearthside$guestUuid;
+	@Unique private boolean hearthside$helloSeen;
 
 	@Inject(method = "handleHello", at = @At("HEAD"), cancellable = true)
-	private void hearthside$admitLocalGuest(ServerboundHelloPacket packet, CallbackInfo ci) {
+	private void hearthside$decideLogin(ServerboundHelloPacket packet, CallbackInfo ci) {
+		boolean firstHello = !hearthside$helloSeen;
+		hearthside$helloSeen = true;
 		var active = HostServerBridge.active();
 		if (active.isEmpty() || !StringUtil.isValidPlayerName(packet.name())) {
 			return;
 		}
 		var roster = active.get().roster();
-		if (GuestAdmission.pathFor(packet.name(), isLoopback(connection.getRemoteAddress()), roster) != GuestAdmission.Path.GUEST) {
-			return;
+		var attempt = new GuestAdmission.LoginAttempt(packet.name(), isLoopback(connection.getRemoteAddress()),
+				connection.isMemoryConnection(), firstHello, server.isPublished());
+		switch (GuestAdmission.decide(attempt, roster)) {
+			case VANILLA -> { }
+			case REFUSE -> {
+				disconnect(Component.literal("You can't join this world."));
+				ci.cancel();
+			}
+			case GUEST -> {
+				UUID guestUuid = roster.expectedUuidForName(packet.name()).orElseThrow();
+				this.requestedUsername = packet.name();
+				this.hearthside$guestUuid = guestUuid;
+				startClientVerification(new GameProfile(guestUuid, packet.name()));
+				ci.cancel();
+			}
 		}
-		UUID guestUuid = roster.expectedUuidForName(packet.name()).orElseThrow();
-		this.requestedUsername = packet.name();
-		this.hearthside$guestUuid = guestUuid;
-		startClientVerification(new GameProfile(guestUuid, packet.name()));
-		ci.cancel();
 	}
 
 	@Unique

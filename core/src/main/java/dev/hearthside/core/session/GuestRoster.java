@@ -60,6 +60,15 @@ public final class GuestRoster {
 				.map(p -> GuestUuids.forProfile(p.id()));
 	}
 
+	public String hostName() {
+		return hostName;
+	}
+
+	/** Whether an in-game player UUID belongs to one of this session's guests. */
+	public synchronized boolean isGuest(UUID playerUuid) {
+		return slots.values().stream().anyMatch(p -> GuestUuids.forProfile(p.id()).equals(playerUuid));
+	}
+
 	public synchronized OptionalInt freeIndex() {
 		for (int i = MIN_GUEST_INDEX; i <= MAX_GUEST_INDEX; i++) {
 			if (!slots.containsKey(i)) {

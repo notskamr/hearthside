@@ -74,6 +74,7 @@ class SatelliteSupervisorTest {
 				@Override public void started(RunningProcess p) { events.add("started"); }
 				@Override public void restarting(int failures, Duration delay) { events.add("restarting " + failures + " " + delay.toSeconds() + "s"); }
 				@Override public void gaveUp(int exitCode) { events.add("gaveUp " + exitCode); }
+				@Override public void ended() { events.add("ended"); }
 			});
 
 	@Test
@@ -122,6 +123,16 @@ class SatelliteSupervisorTest {
 	}
 
 	@Test
+	void cleanExitEndsWithoutRestart() throws Exception {
+		// Exit code 0 means the player closed the game window; that is leaving, not crashing.
+		supervisor.start();
+		launcher.last().exit.complete(0);
+		assertThat(events).containsExactly("started", "ended");
+		assertThat(scheduler.tasks).isEmpty();
+		assertThat(supervisor.isRunning()).isFalse();
+	}
+
+	@Test
 	void freshCommandOnEveryLaunch() throws Exception {
 		supervisor.start();
 		launcher.last().crash();
@@ -144,6 +155,7 @@ class SatelliteSupervisorTest {
 					@Override public void started(RunningProcess p) { events.add("started"); }
 					@Override public void restarting(int failures, Duration delay) { events.add("restarting " + failures + " " + delay.toSeconds() + "s"); }
 					@Override public void gaveUp(int exitCode) { events.add("gaveUp " + exitCode); }
+					@Override public void ended() { events.add("ended"); }
 				});
 		flaky.start();
 		launcher.last().crash();
