@@ -86,6 +86,12 @@ class LaunchCommandBuilderTest {
 	}
 
 	@Test
+	void satelliteRunsInItsOwnFolder() {
+		// Minecraft writes logs/ (and crash reports) relative to the working directory.
+		assertThat(LaunchCommandBuilder.build(host, sat).workingDirectory()).isEqualTo(sat.gameDir());
+	}
+
+	@Test
 	void modsFolderPointsAtHostMods() {
 		assertThat(LaunchCommandBuilder.build(host, sat).command())
 				.contains("-Dfabric.modsFolder=" + HOST_GAME_DIR.resolve("mods").toAbsolutePath());

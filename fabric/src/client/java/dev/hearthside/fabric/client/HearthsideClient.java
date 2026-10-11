@@ -2,6 +2,7 @@ package dev.hearthside.fabric.client;
 
 import dev.hearthside.core.Role;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.dev.E2eDriver;
 import dev.hearthside.fabric.client.host.HostCommands;
 import dev.hearthside.fabric.client.host.HostSession;
 import dev.hearthside.fabric.client.satellite.SatelliteBoot;
@@ -22,6 +23,7 @@ public final class HearthsideClient implements ClientModInitializer {
 		if (role == Role.HOST) {
 			HostSession.register();
 			HostCommands.register();
+			E2eDriver.registerIfEnabled();
 		} else {
 			SatelliteBoot.register();
 		}

@@ -24,6 +24,9 @@ public final class JdkProcessLauncher implements ProcessLauncher {
 		Map<String, String> env = builder.environment();
 		command.removedEnvironment().forEach(env::remove);
 		env.putAll(command.environment());
+		if (command.workingDirectory() != null) {
+			builder.directory(command.workingDirectory().toFile());
+		}
 		builder.redirectErrorStream(true);
 		builder.redirectOutput(Redirect.appendTo(logFile.toFile()));
 		return builder;

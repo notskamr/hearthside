@@ -79,6 +79,7 @@ public final class LaunchCommandBuilder {
 		cmd.add("--accessToken");
 		cmd.add("0");
 
-		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret()), INHERITED_JVM_OPTION_VARIABLES);
+		// Minecraft writes logs/ and crash-reports/ relative to the working directory, as the launcher sets it.
+		return new LaunchCommand(cmd, Map.of(SECRET_ENV, sat.launchSecret()), INHERITED_JVM_OPTION_VARIABLES, sat.gameDir());
 	}
 }

@@ -67,7 +67,7 @@ class SatelliteSupervisorTest {
 	final SatelliteSupervisor supervisor = new SatelliteSupervisor(launcher,
 			() -> {
 				commandsBuilt.incrementAndGet();
-				return new LaunchCommand(List.of("java"), Map.of(), Set.of());
+				return new LaunchCommand(List.of("java"), Map.of(), Set.of(), null);
 			},
 			Path.of("launch.log"), RestartPolicy.DEFAULT, scheduler, clock,
 			new SatelliteSupervisor.Listener() {
@@ -137,7 +137,7 @@ class SatelliteSupervisorTest {
 					if (calls.incrementAndGet() == 2) {
 						throw new java.io.UncheckedIOException(new IOException("disk full"));
 					}
-					return new LaunchCommand(List.of("java"), Map.of(), Set.of());
+					return new LaunchCommand(List.of("java"), Map.of(), Set.of(), null);
 				},
 				Path.of("launch.log"), RestartPolicy.DEFAULT, scheduler, clock,
 				new SatelliteSupervisor.Listener() {

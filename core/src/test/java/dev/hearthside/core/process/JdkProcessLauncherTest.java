@@ -20,12 +20,24 @@ class JdkProcessLauncherTest {
 	final JdkProcessLauncher launcher = new JdkProcessLauncher();
 
 	static LaunchCommand probe(Map<String, String> env, Set<String> removed, String... probeArgs) {
+		return probeIn(null, env, removed, probeArgs);
+	}
+
+	static LaunchCommand probeIn(Path workingDirectory, Map<String, String> env, Set<String> removed, String... probeArgs) {
 		List<String> cmd = new ArrayList<>(List.of(
 				Path.of(System.getProperty("java.home"), "bin", "java").toString(),
 				"-cp", System.getProperty("java.class.path"),
 				EnvProbe.class.getName()));
 		cmd.addAll(List.of(probeArgs));
-		return new LaunchCommand(cmd, env, removed);
+		return new LaunchCommand(cmd, env, removed, workingDirectory);
+	}
+
+	@Test
+	void runsInTheGivenWorkingDirectory() throws Exception {
+		Path satellite = Files.createDirectories(dir.resolve("satellite 1"));
+		Path log = dir.resolve("launch.log");
+		assertThat(launcher.start(probeIn(satellite, Map.of(), Set.of(), "--cwd"), log).onExit().get(30, SECONDS)).isZero();
+		assertThat(Files.readString(log).strip()).isEqualTo("user.dir=" + satellite.toAbsolutePath());
 	}
 
 	@Test

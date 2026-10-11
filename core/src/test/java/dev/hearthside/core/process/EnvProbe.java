@@ -8,6 +8,10 @@ public final class EnvProbe {
 				Thread.sleep(60_000);
 				continue;
 			}
+			if (name.equals("--cwd")) {
+				System.out.println("user.dir=" + System.getProperty("user.dir"));
+				continue;
+			}
 			String value = System.getenv(name);
 			System.out.println(name + "=" + (value == null ? "<unset>" : value));
 		}
