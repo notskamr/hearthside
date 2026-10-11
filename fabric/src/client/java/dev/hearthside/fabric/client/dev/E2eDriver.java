@@ -17,6 +17,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.VirtualCursor;
+import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
@@ -37,6 +38,10 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.data.AtlasIds;
+import net.minecraft.resources.Identifier;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -95,6 +100,7 @@ public final class E2eDriver {
 			waitFor("resources loaded", Duration.ofSeconds(180),
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
+			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
@@ -559,6 +565,25 @@ public final class E2eDriver {
 		return Screens.getWidgets(minecraft.gui.screen()).stream()
 				.filter(w -> w instanceof AbstractButton && w.getMessage().getString().startsWith("Co-op"))
 				.map(w -> (AbstractButton) w).findFirst().orElse(null);
+	}
+
+	// ---- Hearthside look ----
+
+	private void spritesResolve() throws Exception {
+		List<String> missing = onRender(() -> {
+			TextureAtlas gui = minecraft.getAtlasManager().getAtlasOrThrow(AtlasIds.GUI);
+			List<Identifier> ids = new ArrayList<>(HearthSprites.PANELS);
+			for (PadStyle style : PadStyle.values()) {
+				for (Control control : Control.values()) {
+					ids.add(HearthSprites.glyph(control, style));
+				}
+			}
+			return ids.stream()
+					.filter(id -> gui.getSprite(id).contents().name().equals(MissingTextureAtlasSprite.getLocation()))
+					.map(Identifier::toString).toList();
+		});
+		check(missing.isEmpty(), "every sprite is in the GUI atlas (missing " + missing.size() + ": "
+				+ missing.stream().limit(6).toList() + ")");
 	}
 
 	private void titleCoopOpensLobby() throws Exception {
