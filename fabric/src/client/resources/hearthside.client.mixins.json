@@ -12,7 +12,9 @@
 		"SatelliteGrabMixin",
 		"SatelliteInputMixin",
 		"SatelliteWindowMixin",
-		"UnpublishMixin"
+		"UnpublishMixin",
+		"WindowAccessor",
+		"WindowSizeMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
