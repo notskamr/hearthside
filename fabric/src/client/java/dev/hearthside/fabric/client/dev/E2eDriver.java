@@ -1,5 +1,6 @@
 package dev.hearthside.fabric.client.dev;
 
+import dev.hearthside.core.e2e.StepSelection;
 import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.ControlScheme;
@@ -43,12 +44,15 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
@@ -89,12 +93,48 @@ import net.minecraft.world.level.levelgen.presets.WorldPresets;
  * in the game folder. The final "host killed" step is performed from outside the game.
  */
 public final class E2eDriver {
+	/**
+	 * Every step in run order: its id, then the earlier steps whose effects its body relies on (the party's player
+	 * count, an open screen, a seated profile, a session). {@code -Dhearthside.e2e.only=<ids>} runs the named steps and
+	 * what they need, transitively; every other step is reported as SKIP. A step that works from its section's starting
+	 * state (the title screen; the world with the host alone) needs nothing. Both M1 steps share one id (it runs both),
+	 * listed where the second one runs, so nothing in the lobby can need it.
+	 */
+	private static final String[][] NEEDS = {
+			{"H1"},
+			// The lobby block (fake pads), from the title screen.
+			{"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
+			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"}, {"W9", "L5"}, {"L6", "W9"},
+			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"},
+			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"},
+			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
+			// The in-world session: the world opens with the host alone.
+			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"}, {"C5", "1"},
+			{"C6", "C2"}, {"C12", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"D5", "C7b"}, {"D6", "D5"},
+			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
+			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"},
+			// The in-world pad block (fake pads).
+			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
+			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
+			{"M1", "R1", "W2", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"P8", "P1"}, {"P9", "P1"}, {"S2", "B3", "P9"},
+			{"6"},
+			// The tiled session.
+			{"D9"}, {"7"},
+	};
+	private static final List<String> ORDER = Arrays.stream(NEEDS).map(row -> row[0]).toList();
+	private static final Map<String, List<String>> NEEDED = Arrays.stream(NEEDS)
+			.collect(Collectors.toMap(row -> row[0], row -> List.of(row).subList(1, row.length)));
+	/** Step 7 is done by the run script: it force-kills the host and checks the guest's game exits by itself. */
+	private static final String HOST_KILL = "7 force-killing the host ends its guests' games";
+
 	private static final String WORLD = "hearthside-e2e";
 	private static final String GUEST = "Guest2";
 
 	private final Minecraft minecraft;
 	private final Path report;
 	private Rect hostWindowBefore;
+	private StepSelection selection;
 
 	private E2eDriver(Minecraft minecraft) {
 		this.minecraft = minecraft;
@@ -112,6 +152,10 @@ public final class E2eDriver {
 	private void run() {
 		try {
 			Files.writeString(report, "Hearthside walking-skeleton E2E\n", StandardCharsets.UTF_8);
+			selection = StepSelection.parse(System.getProperty("hearthside.e2e.only"), ORDER, NEEDED);
+			if (!selection.everything()) {
+				log("   only " + ORDER.stream().filter(selection::runs).toList());
+			}
 			// A fresh game folder may show first-launch screens instead of the title; any settled screen will do.
 			waitFor("resources loaded", Duration.ofSeconds(180),
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
@@ -124,6 +168,8 @@ public final class E2eDriver {
 			});
 			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
+			// The lobby and in-world pad blocks are only steps: with none of theirs selected, each reports SKIP and
+			// nothing else happens.
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
@@ -161,11 +207,13 @@ public final class E2eDriver {
 				step("S1 Hearthside's screens, cards and keyboards make their warm sounds", () -> screensMakeSounds(lobbySounds));
 				step("W2 A on it opens the world; the guests come in by name; the co-op record has them", this::pickerOpensWorld);
 			}
-			if (onRender(() -> minecraft.level == null)) {
-				openWorld();
+			if (selection.anyRuns(between("1", "6"))) {
+				if (onRender(() -> minecraft.level == null)) {
+					openWorld();
+				}
+				waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
+				hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			}
-			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
-			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
 			step("C1 guest window is hidden", this::guestWindowHidden);
@@ -222,14 +270,30 @@ public final class E2eDriver {
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
-			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
-				// The last session tiles real windows, as on a machine that can't composite (D9 and step 7 run in it).
-				System.setProperty("hearthside.e2e.forceTiled", "true");
+			if (selection.anyRuns(List.of("D9", "7"))) {
+				if (onRender(() -> minecraft.level != null)) {
+					// Step 6 closes the first world; a focused run that skipped it closes it here.
+					onRender(() -> {
+						minecraft.disconnectFromWorld(Component.literal("E2E"));
+						return null;
+					});
+					waitFor("back on a menu", Duration.ofSeconds(60),
+							() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+				}
+				if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+					// The last session tiles real windows, as on a machine that can't composite (D9 and step 7 run in it).
+					System.setProperty("hearthside.e2e.forceTiled", "true");
+				}
+				openWorld();
+				waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			}
-			openWorld();
-			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("D9 with tiled windows, a drop-in joins as its controller's profile, with no card", this::tiledDropIn);
+			}
+			if (!selection.runs("7")) {
+				log("SKIP " + HOST_KILL);
+				log("DONE");
+				return;
 			}
 			onRender(() -> {
 				Party.current().join(GUEST);
@@ -2227,7 +2291,21 @@ public final class E2eDriver {
 				.toList();
 	}
 
+	/** The step ids from {@code first} to {@code last} in run order, both included (a section of the run). */
+	private static List<String> between(String first, String last) {
+		return ORDER.subList(ORDER.indexOf(first), ORDER.indexOf(last) + 1);
+	}
+
+	/** Runs a step, or reports it as SKIP when the focused run doesn't need it. Its id is its name up to the first space. */
 	private void step(String name, ThrowingRunnable body) {
+		String id = name.substring(0, name.indexOf(' '));
+		if (!ORDER.contains(id)) {
+			throw new IllegalStateException("E2E step " + id + " is missing from NEEDS");
+		}
+		if (!selection.runs(id)) {
+			log("SKIP " + name);
+			return;
+		}
 		long start = System.nanoTime();
 		try {
 			body.run();

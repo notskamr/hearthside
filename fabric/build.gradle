@@ -16,6 +16,15 @@ base {
 	archivesName = 'hearthside'
 }
 
+/** A graphics backend named on the command line for the E2E run: opengl or vulkan. */
+static String e2eBackendName(Object value, String property) {
+	def name = value.toString()
+	if (!(name in ['opengl', 'vulkan'])) {
+		throw new GradleException("-P${property} must be opengl or vulkan, was ${name}")
+	}
+	return name
+}
+
 loom {
 	splitEnvironmentSourceSets()
 
@@ -42,6 +51,24 @@ loom {
 			// Guests paint a magenta corner into their exported frames; the host logs what it composited there.
 			environmentVariable 'HEARTHSIDE_E2E_PATTERN', '1'
 			runDir 'run-e2e'
+			// Switches (see docs/testing/e2e.md): -Pe2eOnly=<ids> runs those steps and what they need;
+			// -Pe2eBackend / -Pe2eGuestBackend=opengl|vulkan pick the host's / guests' graphics backend;
+			// -Pe2eValidation=true turns on Minecraft's Vulkan validation.
+			def only = project.findProperty('e2eOnly')
+			if (only) {
+				vmArg "-Dhearthside.e2e.only=${only}"
+			}
+			def backend = project.findProperty('e2eBackend')
+			if (backend) {
+				programArgs '--graphicsBackend', e2eBackendName(backend, 'e2eBackend')
+			}
+			def guestBackend = project.findProperty('e2eGuestBackend')
+			if (guestBackend) {
+				vmArg "-Dhearthside.e2e.guestBackend=${e2eBackendName(guestBackend, 'e2eGuestBackend')}"
+			}
+			if (project.findProperty('e2eValidation') == 'true') {
+				programArg '--vulkanValidation'
+			}
 		}
 
 		satelliteClient {
