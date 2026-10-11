@@ -1,5 +1,6 @@
 package dev.hearthside.fabric;
 
+import dev.hearthside.fabric.server.GuestLoginHooks;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
@@ -15,5 +16,6 @@ public final class HearthsideMod implements ModInitializer {
 				.map(c -> c.getMetadata().getVersion().getFriendlyString())
 				.orElse("unknown");
 		LOGGER.info("Hearthside {} initialising", version);
+		GuestLoginHooks.register();
 	}
 }
