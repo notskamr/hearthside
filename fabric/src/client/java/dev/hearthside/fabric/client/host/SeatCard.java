@@ -26,6 +26,8 @@ public final class SeatCard {
 	private final ProfileCarousel carousel;
 	private final Supplier<QuickSetup> newSetup;
 	private final String controllerGuid;
+	/** The profile the seat had before reopening its card (Y on a ready card), kept if the player backs out; else null. */
+	private final GuestProfile keep;
 	private final NavRepeater horizontal = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
 	private final NavRepeater vertical = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
 	private Stage stage = Stage.CAROUSEL;
@@ -38,11 +40,12 @@ public final class SeatCard {
 	/** Everything counts as already held when the card opens: the A that took the seat must not also confirm. */
 	private int lastButtons = -1;
 
-	SeatCard(int seat, ProfileCarousel carousel, Supplier<QuickSetup> newSetup, String controllerGuid) {
+	SeatCard(int seat, ProfileCarousel carousel, Supplier<QuickSetup> newSetup, String controllerGuid, GuestProfile keep) {
 		this.seat = seat;
 		this.carousel = carousel;
 		this.newSetup = newSetup;
 		this.controllerGuid = controllerGuid;
+		this.keep = keep;
 	}
 
 	/** This seat's controller, this frame. */
@@ -68,6 +71,11 @@ public final class SeatCard {
 			carousel.next();
 		}
 		if (down(pressed, PadButton.B)) {
+			if (keep != null) {
+				// Changing profile: B backs out and keeps the one the player had.
+				chosen = keep;
+				return Outcome.CONFIRMED;
+			}
 			return Outcome.LEAVE;
 		}
 		if (down(pressed, PadButton.A)) {
@@ -201,6 +209,11 @@ public final class SeatCard {
 
 	private static boolean down(int pressed, PadButton button) {
 		return (pressed & InputFrame.buttons(button)) != 0;
+	}
+
+	/** Whether this card is changing a ready seat's profile (B keeps the old one) rather than a new seat's. */
+	public boolean changing() {
+		return keep != null;
 	}
 
 	public int seat() {

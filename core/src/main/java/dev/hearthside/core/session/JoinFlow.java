@@ -124,6 +124,18 @@ public final class JoinFlow {
 		return Result.NONE;
 	}
 
+	/**
+	 * A ready seat goes back to choosing its profile (Y on its lobby card, Spec A section 5.5). Not once playing: a
+	 * player in the world changes profile from their pause menu. Returns whether the seat is choosing again.
+	 */
+	public boolean changeProfile(String controller) {
+		if (states.get(controller) instanceof SeatState.Ready) {
+			states.put(controller, new SeatState.ChoosingProfile());
+			return true;
+		}
+		return false;
+	}
+
 	/** The seat's game reached the world. Applies even while the controller is unplugged. */
 	public Result loaded(String controller) {
 		advance(controller, state -> state instanceof SeatState.Ready ready ? new SeatState.Playing(ready.profile()) : state);

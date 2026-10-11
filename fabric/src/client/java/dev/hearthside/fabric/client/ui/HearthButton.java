@@ -37,13 +37,13 @@ public final class HearthButton extends Button {
 		int colour = isActive() ? HearthDraw.CREAM : 0xFF8A7A6A;
 		int textY = getY() + (getHeight() - 8) / 2;
 		if (glyph == null) {
-			g.centeredText(font, getMessage(), getX() + getWidth() / 2, textY, colour);
+			HearthDraw.labelCentred(g, font, getMessage(), getX() + getWidth() / 2, textY, colour);
 			return;
 		}
 		int glyphWidth = HearthDraw.glyphWidth(glyph);
 		int total = glyphWidth + 4 + font.width(getMessage());
 		int x = getX() + (getWidth() - total) / 2;
 		HearthDraw.glyph(g, glyph, style.get(), x, getY() + (getHeight() - HearthDraw.GLYPH_HEIGHT) / 2);
-		g.text(font, getMessage(), x + glyphWidth + 4, textY, colour, true);
+		HearthDraw.label(g, font, getMessage(), x + glyphWidth + 4, textY, colour);
 	}
 }

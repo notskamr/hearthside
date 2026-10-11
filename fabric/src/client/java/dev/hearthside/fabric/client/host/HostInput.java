@@ -54,6 +54,7 @@ final class HostInput implements Runnable {
 	private final Map<Integer, Integer> sharedButtons = new HashMap<>();
 	/** Whether a guest's controller is driving the host's shared screen (the host has no pad of its own). */
 	private boolean sharedDriving;
+	private volatile int freePads;
 	/** When a guest last moved the shared pointer; it hides a while after, for the mouse. */
 	private long lastGuestDrive;
 	private static final long POINTER_LINGER_NANOS = 3_000_000_000L;
@@ -77,6 +78,13 @@ final class HostInput implements Runnable {
 		}
 		InputRouter.Update update = router.update(pads);
 		autoClaimHost(pads);
+		int free = 0;
+		for (PadSnapshot pad : pads) {
+			if (router.playerFor(pad.instanceId()).isEmpty()) {
+				free++;
+			}
+		}
+		freePads = free;
 		long tickNow = System.nanoTime();
 		if (tickNow - lastFlowTick >= 1_000_000_000L) {
 			lastFlowTick = tickNow;
@@ -94,6 +102,7 @@ final class HostInput implements Runnable {
 			}
 		}
 		refreshStyles();
+		indicatePlayers(pads);
 		if (!session.inWorld()) {
 			// No world yet (lobby, world select): guests' games are idle on their title screens and must not be
 			// driven. Every controller drives the host's shared screen instead (Spec A sections 7.1, 8.2).
@@ -150,13 +159,17 @@ final class HostInput implements Runnable {
 				lobby.continueToWorlds();
 			} else if ((pressed & b) != 0) {
 				session.onSeatedB(player);
+			} else if ((pressed & InputFrame.buttons(PadButton.Y)) != 0) {
+				// Y on a ready card: pick another profile (Spec A section 5.5).
+				session.changeProfile(player);
 			}
 		}
 		sharedButtons.keySet().retainAll(frames.keySet());
 		// Ending the party is player 1's call (Spec A section 7.1): guests don't drive its confirmation.
 		Map<Integer, InputFrame> drivers = screen instanceof ConfirmScreen
 				? (shared.containsKey(0) ? Map.of(0, shared.get(0)) : Map.of()) : shared;
-		SharedScreenInput.Driver driver = SharedScreenInput.drive(drivers, lobby != null ? start | b : start);
+		int lobbyButtons = start | b | InputFrame.buttons(PadButton.Y);
+		SharedScreenInput.Driver driver = SharedScreenInput.drive(drivers, lobby != null ? lobbyButtons : start);
 		if (driver != null && (driver.player() != 0 || drivers.containsKey(0))) {
 			VirtualCursor.setTint(session.colorOf(driver.player()));
 		}
@@ -254,6 +267,29 @@ final class HostInput implements Runnable {
 				return;
 			}
 		}
+	}
+
+	/** What each controller was last marked with (player and colour), so the hardware is only told of changes. */
+	private final Map<Integer, Long> marked = new HashMap<>();
+
+	/** Lights each controller in its player's colour (Spec A section 4.1: a player's colour marks them). */
+	private void indicatePlayers(List<PadSnapshot> pads) {
+		for (PadSnapshot pad : pads) {
+			int player = router.playerFor(pad.instanceId()).orElse(-1);
+			int rgb = player < 0 ? 0 : session.colorOf(player);
+			long mark = (long) player << 32 | (rgb & 0xFFFFFFFFL);
+			Long before = marked.put(pad.instanceId(), mark);
+			// A controller nobody has taken keeps its own light until it becomes someone's.
+			if (before == null ? player >= 0 : before != mark) {
+				source.indicate(pad.instanceId(), player, rgb);
+			}
+		}
+		marked.keySet().retainAll(pads.stream().map(PadSnapshot::instanceId).toList());
+	}
+
+	/** Controllers connected but not assigned to anyone, as of the last poll. */
+	int freePadCount() {
+		return freePads;
 	}
 
 	boolean hasPadFor(int player) {

@@ -26,9 +26,20 @@ public final class HearthSprites {
 	/** Ember glass: the chip behind a button hint (nine-slice). */
 	public static final Identifier GLASS_CHIP = id("glass/chip");
 
+	/** Cozy hearth: the lobby's dark plank wall (tiled). */
+	public static final Identifier BOARD = id("hearth/board");
+	/** Cozy hearth: firelight glowing up from the bottom centre (stretched). */
+	public static final Identifier FIRELIGHT = id("hearth/firelight");
+	/** An empty seat: a faint glass card (nine-slice). */
+	public static final Identifier GHOST_CARD = id("hearth/ghost_card");
+	/** A small wooden pill for the title and labels (nine-slice). */
+	public static final Identifier PILL = id("hearth/pill");
+	/** A white label, tinted with a player's colour (nine-slice). */
+	public static final Identifier TAG = id("hearth/tag");
+
 	/** Every non-glyph sprite, for checks. */
 	public static final List<Identifier> PANELS = List.of(WOOD_PANEL, PARCHMENT_CARD, CARD_FRAME, BUTTON,
-			BUTTON_HIGHLIGHTED, BUTTON_DISABLED, GLASS_PANEL, GLASS_CHIP);
+			BUTTON_HIGHLIGHTED, BUTTON_DISABLED, GLASS_PANEL, GLASS_CHIP, BOARD, FIRELIGHT, GHOST_CARD, PILL, TAG);
 
 	private HearthSprites() {}
 

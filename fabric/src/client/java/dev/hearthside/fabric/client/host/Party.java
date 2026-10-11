@@ -523,6 +523,12 @@ public final class Party {
 		return PadStyle.XBOX;
 	}
 
+	/** Connected controllers nobody is using: one could take a seat now. */
+	public int freeControllers() {
+		HostInput current = input;
+		return current == null ? 0 : current.freePadCount();
+	}
+
 	/** A guest's chosen profile, or null while they are choosing (or the seat is free). */
 	public GuestProfile profileOf(int index) {
 		Slot slot = slots.get(index);
@@ -553,7 +559,20 @@ public final class Party {
 		}
 	}
 
-	private SeatCard newCard(int index, String controller) {
+	/** Y on a ready seat's card in the lobby: choose its profile again (B keeps the current one). Render thread. */
+	void changeProfile(int player) {
+		Slot slot = slots.get(player);
+		String controller = controllerOfSlot.get(player);
+		GuestProfile current = slot == null ? null : slot.profile;
+		if (current == null || controller == null || world != null || cards.containsKey(player)) {
+			return;
+		}
+		if (flow.changeProfile(controller)) {
+			cards.put(player, newCard(player, controller, current));
+		}
+	}
+
+	private SeatCard newCard(int index, String controller, GuestProfile keep) {
 		List<GuestProfile> profiles = List.of();
 		try {
 			profiles = profileStore().load();
@@ -562,14 +581,14 @@ public final class Party {
 		}
 		java.util.Set<UUID> held = new java.util.HashSet<>();
 		slots.values().forEach(s -> {
-			if (s.profile != null) {
+			if (s.index != index && s.profile != null) {
 				held.add(s.profile.id());
 			}
 		});
 		List<String> names = profiles.stream().map(GuestProfile::name).toList();
 		String guid = guidOf.get(controller);
 		return new SeatCard(index, new ProfileCarousel(profiles, held, guid),
-				() -> new QuickSetup(names, minecraft.getUser().getName(), takenColors(index), index), guid);
+				() -> new QuickSetup(names, minecraft.getUser().getName(), takenColors(index), index), guid, keep);
 	}
 
 	/** Colours other players in the party are using. */
@@ -741,7 +760,7 @@ public final class Party {
 			int index = startGuest(profile);
 			controllerOfSlot.put(index, controller);
 			if (card) {
-				cards.put(index, newCard(index, controller));
+				cards.put(index, newCard(index, controller, null));
 			}
 			HostInput currentInput = input;
 			if (currentInput != null) {

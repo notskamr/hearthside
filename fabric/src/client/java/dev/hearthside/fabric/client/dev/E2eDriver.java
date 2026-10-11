@@ -117,6 +117,7 @@ public final class E2eDriver {
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
 				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
 				step("L2 Y and the D-pad cycle profiles on the card; A confirms", this::cardCyclesAndConfirms);
+				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
 				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
@@ -697,7 +698,7 @@ public final class E2eDriver {
 		screenshot("lobby-empty");
 		onRender(() -> {
 			Screens.getWidgets(lobby).stream()
-					.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("Use a controller"))
+					.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("+ Controller"))
 					.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
 			return null;
 		});
@@ -761,10 +762,31 @@ public final class E2eDriver {
 		check(onRender(() -> cardShows(1)).equals("Hazel"), "left twice is back on Hazel");
 		press(LOBBY_PAD, PadButton.A);
 		check(onRender(() -> card(1) == null), "A confirms: the card closes");
+		int[] lit = PADS.indicated(LOBBY_PAD);
+		int hazelColour = onRender(() -> Party.current().colorOf(1));
+		check(lit != null && lit[0] == 1 && lit[1] == hazelColour,
+				"the controller is lit as player 2 in Hazel's colour (" + (lit == null ? "none" : lit[0] + "/" + Integer.toHexString(lit[1])) + ")");
 		waitFor("the seat ready as Hazel", Duration.ofSeconds(60), () -> onRender(() -> {
 			Party.SeatView seat = Party.current().seatView(1);
 			return seat.name().equals("Hazel") && seat.status().equals("Ready");
 		}));
+	}
+
+	private void cardSwitchesProfile() throws Exception {
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> card(1) != null && card(1).changing()), "Y reopens the ready seat's card");
+		check(onRender(() -> cardShows(1)).equals("Hazel"), "the current profile is pre-selected");
+		press(LOBBY_PAD, PadButton.DPAD_LEFT);
+		screenshot("lobby-changing");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1) == null && Party.current().profileOf(1).name().equals("Birch")),
+				"A switches the seat to Birch");
+		press(LOBBY_PAD, PadButton.Y);
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().profileOf(1).name().equals("Birch")),
+				"B backs out and keeps Birch");
+		check(onRender(() -> Party.current().seatView(1).status()).equals("Ready"), "the seat is ready again");
 	}
 
 	private void cardBackAndLeave() throws Exception {
@@ -870,19 +892,20 @@ public final class E2eDriver {
 
 	private void lobbyIntoWorld() throws Exception {
 		// Seat 1 is ready as the profile quick setup made (L3). A second controller takes seat 2 and is still on its
-		// card when the world opens: it goes in with what its card shows (Birch, the first profile).
+		// card when the world opens: it goes in with what its card shows (the first profile nobody holds).
 		String made = onRender(() -> Party.current().seatView(1).name());
 		PADS.plug(SECOND_LOBBY_PAD, "fake-lobby-pad-2", PadStyle.XBOX);
 		Thread.sleep(300);
 		press(SECOND_LOBBY_PAD, PadButton.A);
 		waitFor("seat 2 choosing on its card", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
 		screenshot("lobby-three-players");
+		String shown = onRender(() -> cardShows(2));
 		press(LOBBY_PAD, PadButton.START);
 		check(onRender(() -> minecraft.gui.screen() instanceof SelectWorldScreen), "Menu continues to world select");
 		openWorld();
 		waitFor("both lobby guests in the world", Duration.ofSeconds(240), () -> playerCount() == 3);
 		check(guest(made) != null, made + " is in the world under that name (the game launched as Seat1)");
-		check(guest("Birch") != null, "seat 2 went in as what its card showed");
+		check(guest(shown) != null, "seat 2 went in as what its card showed (" + shown + ")");
 		// Back to the starting point for the rest of the run: the lobby guest leaves.
 		onRender(() -> {
 			Party party = Party.current();

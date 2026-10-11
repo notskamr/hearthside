@@ -95,14 +95,18 @@ def lighter(colour, amount):
     return (min(255, r + amount), min(255, g + amount), min(255, b + amount), a)
 
 
-def save(img, name, nine_slice_border=None):
+def save(img, name, nine_slice_border=None, tile=False):
     path = OUT / f"{name}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path, format="PNG", optimize=False)
     meta = path.with_suffix(".png.mcmeta")
+    w, h = img.size
+    scaling = None
     if nine_slice_border is not None:
-        w, h = img.size
         scaling = {"type": "nine_slice", "width": w, "height": h, "border": nine_slice_border}
+    elif tile:
+        scaling = {"type": "tile", "width": w, "height": h}
+    if scaling is not None:
         meta.write_text(json.dumps({"gui": {"scaling": scaling}}, indent=2) + "\n", encoding="utf-8", newline="\n")
     elif meta.exists():
         meta.unlink()
@@ -181,6 +185,81 @@ def button(name, base, hi, dark, outline, glow=None):
         ring(img, 1, glow)
     step_corners(img, 1)
     return save(img, f"hearth/{name}", 4)
+
+
+def board():
+    """The lobby's backdrop: dark vertical oak planks, tiled (the hearth's wooden wall)."""
+    img = canvas(32, 32)
+    rng = random.Random(23)
+    bases = [rgb("3a2414"), rgb("33200f"), rgb("3d2616"), rgb("301d0e")]
+    for plank in range(4):
+        base = bases[plank]
+        x0 = plank * 8
+        rect(img, x0, 0, x0 + 7, 31, base)
+        rect(img, x0, 0, x0, 31, lighter(base, 10))
+        rect(img, x0 + 7, 0, x0 + 7, 31, rgb("140a04"))
+        for _ in range(4):
+            gx = x0 + rng.randrange(2, 6)
+            gy = rng.randrange(0, 26)
+            rect(img, gx, gy, gx, gy + rng.randrange(3, 7), darker(base, 0.75))
+        if rng.random() < 0.5:
+            kx, ky = x0 + rng.randrange(2, 5), rng.randrange(4, 26)
+            rect(img, kx, ky, kx + 1, ky + 1, darker(base, 0.6))
+    return save(img, "hearth/board", tile=True)
+
+
+def firelight():
+    """A glow rising from the bottom centre, in pixel-stepped bands (stretched over the lower screen)."""
+    w, h = 160, 80
+    img = canvas(w, h)
+    inner, outer = rgb("ffb35a"), rgb("c4562a")
+    for y in range(h):
+        for x in range(w):
+            dx = (x + 0.5 - w / 2) / (w / 2)
+            dy = (h - y - 0.5) / h
+            strength = max(0.0, 1.0 - (dx * dx * 0.9 + dy * dy * 1.4) ** 0.5)
+            # Quantised into many fine bands: soft, but still pixel-made.
+            band = round(strength * 14) / 14
+            if band <= 0:
+                continue
+            r = int(outer[0] + (inner[0] - outer[0]) * band)
+            g = int(outer[1] + (inner[1] - outer[1]) * band)
+            b = int(outer[2] + (inner[2] - outer[2]) * band)
+            img.putpixel((x, y), (r, g, b, int(190 * band ** 1.9)))
+    return save(img, "hearth/firelight")
+
+
+def ghost_card():
+    """An empty seat: a faint glass card with a dashed rim."""
+    img = canvas(16, 16)
+    rect(img, 0, 0, 15, 15, (255, 236, 210, 22))
+    for i in range(16):
+        if (i // 2) % 2 == 0:
+            for x, y in ((i, 0), (i, 15), (0, i), (15, i)):
+                img.putpixel((x, y), (255, 236, 210, 90))
+    step_corners(img, 2)
+    return save(img, "hearth/ghost_card", 4)
+
+
+def tag():
+    """A small white label, tinted with a player's colour (nine-slice)."""
+    img = canvas(12, 12)
+    rect(img, 0, 0, 11, 11, (255, 255, 255, 255))
+    ring(img, 0, (150, 150, 150, 255))
+    rect(img, 1, 10, 10, 10, (205, 205, 205, 255))
+    step_corners(img, 1)
+    return save(img, "hearth/tag", 3)
+
+
+def pill():
+    """A small wooden pill for the title and labels."""
+    img = canvas(24, 14)
+    rect(img, 0, 0, 23, 13, rgb("6a4020"))
+    rect(img, 1, 1, 22, 2, rgb("8a5a30"))
+    rect(img, 1, 11, 22, 12, rgb("4a2a12"))
+    ring(img, 0, OUTLINE)
+    step_corners(img, 2)
+    return save(img, "hearth/pill", 5)
 
 
 # ---- Ember glass ----
@@ -386,6 +465,11 @@ def main():
     count += wood_panel()
     count += parchment_card()
     count += card_frame()
+    count += board()
+    count += firelight()
+    count += ghost_card()
+    count += pill()
+    count += tag()
     count += button("button", OAK_LIGHT, OAK_HI, OAK, OUTLINE)
     count += button("button_highlighted", rgb("9a5a2c"), rgb("c07a40"), OAK_LIGHT, EMBER, GLOW)
     count += button("button_disabled", rgb("4a3a30"), rgb("5a4a40"), rgb("2e241e"), rgb("1a1410"))

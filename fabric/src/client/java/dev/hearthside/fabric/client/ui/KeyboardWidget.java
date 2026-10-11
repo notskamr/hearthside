@@ -51,7 +51,8 @@ public final class KeyboardWidget {
 				if (under) {
 					g.outline(keyX - 1, keyY - 1, KEY_W + 2, KEY_H + 2, 0xFFFFFFFF);
 				}
-				g.centeredText(font, String.valueOf(model.keyAt(row, column)), keyX + KEY_W / 2, keyY + 3, KEY_TEXT);
+				HearthDraw.labelCentred(g, font, Component.literal(String.valueOf(model.keyAt(row, column))), keyX + KEY_W / 2,
+						keyY + 3, KEY_TEXT);
 			}
 		}
 
