@@ -5,6 +5,7 @@
 	"client": [
 		"ContainerScreenAccessor",
 		"ContinueAttackMixin",
+		"DefaultPlayerSkinInvoker",
 		"E2eUnfocusedMixin",
 		"FrameHookMixin",
 		"KeyboardInputMixin",

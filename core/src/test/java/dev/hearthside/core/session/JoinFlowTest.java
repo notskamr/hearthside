@@ -26,6 +26,29 @@ class JoinFlowTest {
 	}
 
 	@Test
+	void readySeatCanChooseItsProfileAgain() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.profileChosen("pad-1", alex);
+		assertThat(flow.changeProfile("pad-1")).isTrue();
+		assertThat(flow.seats().get("pad-1")).isInstanceOf(SeatState.ChoosingProfile.class);
+		UUID sam = UUID.randomUUID();
+		flow.profileChosen("pad-1", sam);
+		assertThat(flow.seats().get("pad-1")).isEqualTo(new SeatState.Ready(sam));
+	}
+
+	@Test
+	void playingSeatOrNoSeatCannotChooseAgain() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		assertThat(flow.changeProfile("pad-9")).isFalse();
+		flow.press("pad-1", Control.A);
+		flow.profileChosen("pad-1", alex);
+		flow.loaded("pad-1");
+		assertThat(flow.changeProfile("pad-1")).isFalse();
+		assertThat(flow.seats().get("pad-1")).isInstanceOf(SeatState.Playing.class);
+	}
+
+	@Test
 	void twoControllersSameTickGetDifferentSeats() {
 		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
 		flow.press("pad-1", Control.A);

@@ -14,6 +14,8 @@ public final class VirtualCursor {
 	private static double x = -1;
 	private static double y = -1;
 	private static volatile boolean drawn;
+	/** The colour of whoever moved the pointer last (Spec A section 7.1), 0xRRGGBB. */
+	private static volatile int tint = 0xFFFFFF;
 	private static boolean registered;
 
 	private VirtualCursor() {}
@@ -26,6 +28,11 @@ public final class VirtualCursor {
 			ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) ->
 					ScreenEvents.afterExtract(screen).register((s, graphics, mouseX, mouseY, delta) -> draw(graphics, minecraft.getWindow())));
 		}
+	}
+
+	/** Colours the pointer for the player driving it, 0xRRGGBB. */
+	public static void setTint(int rgb) {
+		tint = rgb & 0xFFFFFF;
 	}
 
 	public static double x() {
@@ -58,5 +65,6 @@ public final class VirtualCursor {
 		int gy = (int) (y * window.getGuiScaledHeight() / window.getScreenHeight());
 		graphics.fill(gx - 1, gy - 1, gx + SIZE + 1, gy + SIZE + 1, 0xFF000000);
 		graphics.fill(gx, gy, gx + SIZE, gy + SIZE, 0xFFFFFFFF);
+		graphics.fill(gx + 2, gy + 2, gx + SIZE - 2, gy + SIZE - 2, 0xFF000000 | tint);
 	}
 }

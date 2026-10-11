@@ -31,6 +31,19 @@ public final class FakeGamepadSource implements GamepadSource {
 		pads.computeIfPresent(id, (k, pad) -> new Pad(pad.guid(), pad.style(), frame));
 	}
 
+	/** What each pad was last marked with: {player, rgb}. */
+	private final Map<Integer, int[]> indicated = new java.util.concurrent.ConcurrentHashMap<>();
+
+	@Override
+	public void indicate(int instanceId, int player, int rgb) {
+		indicated.put(instanceId, new int[] {player, rgb});
+	}
+
+	/** The player and colour a pad was last marked with, or null. */
+	public int[] indicated(int instanceId) {
+		return indicated.get(instanceId);
+	}
+
 	@Override
 	public List<PadSnapshot> poll() {
 		List<PadSnapshot> snapshots = new ArrayList<>();

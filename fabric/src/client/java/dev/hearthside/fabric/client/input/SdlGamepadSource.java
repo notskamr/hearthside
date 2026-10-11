@@ -123,6 +123,20 @@ public final class SdlGamepadSource implements GamepadSource, AutoCloseable {
 	}
 
 	@Override
+	public void indicate(int instanceId, int player, int rgb) {
+		Open pad = open.get(instanceId);
+		if (pad == null) {
+			return;
+		}
+		SDL_SetGamepadPlayerIndex(pad.handle(), player);
+		if (player < 0) {
+			SDL_SetGamepadLED(pad.handle(), (byte) 0, (byte) 0, (byte) 0);
+		} else {
+			SDL_SetGamepadLED(pad.handle(), (byte) (rgb >> 16), (byte) (rgb >> 8), (byte) rgb);
+		}
+	}
+
+	@Override
 	public void close() {
 		open.values().forEach(pad -> SDL_CloseGamepad(pad.handle()));
 		open.clear();

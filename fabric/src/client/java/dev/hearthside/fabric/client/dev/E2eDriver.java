@@ -10,14 +10,21 @@ import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
 import dev.hearthside.core.profile.GuestProfile;
+import dev.hearthside.core.profile.HostProfile;
+import dev.hearthside.core.profile.PlayerColors;
+import dev.hearthside.core.profile.ProfileCarousel;
+import dev.hearthside.core.profile.ProfileFile;
 import dev.hearthside.core.profile.ProfileStore;
+import dev.hearthside.core.profile.QuickSetup;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.VirtualCursor;
+import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.SeatCard;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
@@ -36,7 +43,12 @@ import java.util.regex.Pattern;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.data.AtlasIds;
+import net.minecraft.resources.Identifier;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -95,15 +107,25 @@ public final class E2eDriver {
 			waitFor("resources loaded", Duration.ofSeconds(180),
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
+			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
+				step("L5 player 1's card claims a controller; it drives the host and is not seated", this::hostCardClaims);
+				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
+				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
+				step("L2 Y and the D-pad cycle profiles on the card; A confirms", this::cardCyclesAndConfirms);
+				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
 				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
-				step("B5 Menu on a seated controller continues; the world brings the guest in", this::lobbyIntoWorld);
+				step("L4 B steps back out of quick setup, then leaves the seat from the carousel", this::cardBackAndLeave);
+				step("L8 unplugging mid-keyboard keeps the card; replugging resumes it", this::cardSurvivesUnplug);
+				step("L10 two identical controllers never share a profile or a new name", this::twinsNeverClash);
+				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
+				step("B5 Menu on a seated controller continues; the world brings the guests in by name", this::lobbyIntoWorld);
 			}
 			if (onRender(() -> minecraft.level == null)) {
 				openWorld();
@@ -141,6 +163,7 @@ public final class E2eDriver {
 				step("P5 unplug pauses, replug resumes", this::unplugAndReplug);
 				step("P6 satellite input-isolation boot line present (behaviour checked by hand)", this::satelliteIgnoresOsInput);
 				step("M1 inventory: X takes half a stack, A places it", this::inventoryClicks);
+				step("H2 button hints draw glyph sprites for the guest's controller family", this::hintsUseGlyphSprites);
 				step("M2 closing a menu with B does not leak sneak into the world", this::closeWithoutSneakLeak);
 				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
 				step("A1 RT punches a mob", this::triggerPunches);
@@ -544,6 +567,8 @@ public final class E2eDriver {
 	// ---- Lobby steps (before any world) ----
 
 	private static final int LOBBY_PAD = 103;
+	/** The lobby pad's own model GUID, so lobby profiles never match the in-world steps' pads. */
+	private static final String LOBBY_GUID = "fake-lobby-pad";
 
 	/** Opens the lobby the way a player does: Co-op on the title screen. */
 	private LobbyScreen openLobby() throws Exception {
@@ -561,8 +586,34 @@ public final class E2eDriver {
 				.map(w -> (AbstractButton) w).findFirst().orElse(null);
 	}
 
+	// ---- Hearthside look ----
+
+	private void spritesResolve() throws Exception {
+		List<String> missing = onRender(() -> {
+			TextureAtlas gui = minecraft.getAtlasManager().getAtlasOrThrow(AtlasIds.GUI);
+			List<Identifier> ids = new ArrayList<>(HearthSprites.PANELS);
+			for (PadStyle style : PadStyle.values()) {
+				for (Control control : Control.values()) {
+					ids.add(HearthSprites.glyph(control, style));
+				}
+			}
+			return ids.stream()
+					.filter(id -> gui.getSprite(id).contents().name().equals(MissingTextureAtlasSprite.getLocation()))
+					.map(Identifier::toString).toList();
+		});
+		check(missing.isEmpty(), "every sprite is in the GUI atlas (missing " + missing.size() + ": "
+				+ missing.stream().limit(6).toList() + ")");
+	}
+
+	private void hintsUseGlyphSprites() throws Exception {
+		// The guest's game (a fake PlayStation pad) logs each glyph sprite the first time it draws one.
+		waitFor("a PlayStation glyph drawn in the guest's hints", Duration.ofSeconds(10),
+				() -> satelliteLog().contains("hearthside hint glyph hearthside:glyph/playstation/"));
+		check(!satelliteLog().contains("hearthside hint glyph hearthside:glyph/xbox/"), "no other family's glyphs");
+	}
+
 	private void titleCoopOpensLobby() throws Exception {
-		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
 		onRender(() -> {
 			minecraft.gui.setScreen(new TitleScreen());
 			return null;
@@ -593,7 +644,7 @@ public final class E2eDriver {
 	}
 
 	private void lobbyCancelStopsGuests() throws Exception {
-		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
 		Thread.sleep(300);
 		LobbyScreen lobby = openLobby();
 		press(LOBBY_PAD, PadButton.A);
@@ -623,8 +674,248 @@ public final class E2eDriver {
 		double x = onRender(VirtualCursor::x);
 		int centre = onRender(() -> minecraft.getWindow().getScreenWidth() / 2);
 		check(x > centre + 20, "the stick moved the host's cursor right (x " + x + ", centre " + centre + ")");
+		check(onRender(() -> Party.current().sharedStyle()) == PadStyle.PLAYSTATION,
+				"the shared hints show the PlayStation buttons of the controller driving the screen");
 		check(!satelliteLog().contains("hearthside controller: menu mode"),
 				"the guest's game, idle on its title screen, got no controller input");
+	}
+
+	private static final int SECOND_LOBBY_PAD = 104;
+	private static final int HOST_PAD = 106;
+	private static final String HOST_GUID = "fake-host-pad";
+
+	/** Saves a screenshot of the host's window to {@code run-e2e/screenshots/<name>.png} for the docs. */
+	private void screenshot(String name) throws Exception {
+		Thread.sleep(400);
+		onRender(() -> {
+			Screenshot.grab(minecraft.gameDirectory, name + ".png", minecraft.gameRenderer.mainRenderTarget(), 1, message -> {});
+			return null;
+		});
+		Thread.sleep(400);
+	}
+
+	private void hostCardClaims() throws Exception {
+		// Start from player 1 having no remembered controller (a stopped run can leave one behind).
+		ProfileStore store = profiles();
+		ProfileFile file = store.loadFile();
+		store.saveFile(new ProfileFile(file.profiles(), file.host().withController(null)));
+		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+		Thread.sleep(300);
+		LobbyScreen lobby = openLobby();
+		screenshot("lobby-empty");
+		onRender(() -> {
+			Screens.getWidgets(lobby).stream()
+					.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("+ Controller"))
+					.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+			return null;
+		});
+		press(HOST_PAD, PadButton.A);
+		waitFor("player 1 has the controller", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+		check(onRender(() -> Party.current().seatedCount()) == 0, "the controller did not take a guest seat");
+		check(HOST_GUID.equals(profiles().loadFile().host().preferredControllerGuid()), "player 1's controller is remembered");
+	}
+
+	private void hostControllerRemembered() throws Exception {
+		onRender(() -> {
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		check(Party.current() == null, "leaving the empty lobby ends the party at once");
+		openLobby();
+		waitFor("player 1's controller taken again", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current().hostHasController()));
+		// "− Controller" gives it back: it is free again, and forgotten.
+		onRender(() -> {
+			Screens.getWidgets(minecraft.gui.screen()).stream()
+					.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("− Controller"))
+					.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+			return null;
+		});
+		check(onRender(() -> !Party.current().hostHasController()), "player 1 gave the controller back");
+		check(profiles().loadFile().host().preferredControllerGuid() == null, "and it is forgotten");
+		check(onRender(() -> Party.current().freeControllers()) == 1, "it is free to join as a guest");
+		onRender(() -> {
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		PADS.unplug(HOST_PAD);
+	}
+
+	private ProfileStore profiles() {
+		return new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
+	}
+	private static final int REPLUG_PAD = 105;
+
+	private SeatCard card(int seat) {
+		Party party = Party.current();
+		return party == null ? null : party.seatCard(seat);
+	}
+
+	/** The name on a card's carousel, or "New". Render thread. */
+	private String cardShows(int seat) {
+		return card(seat).carousel().current() instanceof ProfileCarousel.Entry.Profile(GuestProfile p) ? p.name() : "New";
+	}
+
+	private Path satelliteLogFile() {
+		return minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/logs/latest.log");
+	}
+
+	private void cardPreselects() throws Exception {
+		check(onRender(() -> card(1) != null), "seat 1 is choosing on its card");
+		screenshot("lobby-choosing");
+		check(onRender(() -> cardShows(1)).equals("Hazel"), "Hazel, last used on this controller, is pre-selected");
+	}
+
+	private void cardCyclesAndConfirms() throws Exception {
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> cardShows(1)).equals("New"), "Y moves on to New");
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		check(onRender(() -> cardShows(1)).equals("Birch"), "right wraps round to Birch");
+		press(LOBBY_PAD, PadButton.DPAD_LEFT);
+		press(LOBBY_PAD, PadButton.DPAD_LEFT);
+		check(onRender(() -> cardShows(1)).equals("Hazel"), "left twice is back on Hazel");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1) == null), "A confirms: the card closes");
+		int[] lit = PADS.indicated(LOBBY_PAD);
+		int hazelColour = onRender(() -> Party.current().colorOf(1));
+		check(lit != null && lit[0] == 1 && lit[1] == hazelColour,
+				"the controller is lit as player 2 in Hazel's colour (" + (lit == null ? "none" : lit[0] + "/" + Integer.toHexString(lit[1])) + ")");
+		waitFor("the seat ready as Hazel", Duration.ofSeconds(60), () -> onRender(() -> {
+			Party.SeatView seat = Party.current().seatView(1);
+			return seat.name().equals("Hazel") && seat.status().equals("Ready");
+		}));
+	}
+
+	private void cardSwitchesProfile() throws Exception {
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> card(1) != null && card(1).changing()), "Y reopens the ready seat's card");
+		check(onRender(() -> cardShows(1)).equals("Hazel"), "the current profile is pre-selected");
+		press(LOBBY_PAD, PadButton.DPAD_LEFT);
+		screenshot("lobby-changing");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1) == null && Party.current().profileOf(1).name().equals("Birch")),
+				"A switches the seat to Birch");
+		press(LOBBY_PAD, PadButton.Y);
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().profileOf(1).name().equals("Birch")),
+				"B backs out and keeps Birch");
+		check(onRender(() -> Party.current().seatView(1).status()).equals("Ready"), "the seat is ready again");
+	}
+
+	private void cardBackAndLeave() throws Exception {
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1).stage()) == SeatCard.Stage.SETUP, "A on New starts quick setup");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1).stage()) == SeatCard.Stage.CAROUSEL, "B steps back to the carousel");
+		press(LOBBY_PAD, PadButton.B);
+		waitFor("the seat given up", Duration.ofSeconds(30),
+				() -> satellites().isEmpty() && onRender(() -> Party.current().seatedCount()) == 0);
+		Files.deleteIfExists(satelliteLogFile());
+	}
+
+	private void cardSurvivesUnplug() throws Exception {
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		press(LOBBY_PAD, PadButton.A);
+		press(LOBBY_PAD, PadButton.DPAD_DOWN);
+		press(LOBBY_PAD, PadButton.A);
+		String typed = onRender(() -> card(1).keyboard().text());
+		check(typed.equals("a"), "moving then A types on the keyboard (typed: " + typed + ")");
+		PADS.unplug(LOBBY_PAD);
+		Thread.sleep(1000);
+		// The same model plugged back in under a new id resumes the seat.
+		PADS.plug(REPLUG_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(1000);
+		check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.SETUP
+				&& card(1).keyboard().text().equals("a")), "the card and the typed name are kept");
+		press(REPLUG_PAD, PadButton.X);
+		check(onRender(() -> card(1).keyboard().text()).isEmpty(), "the replugged controller drives the card");
+		press(REPLUG_PAD, PadButton.B);
+		press(REPLUG_PAD, PadButton.B);
+		waitFor("the seat given up", Duration.ofSeconds(30),
+				() -> satellites().isEmpty() && onRender(() -> Party.current().seatedCount()) == 0);
+		PADS.unplug(REPLUG_PAD);
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		Files.deleteIfExists(satelliteLogFile());
+	}
+
+	private static final int TWIN_A = 107, TWIN_B = 108;
+
+	/** Moves a seat's carousel to New. */
+	private void toNew(int seat, int pad) throws Exception {
+		for (int i = 0; i < 6 && !onRender(() -> cardShows(seat)).equals("New"); i++) {
+			press(pad, PadButton.DPAD_RIGHT);
+		}
+		check(onRender(() -> cardShows(seat)).equals("New"), "seat " + seat + " reached New");
+	}
+
+	private void twinsNeverClash() throws Exception {
+		PADS.plug(TWIN_A, "fake-twin", PadStyle.XBOX);
+		PADS.plug(TWIN_B, "fake-twin", PadStyle.XBOX);
+		Thread.sleep(300);
+		press(TWIN_A, PadButton.A);
+		waitFor("a card for twin A", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		press(TWIN_B, PadButton.A);
+		waitFor("a card for twin B", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+		String first = onRender(() -> cardShows(1));
+		check(onRender(() -> cardShows(2)).equals(first), "both cards open on the same profile (" + first + ")");
+		press(TWIN_A, PadButton.A);
+		check(onRender(() -> card(1) == null), "twin A takes " + first);
+		check(!onRender(() -> cardShows(2)).equals(first), "twin B's open card stops offering " + first + " at once");
+		// Two new profiles at the same time: different names, and both save.
+		toNew(2, TWIN_B);
+		press(TWIN_B, PadButton.A);
+		press(TWIN_A, PadButton.Y);
+		check(onRender(() -> card(1) != null && card(1).changing()), "twin A reopens their card");
+		toNew(1, TWIN_A);
+		press(TWIN_A, PadButton.A);
+		String nameA = onRender(() -> card(1).keyboard().text());
+		String nameB = onRender(() -> card(2).keyboard().text());
+		check(!nameA.equalsIgnoreCase(nameB), "two new players are offered different names (" + nameA + ", " + nameB + ")");
+		for (int i = 0; i < 3; i++) {
+			press(TWIN_A, PadButton.A);
+			press(TWIN_B, PadButton.A);
+		}
+		check(onRender(() -> card(1) == null && card(2) == null), "both new profiles are saved");
+		check(onRender(() -> Party.current().profileOf(1).name()).equals(nameA)
+				&& onRender(() -> Party.current().profileOf(2).name()).equals(nameB), "each seat has its own new profile");
+		press(TWIN_A, PadButton.B);
+		press(TWIN_B, PadButton.B);
+		waitFor("both twins gone", Duration.ofSeconds(30),
+				() -> satellites().isEmpty() && onRender(() -> Party.current().seatedCount()) == 0);
+		PADS.unplug(TWIN_A);
+		PADS.unplug(TWIN_B);
+		Thread.sleep(300);
+		Files.deleteIfExists(satelliteLogFile());
+		Files.deleteIfExists(minecraft.gameDirectory.toPath().resolve("hearthside/satellite-2/logs/latest.log"));
+	}
+
+	private void quickSetupAAA() throws Exception {
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		toNew(1, LOBBY_PAD);
+		press(LOBBY_PAD, PadButton.A);
+		String suggestion = onRender(() -> card(1).keyboard().text());
+		int colour = onRender(() -> card(1).setup().color());
+		screenshot("lobby-keyboard");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1).setup().step()) == QuickSetup.Step.SKIN, "A keeps the suggested name " + suggestion);
+		press(LOBBY_PAD, PadButton.A);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1) == null), "A on the colour finishes: the card closes");
+		GuestProfile saved = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"))
+				.load().getLast();
+		check(saved.name().equals(suggestion) && LOBBY_GUID.equals(saved.preferredControllerGuid())
+				&& saved.color() == colour, "the new profile is saved and remembered for this controller");
+		check(colour == PlayerColors.DEFAULTS[1], "the first free colour was pre-picked");
+		waitFor("the seat ready as " + suggestion, Duration.ofSeconds(120),
+				() -> onRender(() -> Party.current().seatView(1).status()).equals("Ready"));
 	}
 
 	private void orphanedTitleReturnsToLobby() throws Exception {
@@ -649,6 +940,13 @@ public final class E2eDriver {
 	}
 
 	private void lobbySeatsAndPrewarms() throws Exception {
+		// Known profiles for the card steps: Hazel last used the lobby pad.
+		ProfileStore store = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
+		HostProfile host = store.loadFile().host();
+		store.saveFile(new ProfileFile(List.of(
+				new GuestProfile(UUID.nameUUIDFromBytes("Birch".getBytes()), "Birch", SkinRef.defaultSkin("steve"), null),
+				new GuestProfile(UUID.nameUUIDFromBytes("Hazel".getBytes()), "Hazel", SkinRef.defaultSkin("alex"),
+						LOBBY_GUID)), host));
 		openLobby();
 		press(LOBBY_PAD, PadButton.A);
 		waitFor("a guest game warming up", Duration.ofSeconds(30), () -> !satellites().isEmpty());
@@ -658,13 +956,23 @@ public final class E2eDriver {
 	}
 
 	private void lobbyIntoWorld() throws Exception {
-		press(LOBBY_PAD, PadButton.A);
-		waitFor("the guest's game connected again", Duration.ofSeconds(120),
-				() -> !satellites().isEmpty() && satelliteLog().contains("hearthside satellite connected as player"));
+		// Seat 1 is ready as the profile quick setup made (L3). A second controller takes seat 2 and is still on its
+		// card when the world opens: it goes in with what its card shows (the first profile nobody holds).
+		String made = onRender(() -> Party.current().seatView(1).name());
+		PADS.plug(SECOND_LOBBY_PAD, "fake-lobby-pad-2", PadStyle.XBOX);
+		Thread.sleep(300);
+		check(onRender(() -> Party.current().joinStyle()) == PadStyle.XBOX,
+				"the Join hints show the free Xbox controller's buttons, not seat 1's PlayStation ones");
+		press(SECOND_LOBBY_PAD, PadButton.A);
+		waitFor("seat 2 choosing on its card", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+		screenshot("lobby-three-players");
+		String shown = onRender(() -> cardShows(2));
 		press(LOBBY_PAD, PadButton.START);
 		check(onRender(() -> minecraft.gui.screen() instanceof SelectWorldScreen), "Menu continues to world select");
 		openWorld();
-		waitFor("the lobby guest in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+		waitFor("both lobby guests in the world", Duration.ofSeconds(240), () -> playerCount() == 3);
+		check(guest(made) != null, made + " is in the world under that name (the game launched as Seat1)");
+		check(guest(shown) != null, "seat 2 went in as what its card showed (" + shown + ")");
 		// Back to the starting point for the rest of the run: the lobby guest leaves.
 		onRender(() -> {
 			Party party = Party.current();
@@ -672,6 +980,7 @@ public final class E2eDriver {
 			return null;
 		});
 		PADS.unplug(LOBBY_PAD);
+		PADS.unplug(SECOND_LOBBY_PAD);
 		waitFor("lobby guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
 	}
 

@@ -5,6 +5,7 @@ import dev.hearthside.core.channel.ControlConnection;
 import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
 import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.ControlSchemeJson;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.GamepadSource;
@@ -23,7 +24,10 @@ import dev.hearthside.core.process.SatelliteSupervisor;
 import dev.hearthside.core.profile.GuestNames;
 import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.PlayerColors;
+import dev.hearthside.core.profile.ProfileCarousel;
+import dev.hearthside.core.profile.ProfileFile;
 import dev.hearthside.core.profile.ProfileStore;
+import dev.hearthside.core.profile.QuickSetup;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.core.protocol.ControlCodec;
 import dev.hearthside.core.protocol.ControlMessage;
@@ -33,6 +37,7 @@ import dev.hearthside.core.session.SatelliteDirectories;
 import dev.hearthside.core.supervise.RestartPolicy;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
+import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.core.compositor.Transport;
@@ -99,12 +104,20 @@ public final class Party {
 	private Rect workArea;
 	/** Whether guests render hidden and this window composites them (decided on the render thread at session start). */
 	private volatile boolean composite;
+	/** Player 1's colour, from the host profile. */
+	private volatile int hostColor = PlayerColors.DEFAULTS[0];
+	private volatile boolean hostReduceMotion;
+	/** The controller model player 1 last took in the lobby; taken again automatically there. */
+	private volatile String hostControllerGuid;
+	/** "Use a controller" was pressed: the next A on a free controller becomes player 1's. */
+	private volatile boolean hostClaimArmed;
 	/** GPU sharing or copying, as this machine's probe decided at session start. */
 	private volatile Transport hostTransport = Transport.COPY;
 
 	private static final class Slot {
 		final int index;
-		final GuestProfile profile;
+		/** Null while the seat is still choosing on its lobby card. */
+		volatile GuestProfile profile;
 		volatile String secret;
 		volatile SatelliteSupervisor supervisor;
 		volatile ControlConnection connection;
@@ -112,6 +125,11 @@ public final class Party {
 		Slot(int index, GuestProfile profile) {
 			this.index = index;
 			this.profile = profile;
+		}
+
+		String displayName() {
+			GuestProfile p = profile;
+			return p != null ? p.name() : "Player " + (index + 1);
 		}
 	}
 
@@ -151,7 +169,12 @@ public final class Party {
 		}
 		ControlScheme hostScheme;
 		try {
-			hostScheme = profileStore().loadFile().hostControls();
+			ProfileFile file = profileStore().loadFile();
+			hostScheme = file.hostControls();
+			hostColor = file.host().color();
+			hostReduceMotion = file.host().settings().reduceMotion();
+			ButtonGuideRenderer.setReduceMotion(hostReduceMotion);
+			hostControllerGuid = file.host().preferredControllerGuid();
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not read the host's controls; using Bedrock defaults", e);
 			hostScheme = ControlScheme.BEDROCK;
@@ -181,20 +204,28 @@ public final class Party {
 		// The lobby is over: seats stay, and from now on new controllers join with A, A. (The flow is render-thread
 		// only; this runs on the server thread.)
 		minecraft.execute(flow::enterGame);
+		// Seats still choosing go in with what their card shows (an in-view picker is Plan 5c).
+		minecraft.execute(this::confirmWaitingCards);
 		minecraft.execute(this::afterGuestsChanged);
 		for (Slot slot : slots.values()) {
 			ControlConnection connection = slot.connection;
-			if (connection != null) {
+			// A seat with its card open (choosing, or changing profile) goes in once its card settles.
+			if (connection != null && !cards.containsKey(slot.index)) {
 				sendIn(link, slot, connection);
 			}
 		}
 	}
 
+	/** Sends a guest into the world once they have a profile (a seat still choosing waits). */
 	private void sendIn(WorldLink link, Slot slot, ControlConnection connection) {
+		GuestProfile profile = slot.profile;
+		if (profile == null) {
+			return;
+		}
 		try {
-			link.sendIn(slot.index, slot.profile, connection);
+			link.sendIn(slot.index, profile, connection);
 		} catch (IOException | IllegalArgumentException e) {
-			HearthsideMod.LOGGER.error("Could not send {} into the world", slot.profile.name(), e);
+			HearthsideMod.LOGGER.error("Could not send {} into the world", profile.name(), e);
 		}
 	}
 
@@ -282,7 +313,12 @@ public final class Party {
 		dev.hearthside.core.session.SeatState state = controller == null ? null : flow.seats().get(controller);
 		String status = state instanceof dev.hearthside.core.session.SeatState.Disconnected ? "Controller disconnected"
 				: slot.connection == null ? "Getting ready" : "Ready";
-		return new SeatView(slot.profile.name(), status, slot.profile.color(), true);
+		GuestProfile profile = slot.profile;
+		if (profile == null) {
+			return new SeatView(slot.displayName(), "Choosing…", PlayerColors.DEFAULTS[index % PlayerColors.DEFAULTS.length],
+					true);
+		}
+		return new SeatView(profile.name(), status, profile.color(), true);
 	}
 
 	public int seatedCount() {
@@ -299,7 +335,7 @@ public final class Party {
 		if (name.equalsIgnoreCase(minecraft.getUser().getName())) {
 			throw new IllegalArgumentException("A guest can't use the host's name (" + minecraft.getUser().getName() + ")");
 		}
-		if (slots.values().stream().anyMatch(s -> s.profile.name().equalsIgnoreCase(name))) {
+		if (slots.values().stream().anyMatch(s -> s.profile != null && s.profile.name().equalsIgnoreCase(name))) {
 			throw new IllegalArgumentException(name + " is already playing");
 		}
 		return startGuest(loadOrCreateProfile(name));
@@ -320,7 +356,8 @@ public final class Party {
 			try {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
 				return LaunchCommandBuilder.build(host,
-						new SatelliteLaunch(index, controlServer.port(), dir, profile.name(), slot.secret, presentation()));
+						// A placeholder: the seat's game takes its player's name when sent into the world.
+						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation()));
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
@@ -344,7 +381,7 @@ public final class Party {
 	/** Removes a guest and closes their satellite. Runs on the render thread. */
 	public void leave(String name) {
 		Slot slot = slots.values().stream()
-				.filter(s -> s.profile.name().equalsIgnoreCase(name))
+				.filter(s -> s.profile != null && s.profile.name().equalsIgnoreCase(name))
 				.findFirst()
 				.orElseThrow(() -> new IllegalArgumentException(name + " isn't playing"));
 		endSlot(slot);
@@ -399,6 +436,10 @@ public final class Party {
 	private final Map<String, Integer> instanceOf = new HashMap<>();
 	private final Map<String, String> guidOf = new HashMap<>();
 	private final Map<String, GuestProfile> chosen = new HashMap<>();
+	/** Controllers whose lobby card opens once their seat's game has started. */
+	private final java.util.Set<String> pendingCards = new java.util.HashSet<>();
+	/** Lobby cards of seats still choosing a profile, by player index. */
+	private final Map<Integer, SeatCard> cards = new ConcurrentHashMap<>();
 
 	private static String controllerId(int instanceId) {
 		return "pad-" + instanceId;
@@ -417,6 +458,349 @@ public final class Party {
 		String controller = controllerOfSlot.get(player);
 		if (controller != null) {
 			apply(flow.press(controller, Control.B));
+		}
+	}
+
+	// ---- Player 1 in the lobby ----
+
+	/** Player 1's reduce-motion setting (the lobby's embers and card flips). */
+	public boolean reduceMotion() {
+		return hostReduceMotion;
+	}
+
+	public boolean hostHasController() {
+		HostInput current = input;
+		return current != null && current.hasPadFor(0);
+	}
+
+	public boolean hostClaimArmed() {
+		return hostClaimArmed && !hostHasController();
+	}
+
+	/** Player 1's card: gives their controller back (it can then join as a guest) and forgets it. Render thread. */
+	public void releaseController() {
+		HostInput current = input;
+		if (current != null) {
+			current.releaseHost();
+		}
+		hostClaimArmed = false;
+		hostControllerGuid = null;
+		try {
+			ProfileStore store = profileStore();
+			ProfileFile file = store.loadFile();
+			store.saveFile(new ProfileFile(file.profiles(), file.host().withController(null)));
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not forget player 1's controller", e);
+		}
+	}
+
+	/** Player 1's card: the next A on a free controller makes it theirs. Render thread. */
+	public void useController() {
+		HostInput current = input;
+		if (current != null) {
+			current.armClaim();
+			hostClaimArmed = true;
+		}
+	}
+
+	/** Player 1 took a controller: remember its model so the lobby gives it back next time. Render thread. */
+	void onHostClaimed(String guid) {
+		hostClaimArmed = false;
+		if (guid == null || guid.equals(hostControllerGuid)) {
+			return;
+		}
+		hostControllerGuid = guid;
+		try {
+			ProfileStore store = profileStore();
+			ProfileFile file = store.loadFile();
+			store.saveFile(new ProfileFile(file.profiles(), file.host().withController(guid)));
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not remember player 1's controller", e);
+		}
+	}
+
+	String hostControllerGuid() {
+		return hostControllerGuid;
+	}
+
+	/**
+	 * The button style to draw for a player's controller; for -1, the first controller in the party (player 1's, then
+	 * seats in order). Xbox when there is none.
+	 */
+	public PadStyle padStyleOf(int player) {
+		HostInput current = input;
+		if (current == null) {
+			return PadStyle.XBOX;
+		}
+		if (player >= 0) {
+			return current.hasPadFor(player) ? current.styleFor(player) : PadStyle.XBOX;
+		}
+		for (int p = 0; p < 4; p++) {
+			if (current.hasPadFor(p)) {
+				return current.styleFor(p);
+			}
+		}
+		return PadStyle.XBOX;
+	}
+
+	/** Connected controllers nobody is using: one could take a seat now. */
+	public int freeControllers() {
+		HostInput current = input;
+		return current == null ? 0 : current.freePadCount();
+	}
+
+	/**
+	 * The buttons to show for joining: the free controllers' family (generic letters for a mix), as those are the
+	 * controllers that would press it. Xbox when none is free.
+	 */
+	public PadStyle joinStyle() {
+		HostInput current = input;
+		PadStyle style = current == null ? null : current.freePadStyle();
+		return style != null ? style : PadStyle.XBOX;
+	}
+
+	/**
+	 * The buttons to show for the shared screen (Back, Start, Profile): the controller that last drove it, as with the
+	 * pointer's colour; before anyone has, the first controller in the party.
+	 */
+	public PadStyle sharedStyle() {
+		HostInput current = input;
+		int driver = current == null ? -1 : current.lastSharedDriver();
+		return driver >= 0 && current.hasPadFor(driver) ? current.styleFor(driver) : padStyleOf(-1);
+	}
+
+	/** A guest's chosen profile, or null while they are choosing (or the seat is free). */
+	public GuestProfile profileOf(int index) {
+		Slot slot = slots.get(index);
+		return slot == null ? null : slot.profile;
+	}
+
+	// ---- Lobby cards: each seat picks or makes its profile (Spec A sections 3.1, 5.2) ----
+
+	/** The card of a seat still choosing its profile, or null. */
+	public SeatCard seatCard(int player) {
+		return cards.get(player);
+	}
+
+	boolean hasSeatCard(int player) {
+		return cards.containsKey(player);
+	}
+
+	/** That seat's controller drives its card. Render thread. */
+	void seatCardInput(int player, InputFrame frame, long nanos) {
+		SeatCard card = cards.get(player);
+		if (card == null) {
+			return;
+		}
+		switch (card.accept(frame, nanos)) {
+			case CONFIRMED -> confirmProfile(player, card.chosen());
+			case LEAVE -> onSeatedB(player);
+			case NONE -> { }
+		}
+	}
+
+	/** Y on a ready seat's card in the lobby: choose its profile again (B keeps the current one). Render thread. */
+	void changeProfile(int player) {
+		Slot slot = slots.get(player);
+		String controller = controllerOfSlot.get(player);
+		GuestProfile current = slot == null ? null : slot.profile;
+		if (current == null || controller == null || world != null || cards.containsKey(player)) {
+			return;
+		}
+		if (flow.changeProfile(controller)) {
+			cards.put(player, newCard(player, controller, current));
+		}
+	}
+
+	private SeatCard newCard(int index, String controller, GuestProfile keep) {
+		List<GuestProfile> profiles = List.of();
+		try {
+			profiles = profileStore().load();
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+		}
+		String guid = guidOf.get(controller);
+		// Checked live: another seat may confirm a profile, or start naming one, while this card is open.
+		return new SeatCard(index, new ProfileCarousel(profiles, id -> heldByAnotherSeat(index, id), guid),
+				() -> new QuickSetup(namesInUse(index), minecraft.getUser().getName(), takenColors(index), index), guid,
+				keep);
+	}
+
+	private boolean heldByAnotherSeat(int index, UUID profileId) {
+		for (Slot slot : slots.values()) {
+			GuestProfile profile = slot.profile;
+			if (slot.index != index && profile != null && profile.id().equals(profileId)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Names a new profile for this seat can't use: saved profiles, other seats' profiles, and other cards' names. */
+	private List<String> namesInUse(int index) {
+		List<String> names = new ArrayList<>();
+		try {
+			profileStore().load().forEach(p -> names.add(p.name()));
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+		}
+		slots.values().forEach(s -> {
+			if (s.index != index && s.profile != null) {
+				names.add(s.profile.name());
+			}
+		});
+		cards.forEach((seat, other) -> {
+			if (seat != index) {
+				if (other.keyboard() != null) {
+					names.add(other.keyboard().text());
+				}
+				if (other.setup() != null) {
+					names.add(other.setup().suggestedName());
+				}
+			}
+		});
+		return names;
+	}
+
+	/** Colours other players in the party are using. */
+	private List<Integer> takenColors(int except) {
+		List<Integer> taken = new ArrayList<>();
+		taken.add(colorOf(0));
+		slots.values().forEach(s -> {
+			if (s.index != except && s.profile != null) {
+				taken.add(s.profile.color());
+			}
+		});
+		return taken;
+	}
+
+	/** A player's colour (0xRRGGBB): player 1's from the host profile, a guest's from their profile. */
+	public int colorOf(int player) {
+		if (player == 0) {
+			return hostColor;
+		}
+		Slot slot = slots.get(player);
+		GuestProfile profile = slot == null ? null : slot.profile;
+		return displayColor(player,
+				profile != null ? profile.color() : PlayerColors.DEFAULTS[player % PlayerColors.DEFAULTS.length]);
+	}
+
+	/**
+	 * The colour a seat shows: the one it wants unless player 1 or a lower seat already shows it, then the first free
+	 * one, so every player in the party is told apart (Spec A section 4.1). The profile itself is not changed.
+	 */
+	public int displayColor(int seat, int wanted) {
+		List<Integer> taken = new ArrayList<>();
+		taken.add(hostColor);
+		for (int lower = 1; lower < seat; lower++) {
+			if (slots.containsKey(lower)) {
+				taken.add(colorOf(lower));
+			}
+		}
+		return taken.contains(wanted) ? PlayerColors.firstFree(taken) : wanted;
+	}
+
+	/**
+	 * A seat settles on its profile: remember it for this controller, then send the player in if a world is open.
+	 * Refused (false, and the card says why) when another seat already plays that profile or a new profile's name is
+	 * taken; the card stays open.
+	 */
+	boolean confirmProfile(int index, GuestProfile picked) {
+		Slot slot = slots.get(index);
+		if (slot == null || picked == null) {
+			return false;
+		}
+		String problem = problemWith(index, picked);
+		if (problem != null) {
+			SeatCard card = cards.get(index);
+			if (card != null) {
+				card.reject(problem);
+			}
+			return false;
+		}
+		String controller = controllerOfSlot.get(index);
+		String guid = controller == null ? null : guidOf.get(controller);
+		GuestProfile profile = guid != null ? picked.withController(guid) : picked;
+		if (!rememberProfile(profile)) {
+			SeatCard card = cards.get(index);
+			if (card != null) {
+				card.reject("Couldn't save " + profile.name());
+			}
+			return false;
+		}
+		slot.profile = profile;
+		cards.remove(index);
+		if (controller != null) {
+			apply(flow.profileChosen(controller, profile.id()));
+		}
+		ControlConnection connection = slot.connection;
+		if (connection != null) {
+			send(connection, new ControlMessage.SetControls(ControlSchemeJson.toJson(profile.controls())));
+			WorldLink link = world;
+			if (link != null) {
+				sendIn(link, slot, connection);
+			}
+		}
+		HearthsideMod.LOGGER.info("Hearthside seat {} is {}", index + 1, profile.name());
+		return true;
+	}
+
+	/** Why a seat can't take this profile now, or null. */
+	private String problemWith(int index, GuestProfile picked) {
+		if (heldByAnotherSeat(index, picked.id())) {
+			return picked.name() + " is playing";
+		}
+		if (picked.name().equalsIgnoreCase(minecraft.getUser().getName())) {
+			return picked.name() + " is taken";
+		}
+		boolean saved = false;
+		try {
+			for (GuestProfile p : profileStore().load()) {
+				if (p.id().equals(picked.id())) {
+					saved = true;
+				} else if (p.name().equalsIgnoreCase(picked.name())) {
+					return picked.name() + " is taken";
+				}
+			}
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+		}
+		for (Slot slot : slots.values()) {
+			GuestProfile profile = slot.profile;
+			if (slot.index != index && profile != null && !saved && profile.name().equalsIgnoreCase(picked.name())) {
+				return picked.name() + " is taken";
+			}
+		}
+		return null;
+	}
+
+	/** The world opened: seats still choosing go in with what their card shows. Render thread. */
+	private void confirmWaitingCards() {
+		for (Map.Entry<Integer, SeatCard> entry : List.copyOf(cards.entrySet())) {
+			try {
+				SeatCard card = entry.getValue();
+				// What the card shows; if another seat took that meanwhile, a fresh profile with its own name.
+				if (!confirmProfile(entry.getKey(), card.autoConfirm())) {
+					confirmProfile(entry.getKey(), card.autoConfirmFresh());
+				}
+			} catch (RuntimeException e) {
+				HearthsideMod.LOGGER.error("Could not settle seat {}'s profile", entry.getKey() + 1, e);
+			}
+		}
+	}
+
+	/** Saves a profile as the most recently used (profiles are stored least recent first). */
+	private boolean rememberProfile(GuestProfile profile) {
+		try {
+			ProfileStore store = profileStore();
+			List<GuestProfile> profiles = new ArrayList<>(store.load());
+			profiles.removeIf(p -> p.id().equals(profile.id()));
+			profiles.add(profile);
+			store.save(profiles);
+			return true;
+		} catch (IOException | IllegalArgumentException e) {
+			HearthsideMod.LOGGER.error("Could not save {}'s profile", profile.name(), e);
+			return false;
 		}
 	}
 
@@ -447,7 +831,8 @@ public final class Party {
 		WorldLink link = world;
 		controllerOfSlot.forEach((index, controller) -> {
 			Slot slot = slots.get(index);
-			if (link != null && slot != null && link.hasPlayer(slot.profile.name())) {
+			GuestProfile profile = slot == null ? null : slot.profile;
+			if (link != null && profile != null && link.hasPlayer(profile.name())) {
 				flow.loaded(controller);
 			}
 		});
@@ -461,11 +846,16 @@ public final class Party {
 						SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal("New controller"),
 						Component.literal("Press A again to join")));
 				case JoinFlow.Effect.OpenProfilePicker pick -> {
-					// The full picker is Plan 5b2; for now, the profile last used on this controller, or a new one.
-					GuestProfile profile = profileFor(guidOf.get(pick.controller()));
-					if (profile != null) {
-						chosen.put(pick.controller(), profile);
-						flow.profileChosen(pick.controller(), profile.id());
+					if (world == null) {
+						// In the lobby the player picks on their card, which opens once their seat's game starts.
+						pendingCards.add(pick.controller());
+					} else {
+						// In a world (drop-in), the profile last used on this controller (the in-view picker is 5c).
+						GuestProfile profile = profileFor(guidOf.get(pick.controller()));
+						if (profile != null) {
+							chosen.put(pick.controller(), profile);
+							flow.profileChosen(pick.controller(), profile.id());
+						}
 					}
 				}
 				case JoinFlow.Effect.StartGuestGame start -> startForController(start.controller());
@@ -489,14 +879,18 @@ public final class Party {
 
 	private void startForController(String controller) {
 		GuestProfile profile = chosen.remove(controller);
+		boolean card = pendingCards.remove(controller);
 		Integer instanceId = instanceOf.get(controller);
-		if (profile == null || instanceId == null) {
+		if ((profile == null && !card) || instanceId == null) {
 			apply(flow.leave(controller));
 			return;
 		}
 		try {
 			int index = startGuest(profile);
 			controllerOfSlot.put(index, controller);
+			if (card) {
+				cards.put(index, newCard(index, controller, null));
+			}
 			HostInput currentInput = input;
 			if (currentInput != null) {
 				currentInput.assignPad(instanceId, index);
@@ -519,8 +913,13 @@ public final class Party {
 			ProfileStore store = profileStore();
 			List<GuestProfile> profiles = new ArrayList<>(store.load());
 			java.util.Set<String> playing = new java.util.HashSet<>();
-			slots.values().forEach(s -> playing.add(s.profile.name().toLowerCase(Locale.ROOT)));
-			for (GuestProfile p : profiles) {
+			slots.values().forEach(s -> {
+				if (s.profile != null) {
+					playing.add(s.profile.name().toLowerCase(Locale.ROOT));
+				}
+			});
+			// The most recently used match: profiles are stored least recent first.
+			for (GuestProfile p : profiles.reversed()) {
 				if (guid != null && guid.equals(p.preferredControllerGuid()) && !playing.contains(p.name().toLowerCase(Locale.ROOT))) {
 					return p;
 				}
@@ -550,6 +949,7 @@ public final class Party {
 
 	private void removeSlot(Slot slot) {
 		slots.remove(slot.index, slot);
+		cards.remove(slot.index);
 		String controller = controllerOfSlot.remove(slot.index);
 		if (controller != null) {
 			minecraft.execute(() -> flow.leave(controller));
@@ -602,7 +1002,9 @@ public final class Party {
 							slot.connection = null;
 						}
 					});
-					send(connection, new ControlMessage.SetControls(ControlSchemeJson.toJson(slot.profile.controls())));
+					GuestProfile profile = slot.profile;
+					send(connection, new ControlMessage.SetControls(ControlSchemeJson.toJson(
+							profile != null ? profile.controls() : ControlScheme.BEDROCK)));
 					HostInput currentInput = input;
 					send(connection, new ControlMessage.SetPadStyle(
 							currentInput == null ? PadStyle.GENERIC : currentInput.styleFor(slot.index)));
@@ -739,27 +1141,27 @@ public final class Party {
 
 		@Override
 		public void started(RunningProcess process) {
-			HearthsideMod.LOGGER.info("Started satellite for {} (player {}, pid {})", slot.profile.name(), slot.index + 1, process.pid());
+			HearthsideMod.LOGGER.info("Started satellite for {} (player {}, pid {})", slot.displayName(), slot.index + 1, process.pid());
 		}
 
 		@Override
 		public void restarting(int consecutiveFailures, Duration delay) {
-			HearthsideMod.LOGGER.warn("Satellite for {} stopped; restarting in {}s", slot.profile.name(), delay.toSeconds());
-			chat(Component.literal(slot.profile.name() + "'s game stopped; restarting in " + delay.toSeconds() + "s")
+			HearthsideMod.LOGGER.warn("Satellite for {} stopped; restarting in {}s", slot.displayName(), delay.toSeconds());
+			chat(Component.literal(slot.displayName() + "'s game stopped; restarting in " + delay.toSeconds() + "s")
 					.withStyle(ChatFormatting.YELLOW));
 		}
 
 		@Override
 		public void gaveUp(int exitCode) {
-			HearthsideMod.LOGGER.error("Satellite for {} keeps crashing (exit {}); giving up", slot.profile.name(), exitCode);
-			chat(Component.literal(slot.profile.name() + "'s game keeps crashing. See hearthside/satellite-" + slot.index
+			HearthsideMod.LOGGER.error("Satellite for {} keeps crashing (exit {}); giving up", slot.displayName(), exitCode);
+			chat(Component.literal(slot.displayName() + "'s game keeps crashing. See hearthside/satellite-" + slot.index
 					+ "/logs for details.").withStyle(ChatFormatting.RED));
 		}
 
 		@Override
 		public void ended() {
-			HearthsideMod.LOGGER.info("{} closed their game window", slot.profile.name());
-			chat(Component.literal(slot.profile.name() + " left."));
+			HearthsideMod.LOGGER.info("{} closed their game window", slot.displayName());
+			chat(Component.literal(slot.displayName() + " left."));
 			removeSlot(slot);
 		}
 
