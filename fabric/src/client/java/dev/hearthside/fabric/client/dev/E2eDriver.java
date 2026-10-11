@@ -22,10 +22,13 @@ import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
+import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
+import dev.hearthside.fabric.client.ui.HearthTextField;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.NewWorldScreen;
 import dev.hearthside.fabric.client.host.SeatCard;
 import dev.hearthside.fabric.client.host.WorldsScreen;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
@@ -118,6 +121,7 @@ public final class E2eDriver {
 				step("T1 a controller moves focus on the title screen and A on Co-op opens the lobby", this::titleControllerOpensLobby);
 				step("T2 the controller that opened Co-op is player 1's, not seated, and remembered", this::titleControllerIsPlayerOne);
 				step("L5 player 1's card claims a controller; it drives the host and is not seated", this::hostCardClaims);
+				step("W3 a controller creates a Creative world named on the keyboard; it loads; it is cleaned up", this::createWorldWithController);
 				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
@@ -777,6 +781,84 @@ public final class E2eDriver {
 		waitFor("player 1 has the controller", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
 		check(onRender(() -> Party.current().seatedCount()) == 0, "the controller did not take a guest seat");
 		check(HOST_GUID.equals(profiles().loadFile().host().preferredControllerGuid()), "player 1's controller is remembered");
+	}
+
+	/** The screen draws its own hint chips, so the generic controller hints stay off it (no doubled chips). */
+	private void checkOwnHintsOnly(String where) throws Exception {
+		Screen screen = onRender(() -> minecraft.gui.screen());
+		ButtonGuideRenderer.drewOn = null;
+		Thread.sleep(300);
+		check(ButtonGuideRenderer.drewOn != screen, "only " + where + "'s own hint chips are drawn");
+	}
+
+	/** Presses a direction until the condition holds (at most {@code tries} times). */
+	private void pressUntil(int pad, PadButton button, int tries, Callable<Boolean> done) throws Exception {
+		for (int i = 0; i < tries && !onRender(done); i++) {
+			press(pad, button);
+		}
+	}
+
+	private void createWorldWithController() throws Exception {
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && Party.current().hostHasController()),
+				"in the lobby with player 1's controller");
+		checkOwnHintsOnly("the lobby");
+		press(HOST_PAD, PadButton.START);
+		waitFor("the world picker", Duration.ofSeconds(15),
+				() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+		check(onRender(() -> minecraft.gui.screen() instanceof WorldsScreen w
+				&& w.cardLevelIds().getFirst().equals(w.focusedLevelId())), "a controller arrives focused on the first card");
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 12,
+				() -> minecraft.gui.screen() instanceof WorldsScreen w && "".equals(w.focusedLevelId()));
+		press(HOST_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof NewWorldScreen), "Create opens the new-world screen");
+		NewWorldScreen screen = onRender(() -> (NewWorldScreen) minecraft.gui.screen());
+		String suggested = onRender(screen::worldName);
+		check(suggested.startsWith("Co-op World"), "a name is ready (" + suggested + ")");
+		check(onRender(screen::focusedRow).equals("create"), "focus starts on Create");
+		checkOwnHintsOnly("the new-world screen");
+		HearthTextField.drewParchment = false;
+		Thread.sleep(300);
+		check(HearthTextField.drewParchment, "the name is on parchment, not vanilla's black box");
+		screenshot("new-world");
+		// The name on the on-screen keyboard: X deletes a letter, Menu keeps it.
+		pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> screen.focusedRow().equals("name"));
+		press(HOST_PAD, PadButton.A);
+		check(onRender(screen::typing), "A on the name opens the keyboard");
+		press(HOST_PAD, PadButton.X);
+		press(HOST_PAD, PadButton.START);
+		String name = onRender(screen::worldName);
+		check(!onRender(screen::typing) && name.equals(suggested.substring(0, suggested.length() - 1)),
+				"the keyboard changed the name (" + name + ")");
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 4, () -> screen.focusedRow().equals("mode"));
+		press(HOST_PAD, PadButton.DPAD_RIGHT);
+		check(onRender(screen::mode) == NewWorldScreen.Mode.CREATIVE, "right on Mode picks Creative");
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 6, () -> screen.focusedRow().equals("create"));
+		press(HOST_PAD, PadButton.A);
+		waitFor("the new world", Duration.ofSeconds(180), () -> onRender(() -> minecraft.level != null
+				&& minecraft.getSingleplayerServer() != null && minecraft.player != null));
+		String levelId = onRender(() -> minecraft.getSingleplayerServer()
+				.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).toAbsolutePath().normalize()
+				.getFileName().toString());
+		check(onRender(() -> minecraft.getSingleplayerServer().getWorldData().getLevelName()).equals(name),
+				"the world has the name typed");
+		check(onRender(() -> minecraft.player.isCreative()), "and is Creative");
+		// Clean up: leave, delete it, and go back to the lobby for the next step.
+		onRender(() -> {
+			minecraft.disconnectFromWorld(Component.literal("E2E"));
+			return null;
+		});
+		waitFor("back on a menu", Duration.ofSeconds(60),
+				() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+		onRender(() -> {
+			try (var access = minecraft.getLevelSource().createAccess(levelId)) {
+				access.deleteLevel();
+			}
+			return null;
+		});
+		check(!onRender(() -> minecraft.getLevelSource().levelExists(levelId)), "the test world is deleted");
+		openLobby();
+		waitFor("player 1's controller again", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
 	}
 
 	private void hostControllerRemembered() throws Exception {

@@ -17,6 +17,7 @@
 		"SatelliteInputMixin",
 		"SatelliteSwapMixin",
 		"SatelliteWindowMixin",
+		"TextFieldStyleMixin",
 		"TitleButtonStyleMixin",
 		"TitleScreenStyleMixin",
 		"UnpublishMixin",

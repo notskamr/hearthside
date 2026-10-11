@@ -190,12 +190,18 @@ final class HostInput implements Runnable {
 			int buttons = frame.buttons();
 			int pressed = buttons & ~sharedButtons.getOrDefault(player, 0);
 			sharedButtons.put(player, buttons);
-			if (player == 0 || lobby == null) {
+			if (lobby == null) {
 				continue;
 			}
 			if ((pressed & start) != 0) {
+				// Menu on anyone's controller, player 1's included, goes on to choose a world.
 				lobby.continueToWorlds();
-			} else if ((pressed & b) != 0) {
+				continue;
+			}
+			if (player == 0) {
+				continue;
+			}
+			if ((pressed & b) != 0) {
 				session.onSeatedB(player);
 			} else if ((pressed & InputFrame.buttons(PadButton.Y)) != 0) {
 				// Y on a ready card: pick another profile (Spec A section 5.5).
@@ -203,6 +209,10 @@ final class HostInput implements Runnable {
 			}
 		}
 		sharedButtons.keySet().retainAll(frames.keySet());
+		if (minecraft.gui.screen() != screen) {
+			// A press above changed the screen (Menu → world select): this frame was meant for the old one.
+			return;
+		}
 		if (screen instanceof PadScreen padScreen) {
 			// Hearthside's own screens take every player's controller directly (focus moves, no pointer).
 			if (sharedDriving) {

@@ -75,9 +75,6 @@ public final class WorldsScreen extends Screen implements PadScreen {
 		}
 		// Create comes last (first, and focused, when there are no worlds yet).
 		cards.add(addRenderableWidget(new WorldCard(x, w, null, b -> create())));
-		if (!loading) {
-			setInitialFocus(cards.getFirst());
-		}
 		HintChip[] chips = {
 				new HintChip(0, 0, Control.A, party::sharedStyle, Component.literal("Open"), b -> pressFocused()),
 				new HintChip(0, 0, Control.X, party::sharedStyle, Component.literal("More…"), b -> more()),
@@ -89,6 +86,17 @@ public final class WorldsScreen extends Screen implements PadScreen {
 			chips[i].setPosition(cx, height - BOTTOM + 10);
 			cx -= 4;
 			addRenderableWidget(chips[i]);
+		}
+	}
+
+	/**
+	 * The first card. (Vanilla's own initial focus runs after {@link #init()} and, after keyboard or controller input,
+	 * tabs to the first widget after whatever is focused, which would skip the card.)
+	 */
+	@Override
+	protected void setInitialFocus() {
+		if (!loading && !cards.isEmpty()) {
+			setInitialFocus(cards.getFirst());
 		}
 	}
 
@@ -118,8 +126,8 @@ public final class WorldsScreen extends Screen implements PadScreen {
 	}
 
 	private void create() {
-		net.minecraft.client.gui.screens.worldselection.CreateWorldScreen.openFresh(minecraft,
-				() -> minecraft.gui.setScreen(this));
+		List<String> names = worlds == null ? List.of() : worlds.stream().map(LevelSummary::getLevelName).toList();
+		minecraft.gui.setScreen(new NewWorldScreen(this, party, names));
 	}
 
 	private void more() {
@@ -163,6 +171,11 @@ public final class WorldsScreen extends Screen implements PadScreen {
 	public String playedWithText(String levelId) {
 		return cards.stream().filter(c -> c.summary != null && c.summary.getLevelId().equals(levelId)).findFirst()
 				.map(c -> c.playedWith).orElse(null);
+	}
+
+	/** The cards' worlds top to bottom ("" for Create). For the E2E. */
+	public List<String> cardLevelIds() {
+		return cards.stream().map(c -> c.summary == null ? "" : c.summary.getLevelId()).toList();
 	}
 
 	public boolean loaded() {
