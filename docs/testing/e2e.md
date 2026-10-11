@@ -46,6 +46,28 @@ step below marked "FAILED before" was watched failing on the code before its fix
 | B3 | The "press A again" prompt expires after 5 s | PASS |
 | P1 | A, A on a new controller adds `Player2` (see below) | PASS (16 s, incl. satellite start) |
 
+## Look and profiles (scripted) — 2026-10-11, same machine
+
+Plan 5b2: the Hearthside look and profiles on lobby cards. The full run is 54/54 (it includes the party and controller
+steps). The lobby's E2E pad has its own model GUID so lobby profiles never match the in-world steps' pads.
+
+| # | Check | Result |
+|---|---|---|
+| H1 | Every Hearthside sprite and every glyph (4 controller families × 17 controls) is in the GUI atlas | PASS — FAILED before the art (76 missing) |
+| H2 | A guest's button hints draw glyph sprites of its controller family (PlayStation), none of another | PASS — FAILED before |
+| L5 | "+ Controller" on player 1's card, then A on a controller: it drives player 1 and takes no seat; it is remembered | PASS |
+| L6 | Next time the lobby opens, that controller is player 1's again by itself | PASS |
+| L1 | A seated controller's card pre-selects the profile last used on it (Hazel) | PASS — failed first: the A that took the seat also confirmed (fixed) |
+| L2 | Y and the D-pad cycle the carousel (wrapping through New); A confirms; the controller is lit in the player's colour | PASS |
+| L9 | Y on a ready card reopens it with the current profile; A switches to another; B backs out keeping it | PASS |
+| L4 | A on New starts quick setup; B steps back to the carousel; B again gives up the seat | PASS |
+| L8 | Unplug mid-keyboard, plug the same model back under a new id: the card and typed name are kept, and it drives the card | PASS |
+| L3 | A, A, A: the suggested name, a skin, the first free colour; the profile is saved for this controller | PASS (9 s) |
+| B5 | Menu on a ready controller opens world select; a second seat still choosing goes in as what its card shows; both guests are in the world under their names (games launched as `Seat1`/`Seat2`) | PASS (17 s) |
+
+Screenshots of the lobby are saved to `fabric/run-e2e/screenshots/` (`lobby-empty`, `lobby-choosing`, `lobby-changing`,
+`lobby-keyboard`, `lobby-three-players`).
+
 ## Controllers (scripted) — 2026-10-11, same machine
 
 Run between steps 5 and 6 with a fake PlayStation-style pad; guest movement is measured on the host's server, on a
