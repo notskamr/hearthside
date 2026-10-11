@@ -7,7 +7,8 @@ controllers). Run it with:
 ./gradlew :fabric:runE2eClient
 ```
 
-The driver creates or opens the world `hearthside-e2e` in `fabric/run-e2e/saves`, runs steps 1–6, and writes
+With fake pads the driver first runs the party steps (B7, B6, B4, B5) from the title screen. It then creates or opens
+the world `hearthside-e2e` in `fabric/run-e2e/saves`, runs steps 1–6, and writes
 `fabric/run-e2e/hearthside-e2e-report.txt`. It then rejoins a guest and prints
 `READY_FOR_HOST_KILL host=<pid> satellite=<pid>`. Step 7 is done from outside the game: force-kill the host pid and
 confirm the satellite pid exits.
@@ -27,6 +28,20 @@ Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 | 6 | Closing the world closes satellites | PASS (gone 475 ms after close) |
 | 7 | Force-killing the host → satellite exits by itself; no Hearthside java processes left | PASS (0.9 s) |
 
+## Party (scripted) — 2026-10-11, same machine
+
+Plan 5b1: the party exists before a world. Run with a fake PlayStation-style pad; 41/41 steps pass in the full run.
+
+| # | Check | Result |
+|---|---|---|
+| B7 | The title screen has "Co-op (1 controller)" under Singleplayer; it opens the lobby; Back returns with no party | PASS — FAILED before the button |
+| B6 | In the lobby, A seats a controller and starts its game; Back stops every guest's game and ends the party | PASS |
+| B4 | A in the lobby starts the guest's game before any world, and it connects to the party | PASS |
+| B5 | Continuing into a world brings the seated guest in (2 players) | PASS (13 s) |
+| B2 | In a world, one A on a new controller does not join | PASS |
+| B3 | The "press A again" prompt expires after 5 s | PASS |
+| P1 | A, A on a new controller adds `Player2` (see below) | PASS (16 s, incl. satellite start) |
+
 ## Controllers (scripted) — 2026-10-11, same machine
 
 Run between steps 5 and 6 with a fake PlayStation-style pad; guest movement is measured on the host's server, on a
@@ -35,7 +50,7 @@ barrier platform at y = 249 so terrain never blocks it.
 | # | Check | Result |
 |---|---|---|
 | P0 | `Player2` profile rebinds JUMP to Y | PASS |
-| P1 | START on a new controller adds `Player2` | PASS (11 s, incl. satellite start) |
+| P1 | A, A on a new controller adds `Player2` (START no longer joins, Plan 5b1) | PASS (16 s, incl. satellite start) |
 | P2 | Left stick forward 2 s moves the guest | PASS (7.73 blocks) |
 | P3 | Right stick 0.4 s turns the guest | PASS (112.5°, ≈ 280°/s) |
 | P4 | RB advances the guest's hotbar slot | PASS |
@@ -109,8 +124,10 @@ Found while building this:
 
 Use two physical controllers, ideally two identical ones, and one of a different family if available.
 
-1. Open a world. Press START on a controller: a second window opens and that controller plays it.
-2. Press START on a second controller: a third window; each controller moves only its own player.
+1. Title screen → Co-op (it shows how many controllers are connected). Press A on a controller: it takes a seat and
+   its player's game starts. Continue (or Menu on that controller), pick a world: that player is in it with you.
+2. In the world, press A twice on a second controller: a third player joins; each controller moves only its own
+   player.
 3. In the world: does the Bedrock layout feel right? (A jump, B sneak, Y inventory, X inventory with recipe book,
    RT/LT attack/use, LB/RB hotbar, D-pad down drop, D-pad up camera, left-stick click sprint.)
 4. Open an inventory (Y): the cursor snaps to slots and the D-pad hops between them. **Confirm the Bedrock roles:
