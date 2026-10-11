@@ -33,6 +33,12 @@ public final class JoinToast implements OverlayLayer {
 	private long leavingSince;
 	private boolean reduceMotion;
 
+	/** Over every view and everything on them (cards, name tags, borders, the party panel). */
+	@Override
+	public int order() {
+		return 100;
+	}
+
 	/** A new controller pressed A once: show the prompt for {@code window}, in that controller's family. */
 	public void show(String controller, PadStyle style, long now, Duration window, boolean reduce) {
 		expire(now);

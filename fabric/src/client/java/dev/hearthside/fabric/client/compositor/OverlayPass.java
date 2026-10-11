@@ -36,7 +36,10 @@ public final class OverlayPass {
 	private OverlayPass() {}
 
 	public static void register(OverlayLayer layer) {
-		LAYERS.add(layer);
+		if (!LAYERS.contains(layer)) {
+			LAYERS.add(layer);
+			LAYERS.sort(java.util.Comparator.comparingInt(OverlayLayer::order));
+		}
 	}
 
 	public static void unregister(OverlayLayer layer) {
@@ -96,7 +99,12 @@ public final class OverlayPass {
 			var graphics = new GuiGraphicsExtractor(minecraft, gameRenderer.gameRenderState().guiRenderState, -1, -1);
 			var context = new OverlayContext(Math.ceilDiv(width, scale), Math.ceilDiv(height, scale), scale,
 					inGuiUnits(compositor.overlayViews(), scale), System.nanoTime(), reduceMotion);
+			boolean first = true;
 			for (OverlayLayer layer : LAYERS) {
+				if (!first) {
+					graphics.nextStratum(); // above all of the layer before, its text too
+				}
+				first = false;
 				layer.extract(graphics, context);
 			}
 			GuiRenderer renderer = ((GameRendererAccessor) gameRenderer).hearthside$guiRenderer();

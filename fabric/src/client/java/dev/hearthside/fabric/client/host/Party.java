@@ -1591,7 +1591,6 @@ public final class Party {
 			}
 			Compositor.activate(minecraft, this::afterGuestsChanged,
 					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), views, size.width(), size.height());
-			OverlayPass.unregister(viewOverlay);
 			OverlayPass.register(viewOverlay);
 			for (Slot guest : guests) {
 				ControlConnection connection = guest.connection;
