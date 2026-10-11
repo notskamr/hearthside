@@ -41,6 +41,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.sdl.SDLVideo;
 import net.minecraft.util.HttpUtil;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
@@ -86,10 +87,15 @@ public final class E2eDriver {
 			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
+			step("C1 guest window is hidden", this::guestWindowHidden);
+			step("C2 guest frames reach the host's window", this::guestFramesComposited);
+			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
+			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
+			step("C5 copy transport works", this::copyTransportWorks);
 			step("3 crashed satellite is restarted", this::crashedSatelliteRestarts);
 			step("4 guest named like the host is refused", this::hostNameRefused);
 			step("4b opening and closing LAN keeps the guest", this::lanToggleKeepsGuest);
-			step("5 leave closes the satellite and restores the host window", this::leaveClosesSatellite);
+			step("5 leave closes the satellite and leaves the host window as it was", this::leaveClosesSatellite);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				step("P1 START on a new controller adds Player2", this::startJoins);
@@ -131,11 +137,80 @@ public final class E2eDriver {
 			return null;
 		});
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
-		// The host window should now fill the left half of the primary display's usable area.
-		Rect expected = new ConsoleLayout(TwoPlayerSplit.VERTICAL).layout(2, onRender(WindowPlacer::primaryWorkArea)).get(0);
-		Rect actual = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
-		log("   host window " + actual + ", expected " + expected);
-		check(actual.equals(expected), "host window tiled into the left half");
+	}
+
+	// ---- Compositor steps ----
+
+	private static final String PATTERN = "rgb=ff00ff";
+
+	private void guestWindowHidden() throws Exception {
+		waitFor("satellite window flags line", Duration.ofSeconds(30),
+				() -> satelliteLog().contains("hearthside window flags hidden=true"));
+	}
+
+	/** The guest paints its frame's top-left corner magenta in E2E; the host logs what it composited there. */
+	private void guestFramesComposited() throws Exception {
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+	}
+
+	private void hostWindowUntouched() throws Exception {
+		Rect now = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
+		log("   host window " + now + ", before split-screen " + hostWindowBefore);
+		check(now.equals(hostWindowBefore), "host window unchanged by split-screen");
+	}
+
+	private void resizeRelaysOut() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), 1280, 720));
+		try {
+			int halfWidth = onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) / 2;
+			waitFor("guest re-sized to half the new window", Duration.ofSeconds(10),
+					() -> satelliteLog().contains("hearthside virtual size " + halfWidth + "x"));
+			waitForProbe(2, mark, Duration.ofSeconds(10));
+		} finally {
+			onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), hostWindowBefore.width(), hostWindowBefore.height()));
+		}
+	}
+
+	private void copyTransportWorks() throws Exception {
+		System.setProperty("hearthside.forceCopy", "true");
+		try {
+			onRender(() -> {
+				HostSession.current().leave(GUEST);
+				return null;
+			});
+			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			long mark = hostLogLength();
+			onRender(() -> {
+				HostSession.current().join(GUEST);
+				return null;
+			});
+			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, mark, Duration.ofSeconds(30));
+		} finally {
+			System.clearProperty("hearthside.forceCopy");
+		}
+	}
+
+	private void waitForProbe(int player, long fromOffset, Duration timeout) throws Exception {
+		String needle = "hearthside compositor probe player=" + player + " " + PATTERN;
+		waitFor("player " + player + "'s pattern in the host window", timeout, () -> hostLogSince(fromOffset).contains(needle));
+	}
+
+	private Path hostLogFile() {
+		return minecraft.gameDirectory.toPath().resolve("logs/latest.log");
+	}
+
+	private long hostLogLength() throws IOException {
+		return Files.size(hostLogFile());
+	}
+
+	private String hostLogSince(long offset) throws IOException {
+		byte[] all = Files.readAllBytes(hostLogFile());
+		int from = (int) Math.min(offset, all.length);
+		return new String(all, from, all.length - from, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
 	}
 
 	private void lanToggleKeepsGuest() throws Exception {

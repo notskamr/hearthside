@@ -39,6 +39,8 @@ loom {
 			environmentVariable 'SDL_WINDOW_ACTIVATE_WHEN_SHOWN', '0'
 			// Guests (which inherit this environment) report no focus, so every run tests the unfocused path.
 			environmentVariable 'HEARTHSIDE_E2E_GUEST_UNFOCUSED', '1'
+			// Guests paint a magenta corner into their exported frames; the host logs what it composited there.
+			environmentVariable 'HEARTHSIDE_E2E_PATTERN', '1'
 			runDir 'run-e2e'
 		}
 
