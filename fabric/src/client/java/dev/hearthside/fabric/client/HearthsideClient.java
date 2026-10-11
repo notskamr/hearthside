@@ -4,6 +4,7 @@ import dev.hearthside.core.Role;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.host.HostCommands;
 import dev.hearthside.fabric.client.host.HostSession;
+import dev.hearthside.fabric.client.satellite.SatelliteBoot;
 import net.fabricmc.api.ClientModInitializer;
 
 public final class HearthsideClient implements ClientModInitializer {
@@ -21,6 +22,8 @@ public final class HearthsideClient implements ClientModInitializer {
 		if (role == Role.HOST) {
 			HostSession.register();
 			HostCommands.register();
+		} else {
+			SatelliteBoot.register();
 		}
 	}
 }
