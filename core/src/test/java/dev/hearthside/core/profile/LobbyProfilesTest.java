@@ -27,16 +27,17 @@ class LobbyProfilesTest {
 
 	@Test
 	void carouselPreselectsTheControllersLastProfile() {
+		// Stored least recently used first: the last profile used on this controller model is Kit.
 		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.of(), "pad-model-2");
-		assertThat(carousel.current()).isEqualTo(new Entry.Profile(jo));
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(kit));
 	}
 
 	@Test
 	void carouselSkipsProfilesHeldByOtherSeats() {
-		// Two identical controllers share a model GUID: the second seat gets the next profile that used it.
-		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.of(jo.id()), "pad-model-2");
-		assertThat(carousel.current()).isEqualTo(new Entry.Profile(kit));
-		assertThat(carousel.entries()).doesNotContain(new Entry.Profile(jo));
+		// Two identical controllers share a model GUID: the second seat gets the other profile that used it.
+		var carousel = new ProfileCarousel(List.of(sam, jo, kit), Set.of(kit.id()), "pad-model-2");
+		assertThat(carousel.current()).isEqualTo(new Entry.Profile(jo));
+		assertThat(carousel.entries()).doesNotContain(new Entry.Profile(kit));
 	}
 
 	@Test

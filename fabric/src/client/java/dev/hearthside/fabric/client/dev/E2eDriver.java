@@ -10,7 +10,12 @@ import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
 import dev.hearthside.core.profile.GuestProfile;
+import dev.hearthside.core.profile.HostProfile;
+import dev.hearthside.core.profile.PlayerColors;
+import dev.hearthside.core.profile.ProfileCarousel;
+import dev.hearthside.core.profile.ProfileFile;
 import dev.hearthside.core.profile.ProfileStore;
+import dev.hearthside.core.profile.QuickSetup;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -19,6 +24,7 @@ import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.SeatCard;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
@@ -106,10 +112,15 @@ public final class E2eDriver {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
+				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
+				step("L2 Y and the D-pad cycle profiles on the card; A confirms", this::cardCyclesAndConfirms);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
 				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
-				step("B5 Menu on a seated controller continues; the world brings the guest in", this::lobbyIntoWorld);
+				step("L4 B steps back out of quick setup, then leaves the seat from the carousel", this::cardBackAndLeave);
+				step("L8 unplugging mid-keyboard keeps the card; replugging resumes it", this::cardSurvivesUnplug);
+				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
+				step("B5 Menu on a seated controller continues; the world brings the guests in by name", this::lobbyIntoWorld);
 			}
 			if (onRender(() -> minecraft.level == null)) {
 				openWorld();
@@ -551,6 +562,8 @@ public final class E2eDriver {
 	// ---- Lobby steps (before any world) ----
 
 	private static final int LOBBY_PAD = 103;
+	/** The lobby pad's own model GUID, so lobby profiles never match the in-world steps' pads. */
+	private static final String LOBBY_GUID = "fake-lobby-pad";
 
 	/** Opens the lobby the way a player does: Co-op on the title screen. */
 	private LobbyScreen openLobby() throws Exception {
@@ -595,7 +608,7 @@ public final class E2eDriver {
 	}
 
 	private void titleCoopOpensLobby() throws Exception {
-		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
 		onRender(() -> {
 			minecraft.gui.setScreen(new TitleScreen());
 			return null;
@@ -626,7 +639,7 @@ public final class E2eDriver {
 	}
 
 	private void lobbyCancelStopsGuests() throws Exception {
-		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
 		Thread.sleep(300);
 		LobbyScreen lobby = openLobby();
 		press(LOBBY_PAD, PadButton.A);
@@ -660,6 +673,107 @@ public final class E2eDriver {
 				"the guest's game, idle on its title screen, got no controller input");
 	}
 
+	private static final int SECOND_LOBBY_PAD = 104;
+	private static final int REPLUG_PAD = 105;
+
+	private SeatCard card(int seat) {
+		Party party = Party.current();
+		return party == null ? null : party.seatCard(seat);
+	}
+
+	/** The name on a card's carousel, or "New". Render thread. */
+	private String cardShows(int seat) {
+		return card(seat).carousel().current() instanceof ProfileCarousel.Entry.Profile(GuestProfile p) ? p.name() : "New";
+	}
+
+	private Path satelliteLogFile() {
+		return minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/logs/latest.log");
+	}
+
+	private void cardPreselects() throws Exception {
+		check(onRender(() -> card(1) != null), "seat 1 is choosing on its card");
+		check(onRender(() -> cardShows(1)).equals("Hazel"), "Hazel, last used on this controller, is pre-selected");
+	}
+
+	private void cardCyclesAndConfirms() throws Exception {
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> cardShows(1)).equals("New"), "Y moves on to New");
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		check(onRender(() -> cardShows(1)).equals("Birch"), "right wraps round to Birch");
+		press(LOBBY_PAD, PadButton.DPAD_LEFT);
+		press(LOBBY_PAD, PadButton.DPAD_LEFT);
+		check(onRender(() -> cardShows(1)).equals("Hazel"), "left twice is back on Hazel");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1) == null), "A confirms: the card closes");
+		waitFor("the seat ready as Hazel", Duration.ofSeconds(60), () -> onRender(() -> {
+			Party.SeatView seat = Party.current().seatView(1);
+			return seat.name().equals("Hazel") && seat.status().equals("Ready");
+		}));
+	}
+
+	private void cardBackAndLeave() throws Exception {
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1).stage()) == SeatCard.Stage.SETUP, "A on New starts quick setup");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1).stage()) == SeatCard.Stage.CAROUSEL, "B steps back to the carousel");
+		press(LOBBY_PAD, PadButton.B);
+		waitFor("the seat given up", Duration.ofSeconds(30),
+				() -> satellites().isEmpty() && onRender(() -> Party.current().seatedCount()) == 0);
+		Files.deleteIfExists(satelliteLogFile());
+	}
+
+	private void cardSurvivesUnplug() throws Exception {
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		press(LOBBY_PAD, PadButton.A);
+		press(LOBBY_PAD, PadButton.DPAD_DOWN);
+		press(LOBBY_PAD, PadButton.A);
+		String typed = onRender(() -> card(1).keyboard().text());
+		check(typed.equals("a"), "moving then A types on the keyboard (typed: " + typed + ")");
+		PADS.unplug(LOBBY_PAD);
+		Thread.sleep(1000);
+		// The same model plugged back in under a new id resumes the seat.
+		PADS.plug(REPLUG_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(1000);
+		check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.SETUP
+				&& card(1).keyboard().text().equals("a")), "the card and the typed name are kept");
+		press(REPLUG_PAD, PadButton.X);
+		check(onRender(() -> card(1).keyboard().text()).isEmpty(), "the replugged controller drives the card");
+		press(REPLUG_PAD, PadButton.B);
+		press(REPLUG_PAD, PadButton.B);
+		waitFor("the seat given up", Duration.ofSeconds(30),
+				() -> satellites().isEmpty() && onRender(() -> Party.current().seatedCount()) == 0);
+		PADS.unplug(REPLUG_PAD);
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		Files.deleteIfExists(satelliteLogFile());
+	}
+
+	private void quickSetupAAA() throws Exception {
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		press(LOBBY_PAD, PadButton.DPAD_RIGHT);
+		press(LOBBY_PAD, PadButton.A);
+		String suggestion = onRender(() -> card(1).keyboard().text());
+		int colour = onRender(() -> card(1).setup().color());
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1).setup().step()) == QuickSetup.Step.SKIN, "A keeps the suggested name " + suggestion);
+		press(LOBBY_PAD, PadButton.A);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1) == null), "A on the colour finishes: the card closes");
+		GuestProfile saved = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"))
+				.load().getLast();
+		check(saved.name().equals(suggestion) && LOBBY_GUID.equals(saved.preferredControllerGuid())
+				&& saved.color() == colour, "the new profile is saved and remembered for this controller");
+		check(colour == PlayerColors.DEFAULTS[1], "the first free colour was pre-picked");
+		waitFor("the seat ready as " + suggestion, Duration.ofSeconds(120),
+				() -> onRender(() -> Party.current().seatView(1).status()).equals("Ready"));
+	}
+
 	private void orphanedTitleReturnsToLobby() throws Exception {
 		// What Minecraft does when a world fails to open: it shows the title screen.
 		onRender(() -> {
@@ -682,6 +796,13 @@ public final class E2eDriver {
 	}
 
 	private void lobbySeatsAndPrewarms() throws Exception {
+		// Known profiles for the card steps: Hazel last used the lobby pad.
+		ProfileStore store = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
+		HostProfile host = store.loadFile().host();
+		store.saveFile(new ProfileFile(List.of(
+				new GuestProfile(UUID.nameUUIDFromBytes("Birch".getBytes()), "Birch", SkinRef.defaultSkin("steve"), null),
+				new GuestProfile(UUID.nameUUIDFromBytes("Hazel".getBytes()), "Hazel", SkinRef.defaultSkin("alex"),
+						LOBBY_GUID)), host));
 		openLobby();
 		press(LOBBY_PAD, PadButton.A);
 		waitFor("a guest game warming up", Duration.ofSeconds(30), () -> !satellites().isEmpty());
@@ -691,13 +812,19 @@ public final class E2eDriver {
 	}
 
 	private void lobbyIntoWorld() throws Exception {
-		press(LOBBY_PAD, PadButton.A);
-		waitFor("the guest's game connected again", Duration.ofSeconds(120),
-				() -> !satellites().isEmpty() && satelliteLog().contains("hearthside satellite connected as player"));
+		// Seat 1 is ready as the profile quick setup made (L3). A second controller takes seat 2 and is still on its
+		// card when the world opens: it goes in with what its card shows (Birch, the first profile).
+		String made = onRender(() -> Party.current().seatView(1).name());
+		PADS.plug(SECOND_LOBBY_PAD, "fake-lobby-pad-2", PadStyle.XBOX);
+		Thread.sleep(300);
+		press(SECOND_LOBBY_PAD, PadButton.A);
+		waitFor("seat 2 choosing on its card", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
 		press(LOBBY_PAD, PadButton.START);
 		check(onRender(() -> minecraft.gui.screen() instanceof SelectWorldScreen), "Menu continues to world select");
 		openWorld();
-		waitFor("the lobby guest in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+		waitFor("both lobby guests in the world", Duration.ofSeconds(240), () -> playerCount() == 3);
+		check(guest(made) != null, made + " is in the world under that name (the game launched as Seat1)");
+		check(guest("Birch") != null, "seat 2 went in as what its card showed");
 		// Back to the starting point for the rest of the run: the lobby guest leaves.
 		onRender(() -> {
 			Party party = Party.current();
@@ -705,6 +832,7 @@ public final class E2eDriver {
 			return null;
 		});
 		PADS.unplug(LOBBY_PAD);
+		PADS.unplug(SECOND_LOBBY_PAD);
 		waitFor("lobby guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
 	}
 

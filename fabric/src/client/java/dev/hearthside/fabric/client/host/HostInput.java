@@ -54,6 +54,9 @@ final class HostInput implements Runnable {
 	private final Map<Integer, Integer> sharedButtons = new HashMap<>();
 	/** Whether a guest's controller is driving the host's shared screen (the host has no pad of its own). */
 	private boolean sharedDriving;
+	/** When a guest last moved the shared pointer; it hides a while after, for the mouse. */
+	private long lastGuestDrive;
+	private static final long POINTER_LINGER_NANOS = 3_000_000_000L;
 
 	HostInput(Minecraft minecraft, Party session, GamepadSource source, ControlScheme hostScheme) {
 		this.minecraft = minecraft;
@@ -118,19 +121,27 @@ final class HostInput implements Runnable {
 	}
 
 	/**
-	 * Shared screens: Menu on any seated controller continues from the lobby, B on a seated controller in the lobby
-	 * gives up its seat, and otherwise whoever is using a controller moves the host's cursor.
+	 * Shared screens: a seat still choosing its profile drives only its own lobby card; Menu on any other seated
+	 * controller continues from the lobby, B gives up its seat, and otherwise whoever is using a controller moves the
+	 * host's cursor, which takes their colour.
 	 */
 	private void driveSharedScreen(Map<Integer, InputFrame> frames) {
 		Screen screen = minecraft.gui.screen();
 		LobbyScreen lobby = screen instanceof LobbyScreen l ? l : null;
 		int start = InputFrame.buttons(PadButton.START);
 		int b = InputFrame.buttons(PadButton.B);
+		long now = System.nanoTime();
+		Map<Integer, InputFrame> shared = new HashMap<>(frames);
 		for (Map.Entry<Integer, InputFrame> entry : frames.entrySet()) {
 			int player = entry.getKey();
 			int buttons = entry.getValue().buttons();
 			int pressed = buttons & ~sharedButtons.getOrDefault(player, 0);
 			sharedButtons.put(player, buttons);
+			if (player != 0 && session.hasSeatCard(player)) {
+				session.seatCardInput(player, entry.getValue(), now);
+				shared.remove(player);
+				continue;
+			}
 			if (player == 0 || lobby == null) {
 				continue;
 			}
@@ -143,21 +154,32 @@ final class HostInput implements Runnable {
 		sharedButtons.keySet().retainAll(frames.keySet());
 		// Ending the party is player 1's call (Spec A section 7.1): guests don't drive its confirmation.
 		Map<Integer, InputFrame> drivers = screen instanceof ConfirmScreen
-				? (frames.containsKey(0) ? Map.of(0, frames.get(0)) : Map.of()) : frames;
-		InputFrame drive = SharedScreenInput.drive(drivers, lobby != null ? start | b : start);
+				? (shared.containsKey(0) ? Map.of(0, shared.get(0)) : Map.of()) : shared;
+		SharedScreenInput.Driver driver = SharedScreenInput.drive(drivers, lobby != null ? start | b : start);
+		if (driver != null && (driver.player() != 0 || drivers.containsKey(0))) {
+			VirtualCursor.setTint(session.colorOf(driver.player()));
+		}
 		if (drivers.containsKey(0)) {
-			hostApplier.accept(drive);
+			hostApplier.accept(driver.frame());
 			hostApplier.onFrame();
-		} else if (screen != null && SharedScreenInput.isActive(drive)) {
-			hostApplier.accept(drive);
+		} else if (screen != null && driver != null && SharedScreenInput.isActive(driver.frame())) {
+			if (!sharedDriving) {
+				VirtualCursor.setDrawn(true);
+			}
+			hostApplier.accept(driver.frame());
 			hostApplier.onFrame();
 			sharedDriving = true;
+			lastGuestDrive = now;
 		} else if (sharedDriving) {
-			// Let go (releasing anything held), then hand the screen back to the mouse.
+			// Let go (releasing anything held). The pointer stays where the guest left it until the mouse moves.
 			hostApplier.accept(InputFrame.NEUTRAL);
 			hostApplier.onFrame();
 			hostApplier.release();
 			sharedDriving = false;
+		} else if (lastGuestDrive != 0 && now - lastGuestDrive > POINTER_LINGER_NANOS && !router.hasPad(0)) {
+			// Nobody has used a controller for a while: the screen is the mouse's again.
+			VirtualCursor.setDrawn(false);
+			lastGuestDrive = 0;
 		}
 	}
 

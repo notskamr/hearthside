@@ -8,7 +8,8 @@ import java.util.UUID;
 
 /**
  * The profiles a seated player can pick on their lobby card (Spec A section 3.1), ending with New. Profiles another
- * seat holds are left out. The profile last used on this controller model is pre-selected. Not thread-safe.
+ * seat holds are left out. The profile last used on this controller model is pre-selected: profiles are stored least
+ * recently used first, so that is the last match. Not thread-safe.
  */
 public final class ProfileCarousel {
 	public sealed interface Entry {
@@ -31,11 +32,11 @@ public final class ProfileCarousel {
 			}
 		}
 		entries.add(new Entry.New());
+		// The most recently used match: profiles are stored least recent first.
 		for (int i = 0; i < entries.size(); i++) {
 			if (entries.get(i) instanceof Entry.Profile(GuestProfile p) && controllerGuid != null
 					&& Objects.equals(p.preferredControllerGuid(), controllerGuid)) {
 				index = i;
-				break;
 			}
 		}
 	}
