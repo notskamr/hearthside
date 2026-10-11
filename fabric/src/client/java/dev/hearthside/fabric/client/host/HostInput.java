@@ -4,6 +4,7 @@ import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.GamepadSource;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.InputRouter;
+import dev.hearthside.core.input.PadSnapshot;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.input.RouterEvent;
 import dev.hearthside.core.protocol.ControlMessage;
@@ -13,6 +14,7 @@ import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,7 +25,7 @@ import net.minecraft.network.chat.Component;
 /**
  * The host's controller loop, run once per rendered frame: read every pad, route each to its
  * player, forward guests' input to their satellites, drive the host's own pad, and react to
- * START-to-join, claims, unplugs and replugs. Render thread only, except {@link #styleFor}.
+ * A/B presses from unused controllers (the join flow), claims, unplugs and replugs. Render thread only, except {@link #styleFor}.
  */
 final class HostInput implements Runnable {
 	private static final long RESEND_NANOS = 100_000_000L;
@@ -41,6 +43,9 @@ final class HostInput implements Runnable {
 	private Boolean savedToggleCrouch;
 	private Boolean savedAutoJump;
 	private boolean closed;
+	// Each controller's model id, for remembering which controller a profile last used.
+	private final Map<Integer, String> guids = new HashMap<>();
+	private long lastFlowTick;
 
 	HostInput(Minecraft minecraft, Party session, GamepadSource source, ControlScheme hostScheme) {
 		this.minecraft = minecraft;
@@ -55,7 +60,16 @@ final class HostInput implements Runnable {
 		if (closed) {
 			return;
 		}
-		InputRouter.Update update = router.update(source.poll());
+		List<PadSnapshot> pads = source.poll();
+		for (PadSnapshot pad : pads) {
+			guids.put(pad.instanceId(), pad.guid());
+		}
+		InputRouter.Update update = router.update(pads);
+		long tickNow = System.nanoTime();
+		if (tickNow - lastFlowTick >= 1_000_000_000L) {
+			lastFlowTick = tickNow;
+			session.tickFlow();
+		}
 		for (RouterEvent event : update.events()) {
 			try {
 				handle(event);
@@ -112,7 +126,8 @@ final class HostInput implements Runnable {
 
 	private void handle(RouterEvent event) {
 		switch (event) {
-			case RouterEvent.JoinRequest join -> addGuest(join.instanceId());
+			case RouterEvent.UnassignedPress press -> session.onUnassignedPress(press.instanceId(), press.button(),
+					guids.get(press.instanceId()));
 			case RouterEvent.ClaimRequest claim -> claimForHost(claim.instanceId());
 			case RouterEvent.PadLost lost -> {
 				if (lost.player() == 0) {
@@ -120,11 +135,13 @@ final class HostInput implements Runnable {
 					minecraft.pauseGame(false);
 				} else {
 					session.sendToGuest(lost.player(), new ControlMessage.Lifecycle(LifecycleCommand.PAUSE));
+					session.onPadLost(lost.player());
 				}
 				chat(Component.literal("Player " + (lost.player() + 1) + "'s controller disconnected.").withStyle(ChatFormatting.YELLOW));
 			}
 			case RouterEvent.PadRestored restored -> {
 				if (restored.player() != 0) {
+					session.onPadRestored(restored.player(), restored.instanceId());
 					session.sendToGuest(restored.player(), new ControlMessage.SetPadStyle(router.styleOf(restored.player()).orElse(PadStyle.GENERIC)));
 					session.sendToGuest(restored.player(), new ControlMessage.Lifecycle(LifecycleCommand.RESUME));
 				}
@@ -160,34 +177,13 @@ final class HostInput implements Runnable {
 		}
 	}
 
-	private void addGuest(int instanceId) {
-		int joined = -1;
-		for (String prefix : new String[] {"Player", "Guest"}) {
-			int index = session.nextFreeIndex();
-			if (index < 0) {
-				chat(Component.literal("All 3 guest slots are taken.").withStyle(ChatFormatting.RED));
-				return;
-			}
-			try {
-				joined = session.join(prefix + (index + 1));
-				break;
-			} catch (IllegalArgumentException refusedName) {
-				// e.g. the host is called Player2; try the next naming scheme
-			} catch (Exception e) {
-				HearthsideMod.LOGGER.error("Could not add a player for controller {}", instanceId, e);
-				chat(Component.literal("Couldn't add a player: " + e.getMessage()).withStyle(ChatFormatting.RED));
-				return;
-			}
-		}
-		if (joined < 0) {
-			chat(Component.literal("Couldn't find a free name for a new player.").withStyle(ChatFormatting.RED));
-			return;
-		}
+	/** Gives a controller to a guest who just joined. Render thread. */
+	void assignPad(int instanceId, int player) {
 		// A guest who just left may still own this slot in the router until their release runs.
-		if (router.hasPad(joined)) {
-			router.release(joined);
+		if (router.hasPad(player)) {
+			router.release(player);
 		}
-		router.assign(instanceId, joined);
+		router.assign(instanceId, player);
 	}
 
 	private void refreshStyles() {

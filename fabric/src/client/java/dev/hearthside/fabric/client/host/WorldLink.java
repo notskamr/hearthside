@@ -47,6 +47,11 @@ final class WorldLink {
 		connection.send(new ControlMessage.JoinWorld(gamePort, token, profile.name()));
 	}
 
+	/** Whether a player with this name is in the world (a guest's game has finished joining). */
+	boolean hasPlayer(String name) {
+		return server.getPlayerList().getPlayerByName(name) != null;
+	}
+
 	void remove(int index) {
 		roster.remove(index);
 	}

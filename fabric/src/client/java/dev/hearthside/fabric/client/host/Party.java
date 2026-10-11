@@ -6,7 +6,9 @@ import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.ControlSchemeJson;
+import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.GamepadSource;
+import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.launch.HostJvm;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
@@ -26,6 +28,7 @@ import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.core.protocol.ControlCodec;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
+import dev.hearthside.core.session.JoinFlow;
 import dev.hearthside.core.session.SatelliteDirectories;
 import dev.hearthside.core.supervise.RestartPolicy;
 import dev.hearthside.fabric.HearthsideMod;
@@ -53,6 +56,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -62,6 +66,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import com.mojang.blaze3d.platform.Window;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
 
@@ -243,8 +248,12 @@ public final class Party {
 		if (slots.values().stream().anyMatch(s -> s.profile.name().equalsIgnoreCase(name))) {
 			throw new IllegalArgumentException(name + " is already playing");
 		}
+		return startGuest(loadOrCreateProfile(name));
+	}
+
+	/** Starts a guest's game in the lowest free slot, as {@code profile}; returns their player index. Render thread. */
+	private int startGuest(GuestProfile profile) throws IOException, UnsupportedLauncherException {
 		HostJvm host = HostJvm.capture(HostLaunchFacts.read());
-		GuestProfile profile = loadOrCreateProfile(name);
 		int index = nextFreeIndex();
 		if (index < 0) {
 			throw new IllegalStateException("All 3 guest slots are taken");
@@ -328,8 +337,161 @@ public final class Party {
 		slot.supervisor.stop();
 	}
 
+	// ---- Join flow: controllers joining with A, A (Spec A section 3.2) ----
+
+	private final JoinFlow flow = new JoinFlow(JoinFlow.Mode.IN_GAME, 3, Clock.systemUTC());
+	/** Join-flow controller id ("pad-<SDL id>") of each guest slot. */
+	private final Map<Integer, String> controllerOfSlot = new ConcurrentHashMap<>();
+	private final Map<String, Integer> instanceOf = new HashMap<>();
+	private final Map<String, String> guidOf = new HashMap<>();
+	private final Map<String, GuestProfile> chosen = new HashMap<>();
+
+	private static String controllerId(int instanceId) {
+		return "pad-" + instanceId;
+	}
+
+	/** An unassigned controller pressed A or B. Render thread. */
+	void onUnassignedPress(int instanceId, PadButton button, String guid) {
+		String controller = controllerId(instanceId);
+		instanceOf.put(controller, instanceId);
+		guidOf.put(controller, guid);
+		apply(flow.press(controller, button == PadButton.A ? Control.A : Control.B));
+	}
+
+	/** A guest's controller dropped: their seat is kept. Render thread. */
+	void onPadLost(int player) {
+		String controller = controllerOfSlot.get(player);
+		if (controller != null) {
+			apply(flow.disconnected(controller));
+		}
+	}
+
+	/** A guest's controller came back under a new SDL id. Render thread. */
+	void onPadRestored(int player, int newInstanceId) {
+		String old = controllerOfSlot.get(player);
+		String now = controllerId(newInstanceId);
+		if (old != null && !old.equals(now)) {
+			apply(flow.reassign(old, now));
+			controllerOfSlot.put(player, now);
+			instanceOf.put(now, newInstanceId);
+			guidOf.put(now, guidOf.remove(old));
+		} else if (old != null) {
+			apply(flow.reconnected(old));
+		}
+	}
+
+	/** Once a second: expire join prompts, offer take-overs, and mark guests who reached the world. Render thread. */
+	void tickFlow() {
+		WorldLink link = world;
+		controllerOfSlot.forEach((index, controller) -> {
+			Slot slot = slots.get(index);
+			if (link != null && slot != null && link.hasPlayer(slot.profile.name())) {
+				flow.loaded(controller);
+			}
+		});
+		apply(flow.tick());
+	}
+
+	private void apply(JoinFlow.Result result) {
+		for (JoinFlow.Effect effect : result.effects()) {
+			switch (effect) {
+				case JoinFlow.Effect.ShowJoinPrompt prompt -> minecraft.gui.toastManager().addToast(new SystemToast(
+						SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal("New controller"),
+						Component.literal("Press A again to join")));
+				case JoinFlow.Effect.OpenProfilePicker pick -> {
+					// The full picker is Plan 5b2; for now, the profile last used on this controller, or a new one.
+					GuestProfile profile = profileFor(guidOf.get(pick.controller()));
+					if (profile != null) {
+						chosen.put(pick.controller(), profile);
+						flow.profileChosen(pick.controller(), profile.id());
+					}
+				}
+				case JoinFlow.Effect.StartGuestGame start -> startForController(start.controller());
+				case JoinFlow.Effect.StopGuestGame stop -> {
+					Integer index = slotOfController(stop.controller());
+					Slot slot = index == null ? null : slots.get(index);
+					controllerOfSlot.values().remove(stop.controller());
+					if (slot != null) {
+						endSlot(slot);
+						removeSlot(slot);
+					}
+				}
+				case JoinFlow.Effect.OfferTakeover offer -> chat(Component.literal(
+						"A player's controller is still disconnected. Plug it back in to carry on.")
+						.withStyle(ChatFormatting.YELLOW));
+				case JoinFlow.Effect.HideJoinPrompt hide -> { }
+				case JoinFlow.Effect.ClaimSeat claim -> { }
+			}
+		}
+	}
+
+	private void startForController(String controller) {
+		GuestProfile profile = chosen.remove(controller);
+		Integer instanceId = instanceOf.get(controller);
+		if (profile == null || instanceId == null) {
+			apply(flow.leave(controller));
+			return;
+		}
+		try {
+			int index = startGuest(profile);
+			controllerOfSlot.put(index, controller);
+			HostInput currentInput = input;
+			if (currentInput != null) {
+				currentInput.assignPad(instanceId, index);
+			}
+		} catch (Exception e) {
+			HearthsideMod.LOGGER.error("Could not add a player for {}", controller, e);
+			chat(Component.literal("Couldn't add a player: " + e.getMessage()).withStyle(ChatFormatting.RED));
+			apply(flow.leave(controller));
+		}
+	}
+
+	private Integer slotOfController(String controller) {
+		return controllerOfSlot.entrySet().stream().filter(e -> e.getValue().equals(controller))
+				.map(Map.Entry::getKey).findFirst().orElse(null);
+	}
+
+	/** The profile last used on this controller, else "Player N" (made if needed); remembers the controller. */
+	private GuestProfile profileFor(String guid) {
+		try {
+			ProfileStore store = profileStore();
+			List<GuestProfile> profiles = new ArrayList<>(store.load());
+			java.util.Set<String> playing = new java.util.HashSet<>();
+			slots.values().forEach(s -> playing.add(s.profile.name().toLowerCase(Locale.ROOT)));
+			for (GuestProfile p : profiles) {
+				if (guid != null && guid.equals(p.preferredControllerGuid()) && !playing.contains(p.name().toLowerCase(Locale.ROOT))) {
+					return p;
+				}
+			}
+			int index = nextFreeIndex();
+			for (String prefix : new String[] {"Player", "Guest"}) {
+				String name = prefix + (index + 1);
+				if (!name.equalsIgnoreCase(minecraft.getUser().getName()) && !playing.contains(name.toLowerCase(Locale.ROOT))) {
+					GuestProfile profile = loadOrCreateProfile(name);
+					if (guid != null && !guid.equals(profile.preferredControllerGuid())) {
+						List<GuestProfile> updated = new ArrayList<>(store.load());
+						updated.replaceAll(p -> p.id().equals(profile.id()) ? p.withController(guid) : p);
+						store.save(updated);
+					}
+					return profile;
+				}
+			}
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+		}
+		return null;
+	}
+
+	private void chat(Component message) {
+		minecraft.gui.chatListener().handleSystemMessage(message, false);
+	}
+
 	private void removeSlot(Slot slot) {
 		slots.remove(slot.index, slot);
+		String controller = controllerOfSlot.remove(slot.index);
+		if (controller != null) {
+			minecraft.execute(() -> flow.leave(controller));
+		}
 		WorldLink link = world;
 		if (link != null) {
 			link.remove(slot.index);

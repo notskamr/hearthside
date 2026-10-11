@@ -113,7 +113,9 @@ public final class E2eDriver {
 			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
-				step("P1 START on a new controller adds Player2", this::startJoins);
+				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
+				step("B3 the join prompt expires after 5 s", this::joinPromptExpires);
+				step("P1 A, A on a new controller adds Player2", this::startJoins);
 				step("P2 left stick moves the guest", this::stickMoves);
 				step("P3 right stick turns the guest", this::stickTurns);
 				step("P4 RB advances the guest's hotbar", this::bumperSteps);
@@ -521,10 +523,25 @@ public final class E2eDriver {
 		store.save(profiles);
 	}
 
-	private void startJoins() throws Exception {
+	private void oneADoesNotJoin() throws Exception {
 		PADS.plug(101, PAD_GUID, PadStyle.PLAYSTATION);
 		Thread.sleep(300);
-		press(101, PadButton.START);
+		press(101, PadButton.A);
+		Thread.sleep(2500);
+		check(guest("Player2") == null && satellites().isEmpty(), "one A only asks; nobody joined");
+	}
+
+	private void joinPromptExpires() throws Exception {
+		Thread.sleep(3500); // past the 5 s window of B2's press
+		press(101, PadButton.A); // a fresh prompt, not a confirmation
+		Thread.sleep(2500);
+		check(guest("Player2") == null && satellites().isEmpty(), "an A after the prompt expired only asks again");
+	}
+
+	private void startJoins() throws Exception {
+		Thread.sleep(5500); // let B3's prompt expire
+		press(101, PadButton.A);
+		press(101, PadButton.A);
 		waitFor("Player2 in the world", Duration.ofSeconds(180), () -> guest("Player2") != null);
 		// The server counts the guest as joined while its client still shows the terrain-loading
 		// screen; controller input only drives the player once that screen is gone.

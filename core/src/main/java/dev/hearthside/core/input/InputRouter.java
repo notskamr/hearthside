@@ -53,7 +53,7 @@ public final class InputRouter {
 			if (owner.isPresent()) {
 				bind(pad.instanceId(), owner.get());
 				lostPlayers.remove(owner.get());
-				restored.add(new RouterEvent.PadRestored(owner.get()));
+				restored.add(new RouterEvent.PadRestored(owner.get(), pad.instanceId()));
 			}
 		}
 
@@ -66,8 +66,10 @@ public final class InputRouter {
 			if (claimArmed && edge(was, pad.frame(), PadButton.A)) {
 				claimArmed = false;
 				requests.add(new RouterEvent.ClaimRequest(pad.instanceId()));
-			} else if (edge(was, pad.frame(), PadButton.START)) {
-				requests.add(new RouterEvent.JoinRequest(pad.instanceId()));
+			} else if (edge(was, pad.frame(), PadButton.A)) {
+				requests.add(new RouterEvent.UnassignedPress(pad.instanceId(), PadButton.A));
+			} else if (edge(was, pad.frame(), PadButton.B)) {
+				requests.add(new RouterEvent.UnassignedPress(pad.instanceId(), PadButton.B));
 			}
 		}
 

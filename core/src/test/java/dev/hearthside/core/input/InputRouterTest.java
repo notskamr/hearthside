@@ -31,23 +31,30 @@ class InputRouterTest {
 	}
 
 	@Test
-	void pressingStartOnUnboundPadRequestsJoin() {
-		assertThat(router.update(List.of(pad(13, "g", PadButton.START))).events())
-				.containsExactly(new RouterEvent.JoinRequest(13));
+	void aAndBOnUnboundPadsAreReportedForTheJoinFlow() {
+		assertThat(router.update(List.of(pad(13, "g", PadButton.A))).events())
+				.containsExactly(new RouterEvent.UnassignedPress(13, PadButton.A));
+		assertThat(router.update(List.of(pad(13, "g", PadButton.B))).events())
+				.containsExactly(new RouterEvent.UnassignedPress(13, PadButton.B));
 	}
 
 	@Test
-	void holdingStartRequestsOnce() {
-		assertThat(router.update(List.of(pad(13, "g", PadButton.START))).events()).hasSize(1);
-		assertThat(router.update(List.of(pad(13, "g", PadButton.START))).events()).isEmpty();
+	void startOnUnboundPadNoLongerJoins() {
 		assertThat(router.update(List.of(pad(13, "g", PadButton.START))).events()).isEmpty();
 	}
 
 	@Test
-	void startOnBoundPadDoesNotRequestJoin() {
+	void holdingAReportsOnce() {
+		assertThat(router.update(List.of(pad(13, "g", PadButton.A))).events()).hasSize(1);
+		assertThat(router.update(List.of(pad(13, "g", PadButton.A))).events()).isEmpty();
+		assertThat(router.update(List.of(pad(13, "g", PadButton.A))).events()).isEmpty();
+	}
+
+	@Test
+	void aOnBoundPadIsNotReported() {
 		router.update(List.of(pad(11, "xbox")));
 		router.assign(11, 1);
-		assertThat(router.update(List.of(pad(11, "xbox", PadButton.START))).events()).isEmpty();
+		assertThat(router.update(List.of(pad(11, "xbox", PadButton.A))).events()).isEmpty();
 	}
 
 	@Test
@@ -65,7 +72,7 @@ class InputRouterTest {
 		router.assign(11, 1);
 		router.update(List.of());
 		var update = router.update(List.of(pad(21, "xbox")));
-		assertThat(update.events()).containsExactly(new RouterEvent.PadRestored(1));
+		assertThat(update.events()).containsExactly(new RouterEvent.PadRestored(1, 21));
 		assertThat(update.frames()).containsKey(1);
 		assertThat(router.playerFor(21)).hasValue(1);
 	}
@@ -89,7 +96,7 @@ class InputRouterTest {
 		router.assign(12, 2);
 		assertThat(router.update(List.of(pad(11, "xbox"))).events()).containsExactly(new RouterEvent.PadLost(2));
 		var update = router.update(List.of(pad(11, "xbox"), pad(13, "xbox")));
-		assertThat(update.events()).containsExactly(new RouterEvent.PadRestored(2));
+		assertThat(update.events()).containsExactly(new RouterEvent.PadRestored(2, 13));
 		assertThat(router.playerFor(11)).hasValue(1);
 		assertThat(router.playerFor(13)).hasValue(2);
 	}
@@ -103,7 +110,7 @@ class InputRouterTest {
 		assertThat(router.hasPad(1)).isFalse();
 		assertThat(router.playerFor(12)).isEmpty();
 		assertThat(router.update(List.of(pad(12, "xbox"), pad(13, "xbox"))).events())
-				.containsExactly(new RouterEvent.PadRestored(1));
+				.containsExactly(new RouterEvent.PadRestored(1, 13));
 		assertThat(router.playerFor(13)).hasValue(1);
 	}
 
@@ -113,7 +120,7 @@ class InputRouterTest {
 		router.assign(11, 3);
 		router.assign(12, 1);
 		router.update(List.of());
-		assertThat(router.update(List.of(pad(21, "xbox"))).events()).containsExactly(new RouterEvent.PadRestored(1));
+		assertThat(router.update(List.of(pad(21, "xbox"))).events()).containsExactly(new RouterEvent.PadRestored(1, 21));
 	}
 
 	@Test
@@ -123,8 +130,8 @@ class InputRouterTest {
 		router.update(List.of());
 		router.release(2);
 		assertThat(router.update(List.of(pad(21, "xbox"))).events()).isEmpty();
-		assertThat(router.update(List.of(pad(21, "xbox", PadButton.START))).events())
-				.containsExactly(new RouterEvent.JoinRequest(21));
+		assertThat(router.update(List.of(pad(21, "xbox", PadButton.A))).events())
+				.containsExactly(new RouterEvent.UnassignedPress(21, PadButton.A));
 	}
 
 	@Test
@@ -134,7 +141,9 @@ class InputRouterTest {
 		assertThat(router.update(List.of(pad(11, "xbox", PadButton.A))).events())
 				.containsExactly(new RouterEvent.ClaimRequest(11));
 		router.update(List.of(pad(11, "xbox")));
-		assertThat(router.update(List.of(pad(11, "xbox", PadButton.A))).events()).isEmpty();
+		// The claim is used up: the next A is ordinary join-flow input again.
+		assertThat(router.update(List.of(pad(11, "xbox", PadButton.A))).events())
+				.containsExactly(new RouterEvent.UnassignedPress(11, PadButton.A));
 	}
 
 	@Test
