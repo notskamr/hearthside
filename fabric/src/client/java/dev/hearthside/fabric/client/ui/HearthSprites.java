@@ -36,10 +36,12 @@ public final class HearthSprites {
 	public static final Identifier PILL = id("hearth/pill");
 	/** A white label, tinted with a player's colour (nine-slice). */
 	public static final Identifier TAG = id("hearth/tag");
+	/** A small controller icon, for counts. */
+	public static final Identifier CONTROLLER = id("hearth/controller");
 
 	/** Every non-glyph sprite, for checks. */
 	public static final List<Identifier> PANELS = List.of(WOOD_PANEL, PARCHMENT_CARD, CARD_FRAME, BUTTON,
-			BUTTON_HIGHLIGHTED, BUTTON_DISABLED, GLASS_PANEL, GLASS_CHIP, BOARD, FIRELIGHT, GHOST_CARD, PILL, TAG);
+			BUTTON_HIGHLIGHTED, BUTTON_DISABLED, GLASS_PANEL, GLASS_CHIP, BOARD, FIRELIGHT, GHOST_CARD, PILL, TAG, CONTROLLER);
 
 	private HearthSprites() {}
 

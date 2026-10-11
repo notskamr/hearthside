@@ -17,6 +17,8 @@
 		"SatelliteInputMixin",
 		"SatelliteSwapMixin",
 		"SatelliteWindowMixin",
+		"TitleButtonStyleMixin",
+		"TitleScreenStyleMixin",
 		"UnpublishMixin",
 		"WindowAccessor",
 		"WindowSizeMixin"

@@ -23,6 +23,7 @@ import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
+import dev.hearthside.fabric.client.ui.TitleStyle;
 import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.host.SeatCard;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
@@ -111,6 +112,7 @@ public final class E2eDriver {
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
+				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
 				step("T1 a controller moves focus on the title screen and A on Co-op opens the lobby", this::titleControllerOpensLobby);
 				step("T2 the controller that opened Co-op is player 1's, not seated, and remembered", this::titleControllerIsPlayerOne);
 				step("L5 player 1's card claims a controller; it drives the host and is not seated", this::hostCardClaims);
@@ -696,6 +698,19 @@ public final class E2eDriver {
 		Thread.sleep(400);
 	}
 
+	private void titleStyled() throws Exception {
+		TitleStyle.drewBackground = false;
+		TitleStyle.drewButtons = false;
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		Thread.sleep(600);
+		check(TitleStyle.drewBackground, "the plank wall and firelight replace the panorama");
+		check(TitleStyle.drewButtons, "the title's buttons are wooden");
+		screenshot("title");
+	}
+
 	private static final int TITLE_PAD = 109;
 	private static final String TITLE_GUID = "fake-title-pad";
 
@@ -706,11 +721,14 @@ public final class E2eDriver {
 			return null;
 		});
 		Thread.sleep(500);
-		for (int i = 0; i < 8 && !onRender(this::coopFocused); i++) {
-			press(TITLE_PAD, PadButton.DPAD_DOWN);
+		// Co-op is beside Singleplayer: down to the menu, then right (and up, if focus started lower).
+		PadButton[] path = {PadButton.DPAD_DOWN, PadButton.DPAD_RIGHT, PadButton.DPAD_UP, PadButton.DPAD_RIGHT,
+				PadButton.DPAD_UP, PadButton.DPAD_RIGHT, PadButton.DPAD_UP, PadButton.DPAD_RIGHT};
+		for (int i = 0; i < path.length && !onRender(this::coopFocused); i++) {
+			press(TITLE_PAD, path[i]);
 		}
 		check(onRender(this::coopFocused), "the D-pad moved focus to Co-op");
-		screenshot("title");
+		screenshot("title-focus");
 		press(TITLE_PAD, PadButton.A);
 		waitFor("the lobby", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof LobbyScreen));
 	}

@@ -3,26 +3,27 @@ package dev.hearthside.fabric.client.host;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
-import java.io.IOException;
 import dev.hearthside.fabric.client.menu.TitleInput;
+import dev.hearthside.fabric.client.ui.HearthSprites;
+import java.io.IOException;
 import java.util.List;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 
 /**
- * "Co-op" on the title screen, under Singleplayer (Spec A section 3.1): it shows how many controllers are connected and
- * opens the party lobby. Host only.
+ * "Co-op" on the title screen, beside Singleplayer (Spec A section 3.1): Singleplayer's row is shared, so the menu
+ * keeps vanilla's layout. It shows how many controllers are connected and opens the party lobby. Host only.
  */
 public final class TitleCoopButton {
-	private static final int ROW = 24;
-	/** Widgets this close to the bottom edge are anchored to it (the copyright line), not part of the menu. */
-	private static final int BOTTOM_PINNED = 20;
+	private static final int GAP = 4;
 
 	private TitleCoopButton() {}
 
@@ -52,20 +53,13 @@ public final class TitleCoopButton {
 			return;
 		}
 		AbstractWidget singleplayer = widgets.get(index);
-		// Make room for one more row without pushing the menu off small screens: the rows from Singleplayer up move up
-		// half a row, the rows below it move down half a row, and text pinned to the bottom edge stays where it is.
-		int pinnedBottom = title.height - BOTTOM_PINNED;
-		for (AbstractWidget widget : widgets) {
-			if (widget.getY() >= pinnedBottom) {
-				continue;
-			}
-			widget.setY(widget.getY() + (widget.getY() > singleplayer.getY() ? ROW / 2 : -ROW / 2));
-		}
-		Button coop = Button.builder(label(controllers()), b -> openLobby(minecraft, title))
-				.bounds(singleplayer.getX(), singleplayer.getY() + ROW, singleplayer.getWidth(), singleplayer.getHeight())
-				.build();
+		int full = singleplayer.getWidth();
+		int half = (full - GAP) / 2;
+		singleplayer.setWidth(half);
+		CoopButton coop = new CoopButton(singleplayer.getX() + full - half, singleplayer.getY(), half,
+				singleplayer.getHeight(), b -> openLobby(minecraft, title));
 		widgets.add(index + 1, coop);
-		ScreenEvents.afterTick(title).register(s -> coop.setMessage(label(controllers())));
+		ScreenEvents.afterTick(title).register(s -> coop.setControllers(controllers()));
 	}
 
 	private static void openLobby(Minecraft minecraft, TitleScreen title) {
@@ -77,7 +71,7 @@ public final class TitleCoopButton {
 		}
 	}
 
-	/** The button's text: "Co-op", with the controller count once there is one. */
+	/** The button's full text (narration and tests): "Co-op", with the controller count once there is one. */
 	public static Component label(int controllers) {
 		if (controllers <= 0) {
 			return Component.literal("Co-op");
@@ -98,5 +92,38 @@ public final class TitleCoopButton {
 			}
 		}
 		return -1;
+	}
+
+	/** Half a row wide, so it draws "Co-op" and a small controller badge with the count rather than the full text. */
+	private static final class CoopButton extends Button {
+		private int controllers;
+
+		CoopButton(int x, int y, int width, int height, OnPress onPress) {
+			super(x, y, width, height, label(0), onPress, DEFAULT_NARRATION);
+		}
+
+		void setControllers(int count) {
+			controllers = count;
+			setMessage(label(count));
+		}
+
+		@Override
+		protected void extractContents(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+			extractDefaultSprite(g);
+			var font = Minecraft.getInstance().font;
+			Component word = Component.literal("Co-op");
+			String count = String.valueOf(controllers);
+			int badge = controllers > 0 ? 4 + 13 + 2 + font.width(count) : 0;
+			int x = getX() + (getWidth() - font.width(word) - badge) / 2;
+			int textY = getY() + (getHeight() - 8) / 2;
+			int colour = isActive() ? 0xFFFFFFFF : 0xFFA0A0A0;
+			g.text(font, word, x, textY, colour, true);
+			if (controllers > 0) {
+				int iconX = x + font.width(word) + 4;
+				g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.CONTROLLER, iconX, getY() + (getHeight() - 9) / 2,
+						13, 9);
+				g.text(font, count, iconX + 15, textY, colour, true);
+			}
+		}
 	}
 }
