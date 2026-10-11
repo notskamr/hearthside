@@ -11,6 +11,7 @@ import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.GamepadSource;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
+import dev.hearthside.core.launch.GraphicsBackend;
 import dev.hearthside.core.launch.HostJvm;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.launch.SatelliteLaunch;
@@ -71,6 +72,7 @@ import java.util.concurrent.TimeUnit;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.toasts.SystemToast;
@@ -133,6 +135,8 @@ public final class Party {
 	private volatile boolean hostClaimArmed;
 	/** GPU sharing or copying, as this machine's probe decided at session start. */
 	private volatile Transport hostTransport = Transport.COPY;
+	/** The graphics API guests render with: this game's own, so its compositor can take their frames (decided at session start). */
+	private volatile GraphicsBackend guestBackend = GraphicsBackend.OPENGL;
 
 	private static final class Slot {
 		final int index;
@@ -167,6 +171,20 @@ public final class Party {
 
 	/** Composite into this window when the GL context supports it; otherwise tile real windows. Render thread. */
 	private void choosePresentation() {
+		GraphicsBackend own = "Vulkan".equals(RenderSystem.getDevice().getDeviceInfo().backendName())
+				? GraphicsBackend.VULKAN : GraphicsBackend.OPENGL;
+		HearthsideMod.LOGGER.info("Hearthside graphics backend={}", own.argument());
+		guestBackend = own;
+		// E2E: guests on a given backend, whatever the host's.
+		String override = System.getProperty("hearthside.e2e.guestBackend");
+		if (override != null) {
+			for (GraphicsBackend b : GraphicsBackend.values()) {
+				if (b.argument().equalsIgnoreCase(override)) {
+					guestBackend = b;
+				}
+			}
+			HearthsideMod.LOGGER.info("Hearthside guests' backend override \"{}\": guests use {}", override, guestBackend.argument());
+		}
 		try {
 			// E2E: tiled windows, as on a GL without the compositor's extensions or on Vulkan.
 			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Presentation.glSupportsCompositing();
@@ -422,7 +440,8 @@ public final class Party {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
 				return LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
-						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation()));
+						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
+								guestBackend));
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}

@@ -27,7 +27,7 @@ public final class LaunchCommandBuilder {
 	private static final Set<String> DROPPED_GAME_OPTIONS = Set.of(
 			"--username", "--uuid", "--accessToken", "--xuid", "--clientId", "--userType", "--gameDir",
 			"--quickPlayPath", "--quickPlaySingleplayer", "--quickPlayMultiplayer", "--quickPlayRealms",
-			"--server", "--port");
+			"--server", "--port", "--graphicsBackend");
 
 	/**
 	 * The JVM reads extra options from these; a debugger configured through them would make every
@@ -83,6 +83,9 @@ public final class LaunchCommandBuilder {
 		cmd.add(sat.guestName());
 		cmd.add("--accessToken");
 		cmd.add("0");
+		// The host's compositor imports the guest's frames, so the guest renders with the host's graphics API.
+		cmd.add("--graphicsBackend");
+		cmd.add(sat.graphicsBackend().argument());
 
 		// Minecraft writes logs/ and crash-reports/ relative to the working directory, as the launcher sets it.
 		// SDL reads hints from the environment: a guest window opening must not take focus from the players already playing.
