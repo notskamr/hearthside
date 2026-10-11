@@ -15,6 +15,7 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
+import dev.hearthside.fabric.client.menu.PadScreen;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -202,6 +203,26 @@ final class HostInput implements Runnable {
 			}
 		}
 		sharedButtons.keySet().retainAll(frames.keySet());
+		if (screen instanceof PadScreen padScreen) {
+			// Hearthside's own screens take every player's controller directly (focus moves, no pointer).
+			if (sharedDriving) {
+				hostApplier.accept(InputFrame.NEUTRAL);
+				hostApplier.onFrame();
+				hostApplier.release();
+				sharedDriving = false;
+			}
+			VirtualCursor.setDrawn(false);
+			for (Map.Entry<Integer, InputFrame> entry : new java.util.TreeMap<>(shared).entrySet()) {
+				if (SharedScreenInput.isActive(entry.getValue())) {
+					lastDriver = entry.getKey();
+				}
+				padScreen.padInput(entry.getKey(), entry.getValue(), now);
+				if (minecraft.gui.screen() != screen) {
+					break;
+				}
+			}
+			return;
+		}
 		// Ending the party is player 1's call (Spec A section 7.1): guests don't drive its confirmation.
 		Map<Integer, InputFrame> drivers = screen instanceof ConfirmScreen
 				? (shared.containsKey(0) ? Map.of(0, shared.get(0)) : Map.of()) : shared;

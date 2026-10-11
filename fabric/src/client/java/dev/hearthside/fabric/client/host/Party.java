@@ -838,6 +838,25 @@ public final class Party {
 		}
 	}
 
+	/** Guests already recorded in this world's co-op entry. */
+	private final java.util.Set<UUID> recordedInWorld = new java.util.HashSet<>();
+
+	/** This world was played in co-op, by player 1 and every guest with a profile (the world picker shows it). */
+	private void recordCoopWorld(WorldLink link) {
+		List<String> names = new ArrayList<>();
+		names.add(minecraft.getUser().getName());
+		slots.values().forEach(s -> {
+			if (s.profile != null) {
+				names.add(s.profile.name());
+			}
+		});
+		try {
+			WorldsScreen.coopStore(gameDir).played(link.levelId(), System.currentTimeMillis(), names);
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.warn("Could not record the co-op world", e);
+		}
+	}
+
 	/** Once a second: expire join prompts, offer take-overs, and mark guests who reached the world. Render thread. */
 	void tickFlow() {
 		WorldLink link = world;
@@ -846,6 +865,9 @@ public final class Party {
 			GuestProfile profile = slot == null ? null : slot.profile;
 			if (link != null && profile != null && link.hasPlayer(profile.name())) {
 				flow.loaded(controller);
+				if (recordedInWorld.add(profile.id())) {
+					recordCoopWorld(link);
+				}
 			}
 		});
 		apply(flow.tick());

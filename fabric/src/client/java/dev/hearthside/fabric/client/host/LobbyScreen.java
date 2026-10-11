@@ -112,7 +112,7 @@ public final class LobbyScreen extends Screen {
 
 	/** On to choosing a world, with the party kept. */
 	public void continueToWorlds() {
-		minecraft.gui.setScreen(new SelectWorldScreen(this));
+		minecraft.gui.setScreen(new WorldsScreen(this, party));
 	}
 
 	/** Back or Esc: leaving the lobby ends the party, so ask first when anyone has taken a seat (Spec A section 7.1). */

@@ -16,6 +16,7 @@ import dev.hearthside.core.profile.ProfileCarousel;
 import dev.hearthside.core.profile.ProfileFile;
 import dev.hearthside.core.profile.ProfileStore;
 import dev.hearthside.core.profile.QuickSetup;
+import dev.hearthside.core.session.CoopWorldsStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -26,6 +27,7 @@ import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
 import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.host.SeatCard;
+import dev.hearthside.fabric.client.host.WorldsScreen;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
@@ -129,7 +131,9 @@ public final class E2eDriver {
 				step("L8 unplugging mid-keyboard keeps the card; replugging resumes it", this::cardSurvivesUnplug);
 				step("L10 two identical controllers never share a profile or a new name", this::twinsNeverClash);
 				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
-				step("B5 Menu on a seated controller continues; the world brings the guests in by name", this::lobbyIntoWorld);
+				step("B5 Menu on a seated controller opens the world picker", this::lobbyToPicker);
+				step("W1 the world picker puts the last co-op world first, focused, with who played it", this::pickerFocusesLastCoopWorld);
+				step("W2 A on it opens the world; the guests come in by name; the co-op record has them", this::pickerOpensWorld);
 			}
 			if (onRender(() -> minecraft.level == null)) {
 				openWorld();
@@ -1015,10 +1019,20 @@ public final class E2eDriver {
 				() -> satelliteLog().contains("hearthside satellite connected as player"));
 	}
 
-	private void lobbyIntoWorld() throws Exception {
+	private String madeName, shownName;
+
+	private CoopWorldsStore coopStore() {
+		return new CoopWorldsStore(minecraft.gameDirectory.toPath().resolve("hearthside/coop-worlds.json"));
+	}
+
+	private void lobbyToPicker() throws Exception {
 		// Seat 1 is ready as the profile quick setup made (L3). A second controller takes seat 2 and is still on its
 		// card when the world opens: it goes in with what its card shows (the first profile nobody holds).
 		String made = onRender(() -> Party.current().seatView(1).name());
+		madeName = made;
+		// The co-op record says the E2E world was last played with Ember and Birch (W1 checks the picker shows it).
+		Files.deleteIfExists(minecraft.gameDirectory.toPath().resolve("hearthside/coop-worlds.json"));
+		coopStore().played(WORLD, System.currentTimeMillis(), List.of("Ember", "Birch"));
 		PADS.plug(SECOND_LOBBY_PAD, "fake-lobby-pad-2", PadStyle.XBOX);
 		Thread.sleep(300);
 		check(onRender(() -> Party.current().joinStyle()) == PadStyle.XBOX,
@@ -1027,12 +1041,36 @@ public final class E2eDriver {
 		waitFor("seat 2 choosing on its card", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
 		screenshot("lobby-three-players");
 		String shown = onRender(() -> cardShows(2));
+		shownName = shown;
 		press(LOBBY_PAD, PadButton.START);
-		check(onRender(() -> minecraft.gui.screen() instanceof SelectWorldScreen), "Menu continues to world select");
-		openWorld();
+		check(onRender(() -> minecraft.gui.screen() instanceof WorldsScreen), "Menu opens the world picker");
+		waitFor("the picker has listed the worlds", Duration.ofSeconds(15),
+				() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+	}
+
+	private void pickerFocusesLastCoopWorld() throws Exception {
+		WorldsScreen picker = onRender(() -> (WorldsScreen) minecraft.gui.screen());
+		check(onRender(() -> minecraft.getLevelSource().levelExists(WORLD)), "the E2E world exists (created by earlier runs)");
+		check(WORLD.equals(onRender(picker::focusedLevelId)), "the last co-op world is first and focused");
+		check("Last played with Ember and Birch".equals(onRender(() -> picker.playedWithText(WORLD))),
+				"its card says who played it");
+		screenshot("worlds");
+	}
+
+	private void pickerOpensWorld() throws Exception {
+		if (onRender(() -> minecraft.gui.screen() instanceof WorldsScreen)) {
+			press(LOBBY_PAD, PadButton.A);
+		}
+		Thread.sleep(500);
+		if (onRender(() -> minecraft.level == null) && !onRender(() -> minecraft.getLevelSource().levelExists(WORLD))) {
+			openWorld();
+		}
+		String made = madeName, shown = shownName;
 		waitFor("both lobby guests in the world", Duration.ofSeconds(240), () -> playerCount() == 3);
 		check(guest(made) != null, made + " is in the world under that name (the game launched as Seat1)");
 		check(guest(shown) != null, "seat 2 went in as what its card showed (" + shown + ")");
+		waitFor("the co-op record has both guests", Duration.ofSeconds(10), () -> coopStore().load().stream()
+				.anyMatch(w -> w.levelId().equals(WORLD) && w.players().contains(made) && w.players().contains(shown)));
 		// Back to the starting point for the rest of the run: the lobby guest leaves.
 		onRender(() -> {
 			Party party = Party.current();
