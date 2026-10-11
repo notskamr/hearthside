@@ -86,6 +86,13 @@ class LaunchCommandBuilderTest {
 	}
 
 	@Test
+	void satelliteWindowDoesNotTakeFocusWhenShown() {
+		var lc = LaunchCommandBuilder.build(host, sat);
+		// SDL reads hints from the environment: a guest window opening must not steal the keyboard from player 1.
+		assertThat(lc.environment()).containsEntry("SDL_WINDOW_ACTIVATE_WHEN_SHOWN", "0");
+	}
+
+	@Test
 	void satelliteRunsInItsOwnFolder() {
 		// Minecraft writes logs/ (and crash reports) relative to the working directory.
 		assertThat(LaunchCommandBuilder.build(host, sat).workingDirectory()).isEqualTo(sat.gameDir());

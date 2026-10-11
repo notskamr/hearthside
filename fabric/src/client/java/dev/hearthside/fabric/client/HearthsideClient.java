@@ -5,7 +5,9 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.E2eDriver;
 import dev.hearthside.fabric.client.host.HostCommands;
 import dev.hearthside.fabric.client.host.HostSession;
+import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.satellite.SatelliteBoot;
+import dev.hearthside.fabric.client.window.FocusLog;
 import net.fabricmc.api.ClientModInitializer;
 
 public final class HearthsideClient implements ClientModInitializer {
@@ -20,6 +22,7 @@ public final class HearthsideClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		role = Role.fromProperty(System.getProperty(Role.PROPERTY));
 		HearthsideMod.LOGGER.info("Hearthside client starting as {}", role);
+		FrameHook.register(new FocusLog());
 		if (role == Role.HOST) {
 			HostSession.register();
 			HostCommands.register();

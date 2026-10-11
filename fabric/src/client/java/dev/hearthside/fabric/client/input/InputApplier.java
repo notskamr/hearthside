@@ -87,6 +87,7 @@ public final class InputApplier {
 	public void onFrame() {
 		Optional<InputFrame> current = input.current();
 		if (current.isEmpty()) {
+			PadPlay.set(false);
 			return;
 		}
 		InputFrame frame = current.get();
@@ -108,6 +109,7 @@ public final class InputApplier {
 					previousGameplay = InputFrame.NEUTRAL;
 				}
 				inMenu = false;
+				PadPlay.set(true);
 				InputFrame filtered = suppression.filter(frame);
 				applyGameplay(GamepadMapping.gameplay(scheme, previousGameplay, filtered, dt));
 				previousGameplay = filtered;
@@ -115,9 +117,10 @@ public final class InputApplier {
 				if (!inMenu) {
 					HearthsideMod.LOGGER.info("Hearthside controller: menu mode ({})", screen.getClass().getSimpleName());
 					inMenu = true;
+					PadPlay.set(false);
 					releaseHeld();
 					PadMovement.clear();
-					VirtualCursor.ensurePlaced(minecraft.getWindow());
+					VirtualCursor.centre(minecraft.getWindow());
 				}
 				applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt));
 			}
@@ -129,6 +132,7 @@ public final class InputApplier {
 
 	/** Lets go of everything this controller is holding. */
 	public void release() {
+		PadPlay.set(false);
 		releaseHeld();
 		PadMovement.clear();
 		input.clear();
@@ -151,8 +155,10 @@ public final class InputApplier {
 		});
 
 		Options o = minecraft.options;
+		// Attack and use are held above and also clicked here, like a mouse button: vanilla starts
+		// an attack or a use from a click and only continues it from the held state.
 		Map<Action, KeyMapping> clickMappings = Map.of(
-				Action.INVENTORY, o.keyInventory, Action.DROP, o.keyDrop, Action.SWAP_OFFHAND, o.keySwapOffhand,
+				Action.ATTACK, o.keyAttack, Action.USE, o.keyUse, Action.INVENTORY, o.keyInventory, Action.DROP, o.keyDrop, Action.SWAP_OFFHAND, o.keySwapOffhand,
 				Action.PERSPECTIVE, o.keyTogglePerspective, Action.PICK_BLOCK, o.keyPickItem, Action.CHAT, o.keyChat);
 		clickMappings.forEach((action, mapping) -> {
 			if (intent.pressed().contains(action)) {

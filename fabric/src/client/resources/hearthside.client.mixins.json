@@ -4,11 +4,14 @@
 	"compatibilityLevel": "JAVA_25",
 	"client": [
 		"ContainerScreenAccessor",
+		"ContinueAttackMixin",
+		"E2eUnfocusedMixin",
 		"FrameHookMixin",
 		"KeyboardInputMixin",
 		"KeyMappingAccessor",
 		"SatelliteGrabMixin",
 		"SatelliteInputMixin",
+		"SatelliteWindowMixin",
 		"UnpublishMixin"
 	],
 	"injectors": {

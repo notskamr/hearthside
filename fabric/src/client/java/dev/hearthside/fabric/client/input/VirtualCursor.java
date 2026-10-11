@@ -36,12 +36,13 @@ public final class VirtualCursor {
 		return y;
 	}
 
-	/** Puts the cursor in the middle of the window if it has never been placed. */
-	public static void ensurePlaced(Window window) {
-		if (x < 0 || y < 0) {
-			x = window.getScreenWidth() / 2.0;
-			y = window.getScreenHeight() / 2.0;
-		}
+	/**
+	 * Puts the cursor in the middle of the window, as it is now. Called whenever a menu opens: a position kept from
+	 * an earlier menu may belong to an older window size (a guest window is tiled after its first screen).
+	 */
+	public static void centre(Window window) {
+		x = window.getScreenWidth() / 2.0;
+		y = window.getScreenHeight() / 2.0;
 	}
 
 	public static void moveTo(double newX, double newY, Window window) {

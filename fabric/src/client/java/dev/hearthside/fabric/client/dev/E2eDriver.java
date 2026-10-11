@@ -35,6 +35,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.animal.pig.Pig;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.util.HttpUtil;
 import net.minecraft.world.level.GameType;
@@ -97,6 +102,9 @@ public final class E2eDriver {
 				step("M1 inventory: X takes half a stack, A places it", this::inventoryClicks);
 				step("M2 closing a menu with B does not leak sneak into the world", this::closeWithoutSneakLeak);
 				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
+				step("A1 RT punches a mob", this::triggerPunches);
+				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
+				step("A3 LT places a block", this::triggerPlaces);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
 				step("P9 Player2 leaves", this::player2Leaves);
 			}
@@ -218,6 +226,14 @@ public final class E2eDriver {
 		// screen; controller input only drives the player once that screen is gone.
 		waitFor("satellite in world mode", Duration.ofSeconds(60),
 				() -> satelliteLog().contains("hearthside controller: world mode"));
+		// Every controller step runs with the guest window unfocused, as in real play.
+		checkGuestUnfocused();
+	}
+
+	private void checkGuestUnfocused() throws IOException {
+		String log = satelliteLog();
+		check(log.contains("window focused: false") && !log.contains("window focused: true"),
+				"guest window never had OS focus");
 	}
 
 	/** A 21×21 barrier platform high above the terrain, so walking tests never hit a wall. */
@@ -345,6 +361,79 @@ public final class E2eDriver {
 				() -> count("hearthside controller: menu mode (pausescreen)") > pausesBefore);
 		press(102, PadButton.B);
 		waitFor("pause menu closed", Duration.ofSeconds(10), () -> count("hearthside controller: world mode") > worldBefore);
+	}
+
+	/** Survival on a cleared platform, looking 30° down at the block two ahead (0 250 2). */
+	private void aimAtTarget(String... setup) throws Exception {
+		List<String> commands = new ArrayList<>(List.of(
+				"gamemode survival Player2",
+				"fill -10 249 -10 10 249 10 minecraft:barrier",
+				"fill -10 250 -10 10 253 10 minecraft:air",
+				"kill @e[type=!player]"));
+		commands.addAll(List.of(setup));
+		commands.add("tp Player2 0.5 250 0.5 0 30");
+		server(commands.toArray(String[]::new));
+		Thread.sleep(1000);
+	}
+
+	private void triggerPunches() throws Exception {
+		aimAtTarget("summon minecraft:pig 0.5 250 2.5 {NoAI:1b}");
+		ServerPlayer guest = guest("Player2");
+		AABB around = new AABB(-3, 249, -3, 4, 253, 5);
+		Callable<Float> pigHealth = () -> minecraft.getSingleplayerServer().submit(() -> {
+			List<Pig> pigs = guest.level().getEntitiesOfClass(Pig.class, around);
+			return pigs.isEmpty() ? -1f : pigs.getFirst().getHealth();
+		}).join();
+		float before = pigHealth.call();
+		check(before > 0, "pig spawned in front of the guest");
+		pull(102, false);
+		waitFor("pig hurt", Duration.ofSeconds(5), () -> pigHealth.call() < before);
+	}
+
+	private void triggerMines() throws Exception {
+		BlockPos target = new BlockPos(0, 250, 2);
+		aimAtTarget("setblock 0 250 2 minecraft:dirt");
+		ServerPlayer guest = guest("Player2");
+		// Vanilla only keeps mining while the mouse is grabbed, which normally needs focus.
+		checkGuestUnfocused();
+		PADS.set(102, new InputFrame(0, 0, 0, 0, 0, 0, 0, 1));
+		try {
+			waitFor("dirt mined", Duration.ofSeconds(5), () -> blockAt(guest, target).isAir());
+		} finally {
+			PADS.set(102, InputFrame.NEUTRAL);
+		}
+	}
+
+	private void triggerPlaces() throws Exception {
+		// Looking 30° down from the platform, the ray meets the barrier top at about z = 3.3.
+		BlockPos expected = new BlockPos(0, 250, 3);
+		aimAtTarget("item replace entity Player2 weapon.mainhand with minecraft:dirt 4");
+		ServerPlayer guest = guest("Player2");
+		pull(102, true);
+		waitFor("dirt placed", Duration.ofSeconds(5), () -> blockAt(guest, expected).is(Blocks.DIRT));
+		server("gamemode creative Player2");
+	}
+
+	private BlockState blockAt(ServerPlayer player, BlockPos pos) {
+		return minecraft.getSingleplayerServer().submit(() -> player.level().getBlockState(pos)).join();
+	}
+
+	/** Pulls and releases a trigger. */
+	private void pull(int pad, boolean left) throws InterruptedException {
+		PADS.set(pad, new InputFrame(0, 0, 0, 0, 0, 0, left ? 1 : 0, left ? 0 : 1));
+		Thread.sleep(250);
+		PADS.set(pad, InputFrame.NEUTRAL);
+		Thread.sleep(100);
+	}
+
+	private void server(String... commands) {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		server.submit(() -> {
+			var source = server.createCommandSourceStack().withSuppressedOutput();
+			for (String command : commands) {
+				server.getCommands().performPrefixedCommand(source, command);
+			}
+		}).join();
 	}
 
 	private int count(String needle) throws IOException {

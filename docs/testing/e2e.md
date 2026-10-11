@@ -45,8 +45,26 @@ barrier platform at y = 249 so terrain never blocks it.
 | M1 | Survival inventory: X takes half a 10-stack (server sees 5 on the cursor), A puts it back | PASS — and FAILS with the old GLFW button numbers |
 | M2 | Holding B to close the inventory does not leave the guest sneaking | PASS |
 | M3 | START opens the guest's pause menu, B closes it | PASS |
+| A1 | RT punches a pig in front of the guest (survival) | PASS — FAILED before the fix |
+| A2 | Holding RT mines dirt, with the guest window unfocused | PASS — FAILED before the fix |
+| A3 | LT places a block | PASS |
 | P8 | Satellite received the PlayStation pad style | PASS |
 | P9 | `Player2` leaves | PASS |
+
+Every controller step runs with the guest window **unfocused**, as in real play: the `e2eClient` run sets
+`HEARTHSIDE_E2E_GUEST_UNFOCUSED=1`, which guests inherit and which makes their window report no focus (P1 checks it).
+Test windows open with `SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0`, so a run doesn't take your keyboard (the host window can
+still flash forward for under a second as it starts).
+
+Found after the first real-controller test (2026-10-11):
+- RT never attacked: attack and use were only held down, but vanilla starts an attack from a key *click*. They now
+  also click on the press edge, like a mouse button.
+- Holding RT never mined in an unfocused window: vanilla only continues an attack while the mouse is grabbed, which
+  needs focus. A controller driving the client now counts as grabbed for that one check (no OS cursor capture).
+- The menu cursor kept its first position, which could belong to the guest's untiled 854×480 window, so the D-pad
+  hop landed on an empty crafting slot. The cursor is now centred in the current window whenever a menu opens.
+- A guest window could take focus when it opened. Guests now open with `SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0` and a
+  non-focusable window. Windows' foreground record confirmed no guest window took the foreground across the runs.
 
 Found while building this:
 - Satellites never see OS input, so Minecraft capped them at its 10 fps "away from keyboard" frame rate. Controller
