@@ -8,6 +8,8 @@ import dev.hearthside.core.protocol.ControlCodec;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.compositor.FrameExporter;
+import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.InputApplier;
@@ -85,6 +87,9 @@ public final class SatelliteBoot {
 			minecraft.execute(minecraft::stop);
 			return;
 		}
+		if (!Presentation.satelliteTiled()) {
+			FrameExporter.install(minecraft, connection);
+		}
 		connection.onMessage(message -> handle(minecraft, message));
 		connection.onClose(() -> {
 			HearthsideMod.LOGGER.info("Hearthside host closed the control channel; quitting");
@@ -96,7 +101,14 @@ public final class SatelliteBoot {
 
 	private static void handle(Minecraft minecraft, ControlMessage message) {
 		switch (message) {
-			case ControlMessage.SetViewport m -> minecraft.execute(() -> WindowPlacer.place(minecraft.getWindow(), m.rect()));
+			case ControlMessage.SetViewport m -> minecraft.execute(() -> {
+				FrameExporter exporter = FrameExporter.instance();
+				if (exporter != null) {
+					exporter.onViewport(m.rect(), m.refreshHz());
+				} else {
+					WindowPlacer.place(minecraft.getWindow(), m.rect());
+				}
+			});
 			case ControlMessage.JoinWorld m -> minecraft.execute(() -> ConnectScreen.startConnecting(new TitleScreen(), minecraft,
 					new ServerAddress("127.0.0.1", m.port()),
 					new ServerData("Hearthside", "127.0.0.1:" + m.port(), ServerData.Type.LAN), false, null));

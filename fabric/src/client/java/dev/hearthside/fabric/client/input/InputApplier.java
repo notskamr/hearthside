@@ -213,13 +213,13 @@ public final class InputApplier {
 		double x = VirtualCursor.x(), y = VirtualCursor.y();
 		double mouseX = minecraft.mouseHandler.xpos(), mouseY = minecraft.mouseHandler.ypos();
 		if (x != mouseX || y != mouseY) {
-			minecraft.mouseHandler.onMove(handle, x, y, x - mouseX, y - mouseY);
+			SyntheticMouse.run(() -> minecraft.mouseHandler.onMove(handle, x, y, x - mouseX, y - mouseY));
 		}
 		button(handle, intent, MenuAction.PICK_PLACE, InputConstants.MOUSE_BUTTON_LEFT, 0);
 		button(handle, intent, MenuAction.TAKE_HALF, InputConstants.MOUSE_BUTTON_RIGHT, 0);
 		button(handle, intent, MenuAction.QUICK_MOVE, InputConstants.MOUSE_BUTTON_LEFT, InputConstants.MOD_SHIFT);
 		if (intent.scroll() != 0) {
-			minecraft.mouseHandler.onScroll(handle, 0, intent.scroll());
+			SyntheticMouse.run(() -> minecraft.mouseHandler.onScroll(handle, 0, intent.scroll()));
 		}
 		if (intent.down().contains(MenuAction.CLOSE) && minecraft.gui.screen() == screen && screen.shouldCloseOnEsc()) {
 			screen.onClose();
@@ -228,10 +228,10 @@ public final class InputApplier {
 
 	private void button(long handle, MenuIntent intent, MenuAction action, int button, int modifiers) {
 		if (intent.down().contains(action)) {
-			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(button, modifiers), PRESS);
+			SyntheticMouse.run(() -> minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(button, modifiers), PRESS));
 		}
 		if (intent.up().contains(action)) {
-			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(button, modifiers), RELEASE);
+			SyntheticMouse.run(() -> minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(button, modifiers), RELEASE));
 		}
 	}
 
