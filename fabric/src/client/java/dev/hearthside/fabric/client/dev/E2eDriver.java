@@ -147,6 +147,7 @@ public final class E2eDriver {
 				step("P5 unplug pauses, replug resumes", this::unplugAndReplug);
 				step("P6 satellite input-isolation boot line present (behaviour checked by hand)", this::satelliteIgnoresOsInput);
 				step("M1 inventory: X takes half a stack, A places it", this::inventoryClicks);
+				step("H2 button hints draw glyph sprites for the guest's controller family", this::hintsUseGlyphSprites);
 				step("M2 closing a menu with B does not leak sneak into the world", this::closeWithoutSneakLeak);
 				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
 				step("A1 RT punches a mob", this::triggerPunches);
@@ -584,6 +585,13 @@ public final class E2eDriver {
 		});
 		check(missing.isEmpty(), "every sprite is in the GUI atlas (missing " + missing.size() + ": "
 				+ missing.stream().limit(6).toList() + ")");
+	}
+
+	private void hintsUseGlyphSprites() throws Exception {
+		// The guest's game (a fake PlayStation pad) logs each glyph sprite the first time it draws one.
+		waitFor("a PlayStation glyph drawn in the guest's hints", Duration.ofSeconds(10),
+				() -> satelliteLog().contains("hearthside hint glyph hearthside:glyph/playstation/"));
+		check(!satelliteLog().contains("hearthside hint glyph hearthside:glyph/xbox/"), "no other family's glyphs");
 	}
 
 	private void titleCoopOpensLobby() throws Exception {

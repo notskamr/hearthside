@@ -91,6 +91,7 @@ public final class InputApplier {
 			return;
 		}
 		InputFrame frame = current.get();
+		ButtonGuideRenderer.onFrame(frame);
 		long now = System.nanoTime();
 		float dt = lastFrameNanos == 0 ? 0f : (now - lastFrameNanos) / 1e9f;
 		lastFrameNanos = now;
