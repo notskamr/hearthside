@@ -61,7 +61,7 @@ class ProfileStoreTest {
 
 	@Test
 	void newerSchemaIsRefusedAndFileUntouched() throws Exception {
-		String newer = "{\"schemaVersion\":3,\"profiles\":[]}";
+		String newer = "{\"schemaVersion\":4,\"profiles\":[]}";
 		Files.writeString(file, newer);
 		assertThatThrownBy(store::load).isInstanceOf(UnsupportedSchemaException.class);
 		assertThat(Files.readString(file)).isEqualTo(newer);
@@ -108,7 +108,7 @@ class ProfileStoreTest {
 
 	@Test
 	void saveRefusesToOverwriteNewerSchema() throws Exception {
-		String newer = "{\"schemaVersion\":3,\"profiles\":[]}";
+		String newer = "{\"schemaVersion\":4,\"profiles\":[]}";
 		Files.writeString(file, newer);
 		var a = new GuestProfile(UUID.randomUUID(), "Alice", SkinRef.defaultSkin("alex"), null);
 		assertThatThrownBy(() -> store.save(List.of(a))).isInstanceOf(UnsupportedSchemaException.class);
@@ -138,7 +138,7 @@ class ProfileStoreTest {
 	void versionOneIsUpgradedOnSave() throws Exception {
 		Files.writeString(file, V1_FILE);
 		store.save(store.load());
-		assertThat(Files.readString(file)).contains("\"schemaVersion\": 2").contains("\"controls\"");
+		assertThat(Files.readString(file)).contains("\"schemaVersion\": 3").contains("\"controls\"");
 	}
 
 	@Test
@@ -179,7 +179,7 @@ class ProfileStoreTest {
 
 	@Test
 	void versionThreeIsRefused() throws Exception {
-		Files.writeString(file, "{\"schemaVersion\":3,\"profiles\":[]}");
+		Files.writeString(file, "{\"schemaVersion\":4,\"profiles\":[]}");
 		assertThatThrownBy(store::loadFile).isInstanceOf(UnsupportedSchemaException.class);
 	}
 }
