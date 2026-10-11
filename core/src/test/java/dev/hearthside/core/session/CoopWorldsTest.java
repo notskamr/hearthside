@@ -17,11 +17,21 @@ class CoopWorldsTest {
 	}
 
 	@Test
-	void playedRecordsAndMergesNames() throws Exception {
+	void aSessionCollectsEveryoneWhoPlayed() throws Exception {
+		// Ember left before Birch arrived: both still played this session.
 		var store = store();
-		store.played("farm", 1000, List.of("Ember"));
-		store.played("farm", 2000, List.of("Birch", "Ember"));
+		store.played("farm", 1000, List.of("Ember"), 900);
+		store.played("farm", 2000, List.of("Birch"), 900);
 		assertThat(store.load()).containsExactly(new CoopWorld("farm", 2000, List.of("Ember", "Birch")));
+	}
+
+	@Test
+	void playedKeepsTheLatestSessionsNames() throws Exception {
+		// "Last played with" means the last session, not everyone who ever played.
+		var store = store();
+		store.played("farm", 1000, List.of("Ember", "Birch"), 900);
+		store.played("farm", 5000, List.of("Moss"), 4000);
+		assertThat(store.load().getFirst().players()).containsExactly("Moss");
 	}
 
 	@Test

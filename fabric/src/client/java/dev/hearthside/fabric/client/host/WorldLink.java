@@ -31,6 +31,8 @@ final class WorldLink {
 	private volatile int gamePort;
 	/** The control connection each guest was last sent in on. Guarded by this. */
 	private final Map<Integer, ControlConnection> sentIn = new HashMap<>();
+	/** When this world opened for the party: the start of the session the co-op record collects names for. */
+	private final long openedAt = System.currentTimeMillis();
 	/** Names of the players in the world, refreshed on the server thread. */
 	private volatile Set<String> playerNames = Set.of();
 
@@ -74,6 +76,10 @@ final class WorldLink {
 	}
 
 	/** The world's folder name (its level id). */
+	long openedAt() {
+		return openedAt;
+	}
+
 	String levelId() {
 		return server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString();
 	}

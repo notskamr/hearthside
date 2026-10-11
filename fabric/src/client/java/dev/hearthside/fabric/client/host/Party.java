@@ -960,7 +960,7 @@ public final class Party {
 			}
 		});
 		try {
-			WorldsScreen.coopStore(gameDir).played(link.levelId(), System.currentTimeMillis(), names);
+			WorldsScreen.coopStore(gameDir).played(link.levelId(), System.currentTimeMillis(), names, link.openedAt());
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not record the co-op world", e);
 		}

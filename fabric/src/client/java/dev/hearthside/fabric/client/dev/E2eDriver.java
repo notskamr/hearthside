@@ -1043,6 +1043,15 @@ public final class E2eDriver {
 		check(onRender(() -> minecraft.getSingleplayerServer().getWorldData().getLevelName()).equals(name),
 				"the world has the name typed");
 		check(onRender(() -> minecraft.player.isCreative()), "and is Creative");
+		// Mods' data (recipes, tags, worldgen) comes with the quick path too: every required pack is selected.
+		log("   data packs: " + onRender(() -> minecraft.getSingleplayerServer().getPackRepository().getSelectedIds()));
+		check(onRender(() -> {
+			var packs = minecraft.getSingleplayerServer().getPackRepository();
+			var selected = packs.getSelectedIds();
+			return packs.getAvailablePacks().stream().filter(net.minecraft.server.packs.repository.Pack::isRequired)
+					.allMatch(pack -> selected.contains(pack.getId()))
+					&& selected.stream().anyMatch(id -> !id.equals("vanilla"));
+		}), "the world has every mod's data pack");
 		// Clean up: leave, delete it, and go back to the lobby for the next step.
 		onRender(() -> {
 			minecraft.disconnectFromWorld(Component.literal("E2E"));

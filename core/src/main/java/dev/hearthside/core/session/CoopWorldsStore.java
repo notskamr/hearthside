@@ -59,14 +59,25 @@ public final class CoopWorldsStore {
 		}
 	}
 
-	/** Records that these players played this world now; names already recorded keep their place. */
+	/** Records that these players played this world now, as a session of its own. */
 	public void played(String levelId, long when, Collection<String> players) throws IOException {
+		played(levelId, when, players, when);
+	}
+
+	/**
+	 * Records that these players played this world now. Within one session (the world opened at {@code sessionStart})
+	 * the names add up, keeping their place; a new session starts the list afresh, so "Last played with" names the
+	 * last session's players.
+	 */
+	public void played(String levelId, long when, Collection<String> players, long sessionStart) throws IOException {
 		List<CoopWorld> worlds = new ArrayList<>(load());
 		Set<String> names = new LinkedHashSet<>();
 		long lastPlayed = when;
 		for (CoopWorld world : worlds) {
 			if (world.levelId().equals(levelId)) {
-				names.addAll(world.players());
+				if (world.lastPlayed() >= sessionStart) {
+					names.addAll(world.players());
+				}
 				lastPlayed = Math.max(when, world.lastPlayed());
 			}
 		}
