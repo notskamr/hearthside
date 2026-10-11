@@ -162,6 +162,7 @@ public final class E2eDriver {
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
 			step("C1 guest window is hidden", this::guestWindowHidden);
 			step("C2 guest frames reach the host's window", this::guestFramesComposited);
+			step("O1 the overlay pass draws over every view", this::overlayDrawsOverViews);
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
 			step("C5 copy transport works", this::copyTransportWorks);
@@ -246,6 +247,25 @@ public final class E2eDriver {
 	private void guestFramesComposited() throws Exception {
 		waitInWorld(1);
 		waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+	}
+
+	private void overlayDrawsOverViews() throws Exception {
+		int[] scale = {0};
+		dev.hearthside.fabric.client.compositor.OverlayLayer square = (g, context) -> {
+			g.fill(20, 20, 26, 26, 0xFF00FFFF);
+			scale[0] = context.guiScale();
+		};
+		dev.hearthside.fabric.client.compositor.OverlayPass.register(square);
+		try {
+			waitFor("the overlay layer drawn", Duration.ofSeconds(5), () -> scale[0] > 0);
+			long mark = hostLogLength();
+			Compositor.e2eProbePoint = new int[] {23 * scale[0], 23 * scale[0]};
+			waitFor("the overlay over the views", Duration.ofSeconds(10),
+					() -> hostLogSince(mark).contains("hearthside overlay probe rgb=00ffff"));
+		} finally {
+			dev.hearthside.fabric.client.compositor.OverlayPass.unregister(square);
+			Compositor.e2eProbePoint = null;
+		}
 	}
 
 	private void hostWindowUntouched() throws Exception {

@@ -76,6 +76,7 @@ public final class Compositor {
 	private final boolean probe = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
 	private final ByteBuffer probePixel = BufferUtils.createByteBuffer(4);
 	private Rect hostViewport;
+	private final OverlayBlitter overlayBlitter = new OverlayBlitter();
 	private double screenPerFb = 1.0;
 	private int layoutWidth, layoutHeight;
 	private int readFbo;
@@ -132,6 +133,7 @@ public final class Compositor {
 		c.imports.clear();
 		c.retired.forEach(Import::close);
 		c.retired.clear();
+		c.overlayBlitter.close();
 		if (c.readFbo != 0) {
 			glDeleteFramebuffers(c.readFbo);
 		}
@@ -145,6 +147,23 @@ public final class Compositor {
 			int fbWidth = minecraft.getWindow().queryFramebufferSize().width();
 			return fbWidth < 1 ? 1.0 : (double) w.get(0) / fbWidth;
 		}
+	}
+
+	/** The window's framebuffer size, as last presented (0 before the first frame). */
+	public int windowWidth() {
+		return layoutWidth;
+	}
+
+	public int windowHeight() {
+		return layoutHeight;
+	}
+
+	/** Every view as drawn now, in window pixels from the top-left: player 1 (seat 0), then the guests. */
+	public java.util.List<dev.hearthside.core.layout.ViewFrame> overlayViews() {
+		java.util.List<dev.hearthside.core.layout.ViewFrame> views = new java.util.ArrayList<>();
+		views.add(new dev.hearthside.core.layout.ViewFrame(0, hostViewport, 1f));
+		new java.util.TreeMap<>(guestViewports).forEach((seat, rect) -> views.add(new dev.hearthside.core.layout.ViewFrame(seat, rect, 1f)));
+		return views;
 	}
 
 	public Rect hostViewport() {
@@ -230,6 +249,11 @@ public final class Compositor {
 				blit(imp.transport.glTexture(imp.held), imp.transport.width(), imp.transport.height(), fitted, swapHeight);
 			}
 		}
+		int overlay = OverlayPass.textureId();
+		if (overlay != 0) {
+			// Hearthside's GUI over every view: cards, toasts, name tags, the party panel.
+			overlayBlitter.draw(overlay, swapWidth, swapHeight);
+		}
 		for (Import imp : imports.values()) {
 			for (long[] r : imp.releases) {
 				if (r[1] == 0) {
@@ -291,6 +315,9 @@ public final class Compositor {
 		costWindowStart = now;
 	}
 
+	/** E2E: a window point (pixels from the top-left) whose composited colour is logged too, or null. */
+	public static volatile int[] e2eProbePoint;
+
 	/** E2E: logs the composited colour just inside each guest viewport's top-left corner, once a second. */
 	private void probeGuests(int swapHeight) {
 		long now = System.nanoTime();
@@ -309,6 +336,12 @@ public final class Compositor {
 			glReadPixels(fitted.x() + 4, swapHeight - (fitted.y() + 4) - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probePixel);
 			HearthsideMod.LOGGER.info("Hearthside compositor probe player={} gen={} rgb={}", guest.getKey() + 1, imp.generation,
 					String.format("%02x%02x%02x", probePixel.get(0) & 0xFF, probePixel.get(1) & 0xFF, probePixel.get(2) & 0xFF));
+		}
+		int[] point = e2eProbePoint;
+		if (point != null) {
+			glReadPixels(point[0], swapHeight - point[1] - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probePixel);
+			HearthsideMod.LOGGER.info("Hearthside overlay probe rgb={}", String.format("%02x%02x%02x", probePixel.get(0) & 0xFF,
+					probePixel.get(1) & 0xFF, probePixel.get(2) & 0xFF));
 		}
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
 	}

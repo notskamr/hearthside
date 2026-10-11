@@ -174,6 +174,7 @@ public final class Party {
 			hostColor = file.host().color();
 			hostReduceMotion = file.host().settings().reduceMotion();
 			ButtonGuideRenderer.setReduceMotion(hostReduceMotion);
+			dev.hearthside.fabric.client.compositor.OverlayPass.setReduceMotion(hostReduceMotion);
 			hostControllerGuid = file.host().preferredControllerGuid();
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not read the host's controls; using Bedrock defaults", e);
