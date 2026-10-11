@@ -183,7 +183,8 @@ public final class E2eDriver {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
 				step("B3 the join prompt expires after 5 s", this::joinPromptExpires);
-				step("D1 a joining guest's view shows the card, never its loading screens, until it is in the world", this::joiningShowsTheCard);
+				step("D2 a newcomer picks their profile inside their own view", this::pickInOwnView);
+			step("D1 a joining guest's view shows the card, never its loading screens, until it is in the world", this::joiningShowsTheCard);
 				step("P1 A, A on a new controller adds Player2", this::startJoins);
 				step("P2 left stick moves the guest", this::stickMoves);
 				step("P3 right stick turns the guest", this::stickTurns);
@@ -658,7 +659,8 @@ public final class E2eDriver {
 		ProfileStore store = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
 		List<GuestProfile> profiles = new ArrayList<>(store.load());
 		profiles.removeIf(p -> p.name().equalsIgnoreCase("Player2"));
-		profiles.add(new GuestProfile(UUID.randomUUID(), "Player2", SkinRef.defaultSkin("alex"), null,
+		// Last used on the drop-in pad, so its card shows Player2 first.
+		profiles.add(new GuestProfile(UUID.randomUUID(), "Player2", SkinRef.defaultSkin("alex"), PAD_GUID,
 				ControlScheme.BEDROCK.withBinding(Action.JUMP, Control.Y)));
 		store.save(profiles);
 	}
@@ -1603,12 +1605,27 @@ public final class E2eDriver {
 		return last;
 	}
 
-	private void joiningShowsTheCard() throws Exception {
+	private void pickInOwnView() throws Exception {
 		Thread.sleep(5500); // let B3's prompt expire
 		joinMark = hostLogLength();
 		press(101, PadButton.A);
 		press(101, PadButton.A);
-		Thread.sleep(2500);
+		waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+		check(onRender(() -> Party.current().viewPhaseOf(1)) == dev.hearthside.core.session.ViewPhase.PICKING,
+				"their view is picking a profile");
+		check(onRender(() -> cardShows(1)).equals("Player2"), "the card shows the profile last used on this controller");
+		Thread.sleep(800);
+		windowShot("drop-in-picker");
+		press(101, PadButton.DPAD_RIGHT);
+		check(!onRender(() -> cardShows(1)).equals("Player2"), "their controller drives the card in their view");
+		pressUntil(101, PadButton.DPAD_LEFT, 8, () -> cardShows(1).equals("Player2"));
+		press(101, PadButton.A);
+		check(onRender(() -> card(1) == null
+				&& Party.current().viewPhaseOf(1) == dev.hearthside.core.session.ViewPhase.JOINING), "A picks it: joining");
+	}
+
+	private void joiningShowsTheCard() throws Exception {
+		Thread.sleep(1500);
 		windowShot("drop-in-joining");
 		waitInWorld(1);
 		String log = hostLogSince(joinMark);

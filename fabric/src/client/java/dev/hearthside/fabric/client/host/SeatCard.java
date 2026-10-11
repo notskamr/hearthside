@@ -43,6 +43,8 @@ public final class SeatCard {
 	private GuestProfile keep;
 	/** Opened with X on a ready card: B in More goes straight back to the ready seat. */
 	private final boolean moreOnly;
+	/** False mid-game: X does nothing (More's screens would take over player 1's view). */
+	private boolean moreAllowed = true;
 	private int moreFocus;
 	private final NavRepeater horizontal = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
 	private final NavRepeater vertical = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
@@ -121,7 +123,7 @@ public final class SeatCard {
 		if (down(pressed, PadButton.Y)) {
 			carousel.next();
 		}
-		if (down(pressed, PadButton.X)) {
+		if (down(pressed, PadButton.X) && moreAllowed) {
 			stage = Stage.MORE;
 			moreFocus = 0;
 			return Outcome.NONE;
@@ -299,6 +301,11 @@ public final class SeatCard {
 
 	private static boolean down(int pressed, PadButton button) {
 		return (pressed & InputFrame.buttons(button)) != 0;
+	}
+
+	/** Mid-game: no More on this card. */
+	public void noMore() {
+		moreAllowed = false;
 	}
 
 	/** More's entries: Controls for a profile (not for New), then Manage profiles. */

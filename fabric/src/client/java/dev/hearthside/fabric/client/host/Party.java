@@ -859,6 +859,9 @@ public final class Party {
 		}
 		slot.profile = profile;
 		cards.remove(index);
+		if (world != null && phases.phase(index).orElse(null) == dev.hearthside.core.session.ViewPhase.PICKING) {
+			phases.joining(index, System.nanoTime());
+		}
 		if (controller != null) {
 			apply(flow.profileChosen(controller, profile.id()));
 		}
@@ -982,6 +985,35 @@ public final class Party {
 		return phases.cardCover(seat, now, reduceMotion);
 	}
 
+	/** What a seat's view shows now (for the E2E and the overlay). */
+	public dev.hearthside.core.session.ViewPhase viewPhaseOf(int seat) {
+		return viewPhase(seat);
+	}
+
+	/** A picking newcomer's card colour: quick setup's pick, else the profile on their carousel, else their seat's. */
+	int pickerColour(int seat) {
+		SeatCard card = cards.get(seat);
+		if (card != null && card.setup() != null) {
+			return card.setup().color();
+		}
+		if (card != null && card.carousel().current() instanceof ProfileCarousel.Entry.Profile(GuestProfile p)) {
+			return displayColor(seat, p.color());
+		}
+		return colorOf(seat);
+	}
+
+	/** A picking newcomer's skin, as their card shows it. */
+	net.minecraft.world.entity.player.PlayerSkin pickerSkin(int seat) {
+		SeatCard card = cards.get(seat);
+		dev.hearthside.core.profile.SkinRef skin = null;
+		if (card != null && card.setup() != null) {
+			skin = card.setup().skin();
+		} else if (card != null && card.carousel().current() instanceof ProfileCarousel.Entry.Profile(GuestProfile p)) {
+			skin = p.skin();
+		}
+		return LobbyScreen.skin(skin);
+	}
+
 	dev.hearthside.core.session.ViewPhase viewPhase(int seat) {
 		return phases.phase(seat).orElse(dev.hearthside.core.session.ViewPhase.JOINING);
 	}
@@ -1030,17 +1062,9 @@ public final class Party {
 						SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal("New controller"),
 						Component.literal("Press A again to join")));
 				case JoinFlow.Effect.OpenProfilePicker pick -> {
-					if (world == null) {
-						// In the lobby the player picks on their card, which opens once their seat's game starts.
-						pendingCards.add(pick.controller());
-					} else {
-						// In a world (drop-in), the profile last used on this controller (the in-view picker is 5c).
-						GuestProfile profile = profileFor(guidOf.get(pick.controller()));
-						if (profile != null) {
-							chosen.put(pick.controller(), profile);
-							flow.profileChosen(pick.controller(), profile.id());
-						}
-					}
+					// The player picks on their card, which opens once their seat's game starts: on the lobby's card, or
+					// (dropping in) inside their own new view while everyone else plays on.
+					pendingCards.add(pick.controller());
 				}
 				case JoinFlow.Effect.StartGuestGame start -> startForController(start.controller());
 				case JoinFlow.Effect.StopGuestGame stop -> {
@@ -1073,7 +1097,14 @@ public final class Party {
 			int index = startGuest(profile);
 			controllerOfSlot.put(index, controller);
 			if (card) {
-				cards.put(index, newCard(index, controller, null));
+				SeatCard newCard = newCard(index, controller, null);
+				cards.put(index, newCard);
+				if (world != null) {
+					// Mid-game, More's screens would take over player 1's view: the card offers just the profiles.
+					newCard.noMore();
+					// Their view shows this card (the layout may already have run, inside startGuest, before it existed).
+					phases.picking(index, System.nanoTime());
+				}
 			}
 			HostInput currentInput = input;
 			if (currentInput != null) {
@@ -1269,7 +1300,11 @@ public final class Party {
 			for (Slot guest : guests) {
 				if (phases.phase(guest.index).isEmpty()) {
 					// Their card shows until their game says it is in the world, never its loading screens.
-					phases.joining(guest.index, now);
+					if (cards.containsKey(guest.index)) {
+						phases.picking(guest.index, now);
+					} else {
+						phases.joining(guest.index, now);
+					}
 				}
 			}
 			Compositor.activate(minecraft, this::afterGuestsChanged,

@@ -54,13 +54,10 @@ public final class CardPainter {
 		} else {
 			board(g, view, cover);
 		}
-		int cw = Math.clamp(Math.round(view.width() * 0.42f), 64, 120);
-		int ch = Math.min(Math.round(cw * 1.45f), view.height() - 16);
-		int cx = view.x() + (view.width() - cw) / 2;
-		int cy = view.y() + (view.height() - ch) / 2;
+		Rect card = cardRect(view);
+		int cw = card.width(), ch = card.height(), cx = card.x(), cy = card.y();
 		int a = alpha(cover);
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.CARD_FRAME, cx - 3, cy - 3, cw + 6, ch + 6, a << 24 | who.colour());
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.PARCHMENT_CARD, cx, cy, cw, ch, a << 24 | 0xFFFFFF);
+		cardBack(g, card, who.colour(), cover);
 		int centre = cx + cw / 2;
 		String name = font.plainSubstrByWidth(who.name(), cw - 8);
 		g.text(font, Component.literal(name), centre - font.width(name) / 2, cy + 7, a << 24 | (HearthDraw.INK & 0xFFFFFF), false);
@@ -87,6 +84,28 @@ public final class CardPainter {
 		}
 	}
 
+	/** Where a player's card sits in their view: a portrait card, centred, scaled to the view. */
+	public static Rect cardRect(Rect view) {
+		int cw = Math.clamp(Math.round(view.width() * 0.42f), 64, 120);
+		int ch = Math.min(Math.round(cw * 1.45f), view.height() - 16);
+		return new Rect(view.x() + (view.width() - cw) / 2, view.y() + (view.height() - ch) / 2, cw, ch);
+	}
+
+	/** The card itself: parchment in a frame of the player's colour (0xRRGGBB), at {@code alpha}. */
+	public static void cardBack(GuiGraphicsExtractor g, Rect card, int colour, float alpha) {
+		int a = alpha(alpha);
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.CARD_FRAME, card.x() - 3, card.y() - 3, card.width() + 6,
+				card.height() + 6, a << 24 | (colour & 0xFFFFFF));
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.PARCHMENT_CARD, card.x(), card.y(), card.width(), card.height(),
+				a << 24 | 0xFFFFFF);
+	}
+
+	/** One of a card's button hints: the glyph in that player's controller family, then what it does, in ink. */
+	public static void hint(GuiGraphicsExtractor g, Font font, Control control, PadStyle style, String label, int x, int y) {
+		int gw = HearthDraw.glyph(g, control, style, x, y);
+		g.text(font, Component.literal(label), x + gw + 3, y + 2, HearthDraw.INK, false);
+	}
+
 	/** Three embers pulsing in turn (steady with reduce motion). */
 	private static void embers(GuiGraphicsExtractor g, int centre, int y, int a, long nanos, boolean reduceMotion) {
 		for (int i = 0; i < 3; i++) {
@@ -98,7 +117,8 @@ public final class CardPainter {
 		}
 	}
 
-	private static void skin(GuiGraphicsExtractor g, PlayerSkin skin, int x, int y, int width, int height, float rotationY) {
+	/** A player's skin, standing, turned {@code rotationY} degrees. */
+	public static void skin(GuiGraphicsExtractor g, PlayerSkin skin, int x, int y, int width, int height, float rotationY) {
 		if (wide == null) {
 			var models = Minecraft.getInstance().getEntityModels();
 			wide = new Model.Simple(models.bakeLayer(ModelLayers.PLAYER), RenderTypes::entityTranslucent);

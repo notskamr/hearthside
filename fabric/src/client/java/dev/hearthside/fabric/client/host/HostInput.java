@@ -141,6 +141,9 @@ final class HostInput implements Runnable {
 		update.frames().forEach((player, frame) -> {
 			if (player == 0) {
 				hostApplier.accept(frame);
+			} else if (session.hasSeatCard(player)) {
+				// Dropping in: their controller drives the card in their view, not their game (still loading).
+				session.seatCardInput(player, frame, now);
 			} else if (!Objects.equals(lastSent.get(player), withoutSequence(frame))
 					|| now - lastSentAt.getOrDefault(player, 0L) >= RESEND_NANOS) {
 				session.sendToGuest(player, new ControlMessage.Input(frame));
