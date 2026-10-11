@@ -33,7 +33,7 @@ Switches (Gradle properties, read by the `e2eClient` run in `fabric/build.gradle
 | Property | Effect |
 |---|---|
 | `-Pe2eOnly=<ids>` | `-Dhearthside.e2e.only=<ids>`: a focused run (below) |
-| `-Pe2eBackend=opengl\|vulkan` | the host's graphics backend (`--graphicsBackend <b>`) |
+| `-Pe2eBackend=opengl\|vulkan` | the host's graphics backend (`--graphicsBackend <b>`); `vulkan` also disables Iris (`-Dfabric.debug.disableModIds=iris`), which is OpenGL-only and aborts the JVM on Vulkan |
 | `-Pe2eGuestBackend=opengl\|vulkan` | the guests' graphics backend (`-Dhearthside.e2e.guestBackend=<b>`) |
 | `-Pe2eValidation=true` | Minecraft's Vulkan validation (`--vulkanValidation`) |
 

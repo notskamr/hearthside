@@ -3,6 +3,10 @@
 	"package": "dev.hearthside.fabric.client.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"backend.FrontendGpuDeviceAccessor",
+		"backend.GlDeviceAccessor",
+		"backend.VulkanFeatureSetsMixin",
+		"backend.VulkanGpuTextureImportMixin",
 		"ContainerScreenAccessor",
 		"ContinueAttackMixin",
 		"DefaultPlayerSkinInvoker",

@@ -61,6 +61,10 @@ loom {
 			def backend = project.findProperty('e2eBackend')
 			if (backend) {
 				programArgs '--graphicsBackend', e2eBackendName(backend, 'e2eBackend')
+				if (backend == 'vulkan') {
+					// Iris 1.11.7 is OpenGL-only: it calls OpenGL while Minecraft starts and aborts the JVM on Vulkan.
+					vmArg '-Dfabric.debug.disableModIds=iris'
+				}
 			}
 			def guestBackend = project.findProperty('e2eGuestBackend')
 			if (guestBackend) {
