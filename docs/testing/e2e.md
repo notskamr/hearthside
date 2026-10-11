@@ -15,6 +15,47 @@ confirm the satellite pid exits.
 
 Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 
+## Running
+
+`tools/e2e/run-e2e.sh <log name> [-P…]` runs the E2E from Git Bash on Windows or from a macOS shell:
+
+- It finds the repository from its own location. It uses `JAVA_HOME` if set, else sources `.superpowers/env.sh` if
+  present.
+- It passes its extra arguments to Gradle and writes Gradle's output to `.superpowers/e2e-logs/<log name>.log`.
+- It stops the run as soon as the report ends with `DONE`, `READY_FOR_HOST_KILL host=… satellite=…` or `ABORTED …`.
+- On `READY_FOR_HOST_KILL` it performs step 7: it force-kills the host and prints `STEP 7 PASS` once the guest's
+  game exits by itself (or `STEP 7 FAIL` after 15 s).
+- It then kills every leftover game and Gradle process (`powershell` on Windows, `pkill` on macOS) and prints
+  `PASS n  FAIL n  SKIP n` and any failures.
+
+Switches (Gradle properties, read by the `e2eClient` run in `fabric/build.gradle`):
+
+| Property | Effect |
+|---|---|
+| `-Pe2eOnly=<ids>` | `-Dhearthside.e2e.only=<ids>`: a focused run (below) |
+| `-Pe2eBackend=opengl\|vulkan` | the host's graphics backend (`--graphicsBackend <b>`) |
+| `-Pe2eGuestBackend=opengl\|vulkan` | the guests' graphics backend (`-Dhearthside.e2e.guestBackend=<b>`) |
+| `-Pe2eValidation=true` | Minecraft's Vulkan validation (`--vulkanValidation`) |
+
+**Focused runs.** `-Pe2eOnly=C2` (comma-separated ids; an id is a step's name up to the first space) runs the named
+steps plus the earlier steps they need, transitively, and reports every other step as `SKIP`. `NEEDS`, at the top of
+`E2eDriver`, lists every step in run order with the earlier steps whose effects it relies on (the party's player
+count, an open screen, a seated profile, a session). An unknown id aborts the run, naming the known ones. The world
+opens only when a world step (1 to 6) runs, and the tiled session only when `D9` or `7` runs. A run without `7` ends
+with `DONE` instead of `READY_FOR_HOST_KILL`.
+
+```bash
+tools/e2e/run-e2e.sh t1-c2 -Pe2eOnly=C2       # PASS 1, PASS C2, every other step SKIP, then DONE
+tools/e2e/run-e2e.sh t1-tiled -Pe2eOnly=D9,7  # the tiled session: D9, then step 7
+tools/e2e/run-e2e.sh full                     # every step, then step 7
+```
+
+A step that works from its section's starting state (the title screen, or the world with the host alone) needs
+nothing. So a focused run that picks a step which changes the party for later steps (C7, C7b and D5 add players; 1
+adds Guest2) without the step that restores it (C7c, 5) hands the later steps a different party. The lobby's
+leftovers reach the world the same way unless `W2` runs. Both `M1` steps share one id: `-Pe2eOnly=M1` runs both, and
+everything the two need.
+
 ## Results — 2026-10-11 (after final-review fixes), Windows 11, Ryzen 5 7600X, RX 9060 XT, 1920×1080
 
 | # | Check | Result |
