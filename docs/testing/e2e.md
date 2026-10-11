@@ -41,12 +41,19 @@ barrier platform at y = 249 so terrain never blocks it.
 | P4 | RB advances the guest's hotbar slot | PASS |
 | P7 | Rebound Y makes the guest jump | PASS (rose 1.25 blocks) |
 | P5 | Unplug pauses the guest; replug (same model, new id) resumes and movement works | PASS |
-| P6 | Satellite ignores the OS keyboard and mouse | PASS (log line) |
+| P6 | Satellite input-isolation boot line present (the behaviour itself is a manual check) | PASS |
+| M1 | Survival inventory: X takes half a 10-stack (server sees 5 on the cursor), A puts it back | PASS — and FAILS with the old GLFW button numbers |
+| M2 | Holding B to close the inventory does not leave the guest sneaking | PASS |
+| M3 | START opens the guest's pause menu, B closes it | PASS |
 | P8 | Satellite received the PlayStation pad style | PASS |
 | P9 | `Player2` leaves | PASS |
 
-Found while building this: satellites never see OS input, so Minecraft capped them at its 10 fps "away from keyboard"
-frame rate. Controller input now counts as activity.
+Found while building this:
+- Satellites never see OS input, so Minecraft capped them at its 10 fps "away from keyboard" frame rate. Controller
+  input now counts as activity.
+- Menu clicks used GLFW mouse-button numbers; 26.3 uses SDL's (left 1, right 3), so A pressed nothing.
+- A half-screen window is narrower than vanilla's 379 GUI px, where the recipe book is drawn over the inventory.
+  Crafting (X) now only opens the book where it fits.
 
 ## Controllers (manual — needs real pads)
 
