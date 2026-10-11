@@ -29,7 +29,7 @@ final class HostInput implements Runnable {
 	private static final long RESEND_NANOS = 100_000_000L;
 
 	private final Minecraft minecraft;
-	private final HostSession session;
+	private final Party session;
 	private final GamepadSource source;
 	private final InputRouter router = new InputRouter();
 	private final InputApplier hostApplier;
@@ -42,7 +42,7 @@ final class HostInput implements Runnable {
 	private Boolean savedAutoJump;
 	private boolean closed;
 
-	HostInput(Minecraft minecraft, HostSession session, GamepadSource source, ControlScheme hostScheme) {
+	HostInput(Minecraft minecraft, Party session, GamepadSource source, ControlScheme hostScheme) {
 		this.minecraft = minecraft;
 		this.session = session;
 		this.source = source;

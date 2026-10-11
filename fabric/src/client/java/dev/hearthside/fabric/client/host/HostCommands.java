@@ -29,7 +29,7 @@ public final class HostCommands {
 	}
 
 	private static int pad(CommandContext<FabricClientCommandSource> ctx) {
-		HostSession session = HostSession.current();
+		Party session = Party.current();
 		if (session == null) {
 			ctx.getSource().sendError(Component.literal("Open a singleplayer world first."));
 			return 0;
@@ -46,7 +46,7 @@ public final class HostCommands {
 
 	private static int join(CommandContext<FabricClientCommandSource> ctx) {
 		String name = StringArgumentType.getString(ctx, "name");
-		HostSession session = HostSession.current();
+		Party session = Party.current();
 		if (session == null) {
 			ctx.getSource().sendError(Component.literal("Open a singleplayer world first."));
 			return 0;
@@ -70,7 +70,7 @@ public final class HostCommands {
 
 	private static int leave(CommandContext<FabricClientCommandSource> ctx) {
 		String name = StringArgumentType.getString(ctx, "name");
-		HostSession session = HostSession.current();
+		Party session = Party.current();
 		if (session == null) {
 			ctx.getSource().sendError(Component.literal("Open a singleplayer world first."));
 			return 0;

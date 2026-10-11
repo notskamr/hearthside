@@ -15,7 +15,7 @@ import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.fabric.client.compositor.Compositor;
-import dev.hearthside.fabric.client.host.HostSession;
+import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
@@ -90,7 +90,7 @@ public final class E2eDriver {
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
 
 			openWorld();
-			waitFor("host session", Duration.ofSeconds(180), () -> HostSession.current() != null);
+			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
@@ -132,9 +132,9 @@ public final class E2eDriver {
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
 			openWorld();
-			waitFor("host session", Duration.ofSeconds(180), () -> HostSession.current() != null);
+			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			onRender(() -> {
-				HostSession.current().join(GUEST);
+				Party.current().join(GUEST);
 				return null;
 			});
 			waitFor("guest rejoin for host-kill step", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -148,7 +148,7 @@ public final class E2eDriver {
 
 	private void guestJoins() throws Exception {
 		onRender(() -> {
-			HostSession.current().join(GUEST);
+			Party.current().join(GUEST);
 			return null;
 		});
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -194,13 +194,13 @@ public final class E2eDriver {
 		System.setProperty("hearthside.forceCopy", "true");
 		try {
 			onRender(() -> {
-				HostSession.current().leave(GUEST);
+				Party.current().leave(GUEST);
 				return null;
 			});
 			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
 			long mark = hostLogLength();
 			onRender(() -> {
-				HostSession.current().join(GUEST);
+				Party.current().join(GUEST);
 				return null;
 			});
 			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -248,12 +248,12 @@ public final class E2eDriver {
 	private void failedImportFallsBackToCopy() throws Exception {
 		// Start from a guest on GPU sharing (C5 left it on copy).
 		onRender(() -> {
-			HostSession.current().leave(GUEST);
+			Party.current().leave(GUEST);
 			return null;
 		});
 		waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
 		onRender(() -> {
-			HostSession.current().join(GUEST);
+			Party.current().join(GUEST);
 			return null;
 		});
 		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -310,7 +310,7 @@ public final class E2eDriver {
 	private void thirdPlayerAndBack() throws Exception {
 		long mark = hostLogLength();
 		onRender(() -> {
-			HostSession.current().join("Guest3");
+			Party.current().join("Guest3");
 			return null;
 		});
 		try {
@@ -319,7 +319,7 @@ public final class E2eDriver {
 			waitForProbe(2, mark, Duration.ofSeconds(10));
 		} finally {
 			onRender(() -> {
-				HostSession.current().leave("Guest3");
+				Party.current().leave("Guest3");
 				return null;
 			});
 		}
@@ -469,7 +469,7 @@ public final class E2eDriver {
 		String hostName = minecraft.getUser().getName();
 		try {
 			onRender(() -> {
-				HostSession.current().join(hostName);
+				Party.current().join(hostName);
 				return null;
 			});
 		} catch (IllegalArgumentException expected) {
@@ -480,7 +480,7 @@ public final class E2eDriver {
 
 	private void leaveClosesSatellite() throws Exception {
 		onRender(() -> {
-			HostSession.current().leave(GUEST);
+			Party.current().leave(GUEST);
 			return null;
 		});
 		waitFor("1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
@@ -492,7 +492,7 @@ public final class E2eDriver {
 
 	private void closingWorldClosesSatellites() throws Exception {
 		onRender(() -> {
-			HostSession.current().join(GUEST);
+			Party.current().join(GUEST);
 			return null;
 		});
 		waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
@@ -755,7 +755,7 @@ public final class E2eDriver {
 
 	private void player2Leaves() throws Exception {
 		onRender(() -> {
-			HostSession.current().leave("Player2");
+			Party.current().leave("Player2");
 			return null;
 		});
 		PADS.unplug(102);
