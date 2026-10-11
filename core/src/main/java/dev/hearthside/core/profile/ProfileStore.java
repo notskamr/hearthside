@@ -2,9 +2,12 @@ package dev.hearthside.core.profile;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.ControlSchemeJson;
 import java.io.IOException;
 import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
@@ -23,13 +26,15 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Loads and saves guest profiles as JSON.
+ * Loads and saves guest profiles and the host's controls as JSON.
  *
  * <p>A damaged file never crashes the game: it is renamed to {@code <name>.corrupt-<epochMillis>}
- * and an empty list is returned. A file from a newer schema is refused and left untouched.
+ * and nothing is returned. A damaged {@code controls} block only falls back to Bedrock controls. A
+ * file from a newer schema is refused and never overwritten. Version-1 files load with Bedrock
+ * controls and are written back as version 2.
  */
 public final class ProfileStore {
-	public static final int SCHEMA_VERSION = 1;
+	public static final int SCHEMA_VERSION = 2;
 
 	private static final System.Logger LOG = System.getLogger(ProfileStore.class.getName());
 	private static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
@@ -41,8 +46,18 @@ public final class ProfileStore {
 	}
 
 	public List<GuestProfile> load() throws IOException {
+		return loadFile().profiles();
+	}
+
+	/** Replaces the guest profiles, keeping the stored host controls. */
+	public void save(List<GuestProfile> profiles) throws IOException {
+		ControlScheme host = Files.exists(file) ? loadFile().hostControls() : ControlScheme.BEDROCK;
+		saveFile(new ProfileFile(profiles, host));
+	}
+
+	public ProfileFile loadFile() throws IOException {
 		if (!Files.exists(file)) {
-			return List.of();
+			return ProfileFile.EMPTY;
 		}
 		try {
 			JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject();
@@ -53,13 +68,13 @@ public final class ProfileStore {
 				profiles.add(p.toProfile());
 			}
 			requireUnique(profiles);
-			return List.copyOf(profiles);
+			return new ProfileFile(profiles, ControlSchemeJson.fromTree(dto.hostControls()));
 		} catch (CharacterCodingException | JsonParseException | IllegalStateException | IllegalArgumentException
 				| NullPointerException | UnsupportedOperationException e) {
 			Path backup = file.resolveSibling(file.getFileName() + ".corrupt-" + System.currentTimeMillis());
 			Files.move(file, backup);
 			LOG.log(Level.WARNING, "Profiles file " + file + " was unreadable; moved it to " + backup, e);
-			return List.of();
+			return ProfileFile.EMPTY;
 		}
 	}
 
@@ -67,11 +82,12 @@ public final class ProfileStore {
 	 * Replaces the file atomically. Refuses with {@link UnsupportedSchemaException} if the existing
 	 * file is from a newer schema, so a refused file can never be overwritten by mistake.
 	 */
-	public void save(List<GuestProfile> profiles) throws IOException {
-		requireUnique(profiles);
+	public void saveFile(ProfileFile contents) throws IOException {
+		requireUnique(contents.profiles());
 		refuseIfExistingFileIsNewer();
-		List<ProfileDto> dtos = profiles.stream().map(ProfileDto::from).toList();
-		byte[] json = GSON.toJson(new FileDto(SCHEMA_VERSION, dtos)).getBytes(StandardCharsets.UTF_8);
+		List<ProfileDto> dtos = contents.profiles().stream().map(ProfileDto::from).toList();
+		FileDto dto = new FileDto(SCHEMA_VERSION, dtos, ControlSchemeJson.toTree(contents.hostControls()));
+		byte[] json = GSON.toJson(dto).getBytes(StandardCharsets.UTF_8);
 
 		Path parent = file.toAbsolutePath().getParent();
 		Files.createDirectories(parent);
@@ -124,19 +140,19 @@ public final class ProfileStore {
 		}
 	}
 
-	private record FileDto(int schemaVersion, List<ProfileDto> profiles) {}
+	private record FileDto(int schemaVersion, List<ProfileDto> profiles, JsonElement hostControls) {}
 
 	private record SkinDto(String kind, String value) {}
 
-	private record ProfileDto(String id, String name, SkinDto skin, String preferredControllerGuid) {
+	private record ProfileDto(String id, String name, SkinDto skin, String preferredControllerGuid, JsonElement controls) {
 		static ProfileDto from(GuestProfile p) {
-			return new ProfileDto(p.id().toString(), p.name(),
-					new SkinDto(p.skin().kind().name(), p.skin().value()), p.preferredControllerGuid());
+			return new ProfileDto(p.id().toString(), p.name(), new SkinDto(p.skin().kind().name(), p.skin().value()),
+					p.preferredControllerGuid(), ControlSchemeJson.toTree(p.controls()));
 		}
 
 		GuestProfile toProfile() {
-			return new GuestProfile(UUID.fromString(id), name,
-					new SkinRef(SkinRef.Kind.valueOf(skin.kind()), skin.value()), preferredControllerGuid);
+			return new GuestProfile(UUID.fromString(id), name, new SkinRef(SkinRef.Kind.valueOf(skin.kind()), skin.value()),
+					preferredControllerGuid, ControlSchemeJson.fromTree(controls));
 		}
 	}
 }
