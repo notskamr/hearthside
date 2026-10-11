@@ -26,7 +26,6 @@ public final class Tween {
 	}
 
 	public static double easeOutCubic(double t) {
-		double u = 1 - Math.clamp(t, 0, 1);
-		return 1 - u * u * u;
+		return dev.hearthside.core.layout.Ease.outCubic(t);
 	}
 }
