@@ -278,11 +278,23 @@ public final class Party {
 
 	/** The party for the co-op lobby: the current one, or a new one waiting for a world. Render thread. */
 	public static Party openLobby(Minecraft minecraft) throws IOException {
+		return openLobby(minecraft, null);
+	}
+
+	/**
+	 * The lobby's party; {@code titlePad} is the controller that pressed Co-op on the title screen (null for the mouse),
+	 * which becomes player 1's.
+	 */
+	public static Party openLobby(Minecraft minecraft, Integer titlePad) throws IOException {
 		if (current == null) {
 			current = new Party(minecraft, JoinFlow.Mode.LOBBY);
 		}
+		current.pendingHostPad = titlePad;
 		return current;
 	}
+
+	/** The title screen's controller, for the controller loop to hand to player 1 when it first sees it. */
+	volatile Integer pendingHostPad;
 
 	/** Ends the party: every guest's game stops. */
 	public void disband() {
@@ -595,8 +607,113 @@ public final class Party {
 		switch (card.accept(frame, nanos)) {
 			case CONFIRMED -> confirmProfile(player, card.chosen());
 			case LEAVE -> onSeatedB(player);
+			case CONTROLS -> {
+				if (card.moreProfile() != null && minecraft.gui.screen() instanceof LobbyScreen lobby) {
+					minecraft.gui.setScreen(new ControlsScreen(lobby, this, player, card.moreProfile()));
+				}
+			}
+			case MANAGE -> {
+				if (minecraft.gui.screen() instanceof LobbyScreen lobby) {
+					minecraft.gui.setScreen(new ManageProfilesScreen(lobby, this, player));
+				}
+			}
 			case NONE -> { }
 		}
+	}
+
+	/** Whether a seat is playing as this profile. */
+	public boolean profileInUse(UUID profileId) {
+		return slots.values().stream().anyMatch(s -> s.profile != null && s.profile.id().equals(profileId));
+	}
+
+	/** Deletes a saved profile nobody is playing as; open cards drop it. False if in use or it couldn't be saved. */
+	public boolean deleteProfile(UUID profileId) {
+		if (profileInUse(profileId)) {
+			return false;
+		}
+		try {
+			ProfileStore store = profileStore();
+			List<GuestProfile> profiles = new ArrayList<>(store.load());
+			if (!profiles.removeIf(p -> p.id().equals(profileId))) {
+				return false;
+			}
+			store.save(profiles);
+		} catch (IOException | IllegalArgumentException e) {
+			HearthsideMod.LOGGER.error("Could not delete a profile", e);
+			return false;
+		}
+		cards.values().forEach(card -> card.removeProfile(profileId));
+		HearthsideMod.LOGGER.info("Hearthside deleted a profile");
+		return true;
+	}
+
+	/** The saved guest profiles, least recently used first (empty if they can't be read). */
+	public List<GuestProfile> savedProfiles() {
+		try {
+			return profileStore().load();
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.error("Could not read guest profiles", e);
+			return List.of();
+		}
+	}
+
+	/** X on a ready seat's card in the lobby: its More (controls, profiles); B goes back to ready. Render thread. */
+	void openMore(int player) {
+		Slot slot = slots.get(player);
+		String controller = controllerOfSlot.get(player);
+		GuestProfile current = slot == null ? null : slot.profile;
+		if (current == null || controller == null || world != null || cards.containsKey(player)) {
+			return;
+		}
+		if (flow.changeProfile(controller)) {
+			cards.put(player, newCard(player, controller, current, true));
+		}
+	}
+
+	/** Back in the lobby from a screen a card opened: what is still held there doesn't press the card. */
+	void backToCard(int player) {
+		SeatCard card = cards.get(player);
+		if (card != null) {
+			card.ignoreHeld();
+		}
+	}
+
+	/**
+	 * Saves a profile's controls (the controls screen's Menu): the stored profile keeps its place, a seat playing it
+	 * gets them at once, and open cards pick the new copy. False if the profile couldn't be saved.
+	 */
+	public boolean saveControls(UUID profileId, ControlScheme scheme) {
+		GuestProfile updated;
+		try {
+			ProfileStore store = profileStore();
+			List<GuestProfile> profiles = new ArrayList<>(store.load());
+			int at = -1;
+			for (int i = 0; i < profiles.size(); i++) {
+				if (profiles.get(i).id().equals(profileId)) {
+					at = i;
+				}
+			}
+			if (at < 0) {
+				return false;
+			}
+			updated = profiles.get(at).withControls(scheme);
+			profiles.set(at, updated);
+			store.save(profiles);
+		} catch (IOException | IllegalArgumentException e) {
+			HearthsideMod.LOGGER.error("Could not save controls", e);
+			return false;
+		}
+		for (Slot slot : slots.values()) {
+			if (slot.profile != null && slot.profile.id().equals(profileId)) {
+				slot.profile = slot.profile.withControls(scheme);
+				if (slot.connection != null) {
+					send(slot.connection, new ControlMessage.SetControls(ControlSchemeJson.toJson(scheme)));
+				}
+			}
+		}
+		cards.values().forEach(card -> card.replaceProfile(updated));
+		HearthsideMod.LOGGER.info("Hearthside saved {}'s controls", updated.name());
+		return true;
 	}
 
 	/** Y on a ready seat's card in the lobby: choose its profile again (B keeps the current one). Render thread. */
@@ -613,6 +730,10 @@ public final class Party {
 	}
 
 	private SeatCard newCard(int index, String controller, GuestProfile keep) {
+		return newCard(index, controller, keep, false);
+	}
+
+	private SeatCard newCard(int index, String controller, GuestProfile keep, boolean more) {
 		List<GuestProfile> profiles = List.of();
 		try {
 			profiles = profileStore().load();
@@ -623,7 +744,7 @@ public final class Party {
 		// Checked live: another seat may confirm a profile, or start naming one, while this card is open.
 		return new SeatCard(index, new ProfileCarousel(profiles, id -> heldByAnotherSeat(index, id), guid),
 				() -> new QuickSetup(namesInUse(index), minecraft.getUser().getName(), takenColors(index), index), guid,
-				keep);
+				keep, more);
 	}
 
 	private boolean heldByAnotherSeat(int index, UUID profileId) {
@@ -826,6 +947,25 @@ public final class Party {
 		}
 	}
 
+	/** Guests already recorded in this world's co-op entry. */
+	private final java.util.Set<UUID> recordedInWorld = new java.util.HashSet<>();
+
+	/** This world was played in co-op, by player 1 and every guest with a profile (the world picker shows it). */
+	private void recordCoopWorld(WorldLink link) {
+		List<String> names = new ArrayList<>();
+		names.add(minecraft.getUser().getName());
+		slots.values().forEach(s -> {
+			if (s.profile != null) {
+				names.add(s.profile.name());
+			}
+		});
+		try {
+			WorldsScreen.coopStore(gameDir).played(link.levelId(), System.currentTimeMillis(), names);
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.warn("Could not record the co-op world", e);
+		}
+	}
+
 	/** Once a second: expire join prompts, offer take-overs, and mark guests who reached the world. Render thread. */
 	void tickFlow() {
 		WorldLink link = world;
@@ -834,6 +974,9 @@ public final class Party {
 			GuestProfile profile = slot == null ? null : slot.profile;
 			if (link != null && profile != null && link.hasPlayer(profile.name())) {
 				flow.loaded(controller);
+				if (recordedInWorld.add(profile.id())) {
+					recordCoopWorld(link);
+				}
 			}
 		});
 		apply(flow.tick());

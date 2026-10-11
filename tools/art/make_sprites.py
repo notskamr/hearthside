@@ -251,6 +251,25 @@ def tag():
     return save(img, "hearth/tag", 3)
 
 
+CONTROLLER_ICON = [
+    "0111111111110",
+    "1111111111111",
+    "1101111111011",
+    "1000111110101",
+    "1101111111011",
+    "1111111111111",
+    "1111100011111",
+    "1111000001111",
+    "0110000000110",
+]
+
+
+def controller_icon():
+    """A small controller, for counts ("Co-op" shows how many are connected)."""
+    img = shape(CONTROLLER_ICON, rgb("f3dfb6"))
+    return save(img, "hearth/controller")
+
+
 def pill():
     """A small wooden pill for the title and labels."""
     img = canvas(24, 14)
@@ -470,6 +489,7 @@ def main():
     count += ghost_card()
     count += pill()
     count += tag()
+    count += controller_icon()
     count += button("button", OAK_LIGHT, OAK_HI, OAK, OUTLINE)
     count += button("button_highlighted", rgb("9a5a2c"), rgb("c07a40"), OAK_LIGHT, EMBER, GLOW)
     count += button("button_disabled", rgb("4a3a30"), rgb("5a4a40"), rgb("2e241e"), rgb("1a1410"))

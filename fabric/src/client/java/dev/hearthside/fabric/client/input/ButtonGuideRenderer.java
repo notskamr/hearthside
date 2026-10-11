@@ -8,6 +8,8 @@ import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.ui.Tween;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.host.LobbyScreen;
+import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.ui.HearthDraw;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import java.time.Duration;
@@ -52,6 +54,8 @@ public final class ButtonGuideRenderer {
 	private static final Map<Control, Tween> pulses = new EnumMap<>(Control.class);
 	/** Glyph sprites drawn so far, each logged once (the E2E reads the log). */
 	private static final Set<Identifier> logged = ConcurrentHashMap.newKeySet();
+	/** The screen the menu hints last drew on (the E2E checks screens with their own chips never get them). */
+	public static volatile Screen drewOn;
 
 	private ButtonGuideRenderer() {}
 
@@ -116,14 +120,16 @@ public final class ButtonGuideRenderer {
 	private static void drawScreen(Screen screen, GuiGraphicsExtractor graphics) {
 		Minecraft mc = Minecraft.getInstance();
 		Supplier<ControlScheme> scheme = schemeSource;
-		if (scheme == null) {
+		if (scheme == null || screen instanceof LobbyScreen || screen instanceof PadScreen) {
+			// Those screens draw their own hint chips; a second row would sit on top of them.
 			return;
 		}
 		boolean container = screen instanceof AbstractContainerScreen<?>;
 		boolean holding = container && !((AbstractContainerScreen<?>) screen).getMenu().getCarried().isEmpty();
 		var context = new GuideContext(container, !container, false, false, false, holding, false);
 		List<ButtonGuide.Prompt> prompts = ButtonGuide.prompts(context, scheme.get());
-		int total = prompts.stream().mapToInt(p -> promptWidth(mc.font, p) + GAP * 2).sum();
+		drewOn = screen;
+		int total =prompts.stream().mapToInt(p -> promptWidth(mc.font, p) + GAP * 2).sum();
 		int x = (graphics.guiWidth() - total) / 2;
 		int y = graphics.guiHeight() - MARGIN - ROW + 2;
 		for (ButtonGuide.Prompt prompt : prompts) {

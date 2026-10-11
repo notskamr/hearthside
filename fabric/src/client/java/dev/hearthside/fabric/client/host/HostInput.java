@@ -15,6 +15,8 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
+import dev.hearthside.fabric.client.menu.PadScreen;
+import dev.hearthside.fabric.client.menu.SeatScreen;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -86,6 +88,7 @@ final class HostInput implements Runnable {
 			guids.put(pad.instanceId(), pad.guid());
 		}
 		InputRouter.Update update = router.update(pads);
+		takeTitlePad(pads);
 		autoClaimHost(pads);
 		int free = 0;
 		PadStyle freeKind = null;
@@ -153,8 +156,23 @@ final class HostInput implements Runnable {
 	 * controller continues from the lobby, B gives up its seat, and otherwise whoever is using a controller moves the
 	 * host's cursor, which takes their colour.
 	 */
+	/** The screen the shared input last went to. */
+	private Screen lastSharedScreen;
+
 	private void driveSharedScreen(Map<Integer, InputFrame> frames) {
 		Screen screen = minecraft.gui.screen();
+		if (screen != lastSharedScreen) {
+			// A new screen: a button already down on the frame before was pressed for the old screen (the B that closed
+			// New World must not also close the picker it went back to, nor the A on a world click the next vanilla
+			// screen). One first pressed on this frame is a real press on the new screen.
+			frames.forEach((player, frame) -> {
+				int carried = frame.buttons() & sharedButtons.getOrDefault(player, 0);
+				if (carried != 0) {
+					heldFromCard.merge(player, carried, (a, b) -> a | b);
+				}
+			});
+			lastSharedScreen = screen;
+		}
 		LobbyScreen lobby = screen instanceof LobbyScreen l ? l : null;
 		int start = InputFrame.buttons(PadButton.START);
 		int b = InputFrame.buttons(PadButton.B);
@@ -163,8 +181,10 @@ final class HostInput implements Runnable {
 		for (Map.Entry<Integer, InputFrame> entry : frames.entrySet()) {
 			int player = entry.getKey();
 			InputFrame frame = entry.getValue();
-			if (player != 0 && session.hasSeatCard(player)) {
-				// A card is only on screen in the lobby; elsewhere (world select) that controller waits.
+			boolean ownScreen = screen instanceof SeatScreen opened && opened.seat() == player;
+			if (player != 0 && session.hasSeatCard(player) && !ownScreen) {
+				// A card is only on screen in the lobby; elsewhere (world select) that controller waits, unless the
+				// screen is one its card opened (its controls, managing profiles).
 				if (lobby != null) {
 					session.seatCardInput(player, frame, now);
 				}
@@ -188,23 +208,56 @@ final class HostInput implements Runnable {
 			int buttons = frame.buttons();
 			int pressed = buttons & ~sharedButtons.getOrDefault(player, 0);
 			sharedButtons.put(player, buttons);
-			if (player == 0 || lobby == null) {
+			if (lobby == null) {
 				continue;
 			}
 			if ((pressed & start) != 0) {
+				// Menu on anyone's controller, player 1's included, goes on to choose a world.
 				lobby.continueToWorlds();
-			} else if ((pressed & b) != 0) {
+				continue;
+			}
+			if (player == 0) {
+				continue;
+			}
+			if ((pressed & b) != 0) {
 				session.onSeatedB(player);
 			} else if ((pressed & InputFrame.buttons(PadButton.Y)) != 0) {
 				// Y on a ready card: pick another profile (Spec A section 5.5).
 				session.changeProfile(player);
+			} else if ((pressed & InputFrame.buttons(PadButton.X)) != 0) {
+				// X on a ready card: More (its controls, managing profiles).
+				session.openMore(player);
 			}
 		}
 		sharedButtons.keySet().retainAll(frames.keySet());
+		if (minecraft.gui.screen() != screen) {
+			// A press above changed the screen (Menu → world select): this frame was meant for the old one.
+			return;
+		}
+		if (screen instanceof PadScreen padScreen) {
+			// Hearthside's own screens take every player's controller directly (focus moves, no pointer).
+			if (sharedDriving) {
+				hostApplier.accept(InputFrame.NEUTRAL);
+				hostApplier.onFrame();
+				hostApplier.release();
+				sharedDriving = false;
+			}
+			VirtualCursor.setDrawn(false);
+			for (Map.Entry<Integer, InputFrame> entry : new java.util.TreeMap<>(shared).entrySet()) {
+				if (SharedScreenInput.isActive(entry.getValue())) {
+					lastDriver = entry.getKey();
+				}
+				padScreen.padInput(entry.getKey(), entry.getValue(), now);
+				if (minecraft.gui.screen() != screen) {
+					break;
+				}
+			}
+			return;
+		}
 		// Ending the party is player 1's call (Spec A section 7.1): guests don't drive its confirmation.
 		Map<Integer, InputFrame> drivers = screen instanceof ConfirmScreen
 				? (shared.containsKey(0) ? Map.of(0, shared.get(0)) : Map.of()) : shared;
-		int lobbyButtons = start | b | InputFrame.buttons(PadButton.Y);
+		int lobbyButtons = start | b | InputFrame.buttons(PadButton.Y, PadButton.X);
 		SharedScreenInput.Driver driver = SharedScreenInput.drive(drivers, lobby != null ? lobbyButtons : start);
 		if (driver != null && (driver.player() != 0 || drivers.containsKey(0))
 				&& (SharedScreenInput.isActive(driver.frame()) || lastDriver < 0)) {
@@ -274,8 +327,12 @@ final class HostInput implements Runnable {
 
 	private void handle(RouterEvent event) {
 		switch (event) {
-			case RouterEvent.UnassignedPress press -> session.onUnassignedPress(press.instanceId(), press.button(),
-					guids.get(press.instanceId()));
+			case RouterEvent.UnassignedPress press -> {
+				// A press from a controller assigned this frame (player 1's from the title) is not a join.
+				if (router.playerFor(press.instanceId()).isEmpty()) {
+					session.onUnassignedPress(press.instanceId(), press.button(), guids.get(press.instanceId()));
+				}
+			}
 			case RouterEvent.ClaimRequest claim -> claimForHost(claim.instanceId());
 			case RouterEvent.PadLost lost -> {
 				if (lost.player() == 0) {
@@ -294,6 +351,25 @@ final class HostInput implements Runnable {
 					session.sendToGuest(restored.player(), new ControlMessage.Lifecycle(LifecycleCommand.RESUME));
 				}
 				chat(Component.literal("Player " + (restored.player() + 1) + "'s controller reconnected."));
+			}
+		}
+	}
+
+	/**
+	 * The controller that pressed Co-op on the title screen is player 1's (Spec A section 3.1); the A it is still
+	 * holding doesn't also press anything in the lobby.
+	 */
+	private void takeTitlePad(List<PadSnapshot> pads) {
+		Integer id = session.pendingHostPad;
+		if (id == null) {
+			return;
+		}
+		session.pendingHostPad = null;
+		for (PadSnapshot pad : pads) {
+			if (pad.instanceId() == id && router.playerFor(id).isEmpty()) {
+				claimForHost(id);
+				heldFromCard.put(0, pad.frame().buttons());
+				return;
 			}
 		}
 	}

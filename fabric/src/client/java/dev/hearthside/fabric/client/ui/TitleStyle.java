@@ -1,0 +1,27 @@
+package dev.hearthside.fabric.client.ui;
+
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+
+/**
+ * The title screen in the Cozy-hearth style (Spec A section 4.1): the plank wall, firelight and embers instead of the
+ * panorama, a wood sign behind the logo, and wooden buttons. Drawn by the title-screen mixins.
+ */
+public final class TitleStyle {
+	private static final EmberLayer EMBERS = new EmberLayer(29, 50);
+	/** Set once each part has been drawn (the E2E checks the style is applied). */
+	public static volatile boolean drewBackground, drewButtons;
+
+	private TitleStyle() {}
+
+	/** The background, and the sign the logo sits on. */
+	public static void background(GuiGraphicsExtractor g, int width, int height) {
+		HearthDraw.board(g, 0, 0, width, height);
+		double t = System.nanoTime() / 1e9;
+		float flicker = (float) (0.85 + 0.08 * Math.sin(t * 7.3) + 0.05 * Math.sin(t * 13.1 + 1.7));
+		HearthDraw.firelightGlow(g, width / 10, height * 35 / 100, width * 8 / 10, height - height * 35 / 100, flicker);
+		EMBERS.draw(g, 0, 0, width, height, false);
+		// The logo is 256 wide at y 30 with "Java Edition" under it: a sign behind both.
+		HearthDraw.wood(g, width / 2 - 146, 20, 292, 70);
+		drewBackground = true;
+	}
+}

@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.HttpUtil;
+import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * One open world's side of split-screen: who may log in as a guest (roster and tokens) and the loopback listener they
@@ -70,6 +71,11 @@ final class WorldLink {
 		server.execute(() -> playerNames = server.getPlayerList().getPlayers().stream()
 				.map(player -> player.getGameProfile().name()).collect(Collectors.toUnmodifiableSet()));
 		return playerNames.contains(name);
+	}
+
+	/** The world's folder name (its level id). */
+	String levelId() {
+		return server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString();
 	}
 
 	synchronized void remove(int index) {

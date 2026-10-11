@@ -145,7 +145,10 @@ public final class SatelliteBoot {
 				}
 			});
 			case ControlMessage.SetControls m -> minecraft.execute(() -> {
-				applier.setScheme(ControlSchemeJson.fromJson(m.schemeJson()));
+				var scheme = ControlSchemeJson.fromJson(m.schemeJson());
+				HearthsideMod.LOGGER.info("Hearthside SetControls jump={}",
+						scheme.controlFor(dev.hearthside.core.input.Action.JUMP).map(Enum::name).orElse("none"));
+				applier.setScheme(scheme);
 				applier.applyOptions();
 			});
 			case ControlMessage.SetPadStyle m -> {

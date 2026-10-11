@@ -8,17 +8,30 @@ import dev.hearthside.core.profile.ProfileCarousel;
 import dev.hearthside.core.profile.QuickSetup;
 import dev.hearthside.core.ui.KeyboardModel;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
  * One seat's lobby card while its player picks or creates a profile (Spec A sections 3.1, 5.2): the profile carousel,
- * then for New, quick setup with the on-screen keyboard. That seat's controller drives only its card. Render thread.
+ * then for New, quick setup with the on-screen keyboard; X opens More (the profile's controls, managing profiles).
+ * That seat's controller drives only its card. Render thread.
  */
 public final class SeatCard {
-	public enum Outcome { NONE, CONFIRMED, LEAVE }
+	public enum Outcome { NONE, CONFIRMED, LEAVE, CONTROLS, MANAGE }
 
-	public enum Stage { CAROUSEL, SETUP }
+	public enum Stage { CAROUSEL, SETUP, MORE }
+
+	/** What More offers. */
+	public enum MoreEntry {
+		CONTROLS("Controls"), MANAGE("Profiles");
+
+		public final String label;
+
+		MoreEntry(String label) {
+			this.label = label;
+		}
+	}
 
 	private static final float STICK = 0.5f;
 
@@ -27,7 +40,10 @@ public final class SeatCard {
 	private final Supplier<QuickSetup> newSetup;
 	private final String controllerGuid;
 	/** The profile the seat had before reopening its card (Y on a ready card), kept if the player backs out; else null. */
-	private final GuestProfile keep;
+	private GuestProfile keep;
+	/** Opened with X on a ready card: B in More goes straight back to the ready seat. */
+	private final boolean moreOnly;
+	private int moreFocus;
 	private final NavRepeater horizontal = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
 	private final NavRepeater vertical = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
 	private Stage stage = Stage.CAROUSEL;
@@ -42,11 +58,21 @@ public final class SeatCard {
 	private int lastButtons = -1;
 
 	SeatCard(int seat, ProfileCarousel carousel, Supplier<QuickSetup> newSetup, String controllerGuid, GuestProfile keep) {
+		this(seat, carousel, newSetup, controllerGuid, keep, false);
+	}
+
+	/** @param more open on More, for a ready seat (whose profile is {@code keep}) */
+	SeatCard(int seat, ProfileCarousel carousel, Supplier<QuickSetup> newSetup, String controllerGuid, GuestProfile keep,
+			boolean more) {
 		this.seat = seat;
 		this.carousel = carousel;
 		this.newSetup = newSetup;
 		this.controllerGuid = controllerGuid;
 		this.keep = keep;
+		this.moreOnly = more && keep != null;
+		if (moreOnly) {
+			stage = Stage.MORE;
+		}
 	}
 
 	/** This seat's controller, this frame. */
@@ -60,7 +86,28 @@ public final class SeatCard {
 		int dy = vertical.step(direction(frame, PadButton.DPAD_UP, PadButton.DPAD_DOWN, frame.leftY()), nanos);
 		int sx = Integer.signum(direction(frame, PadButton.DPAD_LEFT, PadButton.DPAD_RIGHT, frame.leftX())) * dx;
 		int sy = Integer.signum(direction(frame, PadButton.DPAD_UP, PadButton.DPAD_DOWN, frame.leftY())) * dy;
-		return stage == Stage.CAROUSEL ? carousel(pressed, sx) : setup(pressed, sx, sy);
+		return switch (stage) {
+			case CAROUSEL -> carousel(pressed, sx);
+			case SETUP -> setup(pressed, sx, sy);
+			case MORE -> more(pressed, sy);
+		};
+	}
+
+	private Outcome more(int pressed, int dy) {
+		List<MoreEntry> entries = moreEntries();
+		moreFocus = Math.floorMod(moreFocus + dy, entries.size());
+		if (down(pressed, PadButton.B)) {
+			if (moreOnly) {
+				chosen = keep;
+				return Outcome.CONFIRMED;
+			}
+			stage = Stage.CAROUSEL;
+			return Outcome.NONE;
+		}
+		if (down(pressed, PadButton.A)) {
+			return entries.get(moreFocus) == MoreEntry.CONTROLS ? Outcome.CONTROLS : Outcome.MANAGE;
+		}
+		return Outcome.NONE;
 	}
 
 	private Outcome carousel(int pressed, int dx) {
@@ -73,6 +120,11 @@ public final class SeatCard {
 		}
 		if (down(pressed, PadButton.Y)) {
 			carousel.next();
+		}
+		if (down(pressed, PadButton.X)) {
+			stage = Stage.MORE;
+			moreFocus = 0;
+			return Outcome.NONE;
 		}
 		if (down(pressed, PadButton.B)) {
 			if (keep != null) {
@@ -195,7 +247,7 @@ public final class SeatCard {
 			chosen = keep;
 			return keep;
 		}
-		if (stage == Stage.CAROUSEL && carousel.current() instanceof ProfileCarousel.Entry.Profile(GuestProfile profile)) {
+		if (stage != Stage.SETUP && carousel.current() instanceof ProfileCarousel.Entry.Profile(GuestProfile profile)) {
 			chosen = profile;
 			return profile;
 		}
@@ -247,6 +299,42 @@ public final class SeatCard {
 
 	private static boolean down(int pressed, PadButton button) {
 		return (pressed & InputFrame.buttons(button)) != 0;
+	}
+
+	/** More's entries: Controls for a profile (not for New), then Manage profiles. */
+	public List<MoreEntry> moreEntries() {
+		return moreProfile() != null ? List.of(MoreEntry.CONTROLS, MoreEntry.MANAGE) : List.of(MoreEntry.MANAGE);
+	}
+
+	public MoreEntry moreFocus() {
+		List<MoreEntry> entries = moreEntries();
+		return entries.get(Math.min(moreFocus, entries.size() - 1));
+	}
+
+	/** The profile More is about: the ready seat's, or the one the carousel shows (null on New). */
+	public GuestProfile moreProfile() {
+		if (moreOnly) {
+			return keep;
+		}
+		return carousel.current() instanceof ProfileCarousel.Entry.Profile(GuestProfile profile) ? profile : null;
+	}
+
+	/** Buttons held now count as already pressed (back from a screen the card opened). */
+	public void ignoreHeld() {
+		lastButtons = -1;
+	}
+
+	/** A profile changed elsewhere (its controls saved): picking or keeping it uses the new copy. */
+	public void replaceProfile(GuestProfile updated) {
+		carousel.replace(updated);
+		if (keep != null && keep.id().equals(updated.id())) {
+			keep = updated;
+		}
+	}
+
+	/** A profile was deleted: the carousel drops it. */
+	public void removeProfile(UUID profileId) {
+		carousel.remove(profileId);
 	}
 
 	/** Whether this card is changing a ready seat's profile (B keeps the old one) rather than a new seat's. */

@@ -61,6 +61,28 @@ public final class ProfileCarousel {
 		step(-1);
 	}
 
+	/** Swaps in a changed copy of a profile (same id), keeping its place; unknown profiles are ignored. */
+	public void replace(GuestProfile updated) {
+		for (int i = 0; i < all.size(); i++) {
+			if (all.get(i) instanceof Entry.Profile(GuestProfile p) && p.id().equals(updated.id())) {
+				all.set(i, new Entry.Profile(updated));
+			}
+		}
+	}
+
+	/** Drops a deleted profile; the carousel moves on to what followed it. */
+	public void remove(UUID profileId) {
+		for (int i = all.size() - 1; i >= 0; i--) {
+			if (all.get(i) instanceof Entry.Profile(GuestProfile p) && p.id().equals(profileId)) {
+				all.remove(i);
+				if (i < index) {
+					index--;
+				}
+			}
+		}
+		index = Math.min(index, all.size() - 1);
+	}
+
 	/** What the carousel offers now, in order. */
 	public List<Entry> entries() {
 		List<Entry> out = new ArrayList<>();

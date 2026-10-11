@@ -16,15 +16,24 @@ import dev.hearthside.core.profile.ProfileCarousel;
 import dev.hearthside.core.profile.ProfileFile;
 import dev.hearthside.core.profile.ProfileStore;
 import dev.hearthside.core.profile.QuickSetup;
+import dev.hearthside.core.session.CoopWorldsStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
+import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
+import dev.hearthside.fabric.client.ui.HearthTextField;
+import dev.hearthside.fabric.client.menu.TitleInput;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
+import dev.hearthside.fabric.client.ui.TitleStyle;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.ControlsScreen;
+import dev.hearthside.fabric.client.host.ManageProfilesScreen;
+import dev.hearthside.fabric.client.host.NewWorldScreen;
 import dev.hearthside.fabric.client.host.SeatCard;
+import dev.hearthside.fabric.client.host.WorldsScreen;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
@@ -111,13 +120,28 @@ public final class E2eDriver {
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
+				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
+				step("T4 with Minecraft in the background, a controller does nothing on the title screen", this::titleIgnoresBackgroundPad);
+				step("T1 a controller moves focus on the title screen and A on Co-op opens the lobby", this::titleControllerOpensLobby);
+				step("T2 the controller that opened Co-op is player 1's, not seated, and remembered", this::titleControllerIsPlayerOne);
 				step("L5 player 1's card claims a controller; it drives the host and is not seated", this::hostCardClaims);
+				step("W3 a controller creates a Creative world named on the keyboard; it loads; it is cleaned up", this::createWorldWithController);
+				step("W4 the picker scrolls down to Create past worlds that don't fit; Down stops there", this::pickerScrolls);
+				step("W5 a world deleted in More… is gone from the picker on return", this::pickerRefreshesAfterMore);
+				step("W6 B on New World goes back one screen, not two", this::newWorldBackOnce);
+				step("W7 B on the name keyboard closes only the keyboard", this::keyboardBackOnce);
+				step("W8 with no worlds yet the picker shows one Create card", this::pickerWithNoWorlds);
+				step("W9 back in the lobby with player 1's controller", this::ensureLobby);
 				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
 				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
 				step("L2 Y and the D-pad cycle profiles on the card; A confirms", this::cardCyclesAndConfirms);
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
+				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
+						this::controlsRemap);
+				step("M1 holding Y deletes an unused profile; a profile in use is refused; letting go early cancels",
+						this::manageProfiles);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
 				step("B9 B on a seated controller gives up the seat", this::seatedBLeaves);
@@ -125,7 +149,9 @@ public final class E2eDriver {
 				step("L8 unplugging mid-keyboard keeps the card; replugging resumes it", this::cardSurvivesUnplug);
 				step("L10 two identical controllers never share a profile or a new name", this::twinsNeverClash);
 				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
-				step("B5 Menu on a seated controller continues; the world brings the guests in by name", this::lobbyIntoWorld);
+				step("B5 Menu on a seated controller opens the world picker", this::lobbyToPicker);
+				step("W1 the world picker puts the last co-op world first, focused, with who played it", this::pickerFocusesLastCoopWorld);
+				step("W2 A on it opens the world; the guests come in by name; the co-op record has them", this::pickerOpensWorld);
 			}
 			if (onRender(() -> minecraft.level == null)) {
 				openWorld();
@@ -694,6 +720,82 @@ public final class E2eDriver {
 		Thread.sleep(400);
 	}
 
+	private void titleStyled() throws Exception {
+		TitleStyle.drewBackground = false;
+		TitleStyle.drewButtons = false;
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		Thread.sleep(600);
+		check(TitleStyle.drewBackground, "the plank wall and firelight replace the panorama");
+		check(TitleStyle.drewButtons, "the title's buttons are wooden");
+		screenshot("title");
+	}
+
+	private static final int TITLE_PAD = 109;
+	private static final String TITLE_GUID = "fake-title-pad";
+
+	private void titleIgnoresBackgroundPad() throws Exception {
+		PADS.plug(TITLE_PAD, TITLE_GUID, PadStyle.PLAYSTATION);
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		Thread.sleep(500);
+		TitleInput.e2eBackground = true;
+		try {
+			Object before = onRender(() -> minecraft.gui.screen().getFocused());
+			press(TITLE_PAD, PadButton.DPAD_DOWN);
+			press(TITLE_PAD, PadButton.DPAD_DOWN);
+			check(onRender(() -> minecraft.gui.screen() instanceof TitleScreen && minecraft.gui.screen().getFocused() == before),
+					"the D-pad moved nothing while Minecraft was in the background");
+		} finally {
+			TitleInput.e2eBackground = false;
+			PADS.unplug(TITLE_PAD);
+		}
+	}
+
+	private void titleControllerOpensLobby() throws Exception {
+		PADS.plug(TITLE_PAD, TITLE_GUID, PadStyle.PLAYSTATION);
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		Thread.sleep(500);
+		// Co-op is beside Singleplayer: down to the menu, then right (and up, if focus started lower).
+		PadButton[] path = {PadButton.DPAD_DOWN, PadButton.DPAD_RIGHT, PadButton.DPAD_UP, PadButton.DPAD_RIGHT,
+				PadButton.DPAD_UP, PadButton.DPAD_RIGHT, PadButton.DPAD_UP, PadButton.DPAD_RIGHT};
+		for (int i = 0; i < path.length && !onRender(this::coopFocused); i++) {
+			press(TITLE_PAD, path[i]);
+		}
+		check(onRender(this::coopFocused), "the D-pad moved focus to Co-op");
+		screenshot("title-focus");
+		press(TITLE_PAD, PadButton.A);
+		waitFor("the lobby", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof LobbyScreen));
+	}
+
+	/** Whether the title screen's focused widget is the Co-op button. Render thread. */
+	private boolean coopFocused() {
+		return minecraft.gui.screen() instanceof TitleScreen title && title.getFocused() instanceof AbstractButton button
+				&& button.getMessage().getString().startsWith("Co-op");
+	}
+
+	private void titleControllerIsPlayerOne() throws Exception {
+		waitFor("player 1 has the title controller", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
+		Thread.sleep(500);
+		check(onRender(() -> Party.current().seatedCount()) == 0, "the A that opened Co-op did not take a guest seat");
+		check(TITLE_GUID.equals(profiles().loadFile().host().preferredControllerGuid()), "it is remembered as player 1's");
+		onRender(() -> {
+			Party.current().releaseController();
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		PADS.unplug(TITLE_PAD);
+		check(Party.current() == null, "back on the title screen with no party");
+	}
+
 	private void hostCardClaims() throws Exception {
 		// Start from player 1 having no remembered controller (a stopped run can leave one behind).
 		ProfileStore store = profiles();
@@ -713,6 +815,251 @@ public final class E2eDriver {
 		waitFor("player 1 has the controller", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
 		check(onRender(() -> Party.current().seatedCount()) == 0, "the controller did not take a guest seat");
 		check(HOST_GUID.equals(profiles().loadFile().host().preferredControllerGuid()), "player 1's controller is remembered");
+	}
+
+	/** The screen draws its own hint chips, so the generic controller hints stay off it (no doubled chips). */
+	private void checkOwnHintsOnly(String where) throws Exception {
+		Screen screen = onRender(() -> minecraft.gui.screen());
+		ButtonGuideRenderer.drewOn = null;
+		Thread.sleep(300);
+		check(ButtonGuideRenderer.drewOn != screen, "only " + where + "'s own hint chips are drawn");
+	}
+
+	/** Backs out of the picker, New World or Minecraft's world list to the lobby (never closing the lobby itself). */
+	private void backToLobby() throws Exception {
+		for (int i = 0; i < 4; i++) {
+			boolean closed = onRender(() -> {
+				Screen screen = minecraft.gui.screen();
+				if (screen instanceof WorldsScreen || screen instanceof NewWorldScreen
+						|| screen instanceof net.minecraft.client.gui.screens.worldselection.SelectWorldScreen) {
+					screen.onClose();
+					return true;
+				}
+				return false;
+			});
+			if (!closed) {
+				return;
+			}
+			Thread.sleep(300);
+		}
+	}
+
+	/** In the party's lobby with player 1's controller, whatever the step before left behind. */
+	private void ensureLobby() throws Exception {
+		backToLobby();
+		if (!onRender(() -> Party.current() != null && minecraft.gui.screen() instanceof LobbyScreen)) {
+			openLobby();
+		}
+		waitFor("player 1's controller in the lobby", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
+		Thread.sleep(300);
+	}
+
+	private WorldsScreen openPicker() throws Exception {
+		press(HOST_PAD, PadButton.START);
+		waitFor("the world picker", Duration.ofSeconds(15),
+				() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+		return onRender(() -> (WorldsScreen) minecraft.gui.screen());
+	}
+
+	/** Adds listable copies of the E2E world (its level.dat only), to have more worlds than fit. */
+	private List<Path> copyWorlds(int count) throws IOException {
+		Path saves = minecraft.gameDirectory.toPath().resolve("saves");
+		Path levelDat = saves.resolve(WORLD).resolve("level.dat");
+		check(Files.exists(levelDat), "the E2E world exists to copy");
+		List<Path> copies = new ArrayList<>();
+		for (int i = 1; i <= count; i++) {
+			Path dir = saves.resolve(WORLD + "-copy-" + i);
+			Files.createDirectories(dir);
+			Files.copy(levelDat, dir.resolve("level.dat"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			copies.add(dir);
+		}
+		return copies;
+	}
+
+	private static void deleteTree(Path dir) throws IOException {
+		if (!Files.exists(dir)) {
+			return;
+		}
+		try (var walk = Files.walk(dir)) {
+			for (Path p : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+				Files.deleteIfExists(p);
+			}
+		}
+	}
+
+	private void pickerScrolls() throws Exception {
+		ensureLobby();
+		List<Path> copies = copyWorlds(5);
+		try {
+			WorldsScreen picker = openPicker();
+			check(onRender(picker::cardLevelIds).size() >= 7, "the picker lists every world and Create");
+			pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 20, () -> "".equals(picker.focusedLevelId()));
+			check("".equals(onRender(picker::focusedLevelId)), "Down reaches Create past the worlds that don't fit");
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check("".equals(onRender(picker::focusedLevelId)), "Down stops at Create (focus never lands on a hint chip)");
+		} finally {
+			backToLobby();
+			for (Path copy : copies) {
+				deleteTree(copy);
+			}
+		}
+	}
+
+	private void pickerRefreshesAfterMore() throws Exception {
+		ensureLobby();
+		List<Path> copies = copyWorlds(1);
+		String gone = copies.getFirst().getFileName().toString();
+		try {
+			WorldsScreen picker = openPicker();
+			check(onRender(picker::cardLevelIds).contains(gone), "the copy is listed");
+			press(HOST_PAD, PadButton.X);
+			check(onRender(() -> minecraft.gui.screen() instanceof net.minecraft.client.gui.screens.worldselection.SelectWorldScreen), "X opens Minecraft's world list");
+			deleteTree(copies.getFirst());
+			onRender(() -> {
+				minecraft.gui.screen().onClose();
+				return null;
+			});
+			waitFor("the picker again", Duration.ofSeconds(15),
+					() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+			check(!onRender(() -> ((WorldsScreen) minecraft.gui.screen()).cardLevelIds()).contains(gone),
+					"the world deleted there is gone from the picker");
+		} finally {
+			backToLobby();
+			deleteTree(copies.getFirst());
+		}
+	}
+
+	/** From the lobby to New World with player 1's controller. */
+	private NewWorldScreen openNewWorld() throws Exception {
+		WorldsScreen picker = openPicker();
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 12, () -> "".equals(picker.focusedLevelId()));
+		press(HOST_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof NewWorldScreen), "Create opens New World");
+		return onRender(() -> (NewWorldScreen) minecraft.gui.screen());
+	}
+
+	private void newWorldBackOnce() throws Exception {
+		ensureLobby();
+		try {
+			openNewWorld();
+			press(HOST_PAD, PadButton.B);
+			Thread.sleep(600);
+			check(onRender(() -> minecraft.gui.screen() instanceof WorldsScreen), "one B is one screen back: the picker");
+		} finally {
+			backToLobby();
+		}
+	}
+
+	private void keyboardBackOnce() throws Exception {
+		ensureLobby();
+		try {
+			NewWorldScreen screen = openNewWorld();
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> screen.focusedRow().equals("name"));
+			press(HOST_PAD, PadButton.A);
+			check(onRender(screen::typing), "A on the name opens the keyboard");
+			press(HOST_PAD, PadButton.B);
+			Thread.sleep(600);
+			check(onRender(() -> minecraft.gui.screen() == screen && !screen.typing()),
+					"B closes the keyboard and stays on New World");
+		} finally {
+			backToLobby();
+		}
+	}
+
+	private void pickerWithNoWorlds() throws Exception {
+		ensureLobby();
+		Path empty = Files.createTempDirectory("hearthside-no-worlds").resolve("saves");
+		Files.createDirectories(empty);
+		// Opened the way a player opens it (Menu, from the controller's frame hook), not from a queued task: an empty
+		// list finishes loading at once only there.
+		WorldsScreen.e2eSource = net.minecraft.world.level.storage.LevelStorageSource.createDefault(empty);
+		try {
+			press(HOST_PAD, PadButton.START);
+			waitFor("the picker", Duration.ofSeconds(10),
+					() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+			long cards = onRender(() -> minecraft.gui.screen().children().stream()
+					.filter(c -> c.getClass().getSimpleName().equals("WorldCard")).count());
+			long chips = onRender(() -> minecraft.gui.screen().children().stream()
+					.filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance).count());
+			check(cards == 1 && chips == 3, "one Create card and one set of hints (cards " + cards + ", chips " + chips + ")");
+			check("".equals(onRender(() -> ((WorldsScreen) minecraft.gui.screen()).focusedLevelId())), "Create is focused");
+		} finally {
+			WorldsScreen.e2eSource = null;
+			backToLobby();
+			deleteTree(empty.getParent());
+		}
+	}
+
+	/** Presses a direction until the condition holds (at most {@code tries} times). */
+	private void pressUntil(int pad, PadButton button, int tries, Callable<Boolean> done) throws Exception {
+		for (int i = 0; i < tries && !onRender(done); i++) {
+			press(pad, button);
+		}
+	}
+
+	private void createWorldWithController() throws Exception {
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && Party.current().hostHasController()),
+				"in the lobby with player 1's controller");
+		checkOwnHintsOnly("the lobby");
+		press(HOST_PAD, PadButton.START);
+		waitFor("the world picker", Duration.ofSeconds(15),
+				() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+		check(onRender(() -> minecraft.gui.screen() instanceof WorldsScreen w
+				&& w.cardLevelIds().getFirst().equals(w.focusedLevelId())), "a controller arrives focused on the first card");
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 12,
+				() -> minecraft.gui.screen() instanceof WorldsScreen w && "".equals(w.focusedLevelId()));
+		press(HOST_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof NewWorldScreen), "Create opens the new-world screen");
+		NewWorldScreen screen = onRender(() -> (NewWorldScreen) minecraft.gui.screen());
+		String suggested = onRender(screen::worldName);
+		check(suggested.startsWith("Co-op World"), "a name is ready (" + suggested + ")");
+		check(onRender(screen::focusedRow).equals("create"), "focus starts on Create");
+		checkOwnHintsOnly("the new-world screen");
+		HearthTextField.drewParchment = false;
+		Thread.sleep(300);
+		check(HearthTextField.drewParchment, "the name is on parchment, not vanilla's black box");
+		screenshot("new-world");
+		// The name on the on-screen keyboard: X deletes a letter, Menu keeps it.
+		pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> screen.focusedRow().equals("name"));
+		press(HOST_PAD, PadButton.A);
+		check(onRender(screen::typing), "A on the name opens the keyboard");
+		press(HOST_PAD, PadButton.X);
+		press(HOST_PAD, PadButton.START);
+		String name = onRender(screen::worldName);
+		check(!onRender(screen::typing) && name.equals(suggested.substring(0, suggested.length() - 1)),
+				"the keyboard changed the name (" + name + ")");
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 4, () -> screen.focusedRow().equals("mode"));
+		press(HOST_PAD, PadButton.DPAD_RIGHT);
+		check(onRender(screen::mode) == NewWorldScreen.Mode.CREATIVE, "right on Mode picks Creative");
+		pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 6, () -> screen.focusedRow().equals("create"));
+		press(HOST_PAD, PadButton.A);
+		waitFor("the new world", Duration.ofSeconds(180), () -> onRender(() -> minecraft.level != null
+				&& minecraft.getSingleplayerServer() != null && minecraft.player != null));
+		String levelId = onRender(() -> minecraft.getSingleplayerServer()
+				.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).toAbsolutePath().normalize()
+				.getFileName().toString());
+		check(onRender(() -> minecraft.getSingleplayerServer().getWorldData().getLevelName()).equals(name),
+				"the world has the name typed");
+		check(onRender(() -> minecraft.player.isCreative()), "and is Creative");
+		// Clean up: leave, delete it, and go back to the lobby for the next step.
+		onRender(() -> {
+			minecraft.disconnectFromWorld(Component.literal("E2E"));
+			return null;
+		});
+		waitFor("back on a menu", Duration.ofSeconds(60),
+				() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+		onRender(() -> {
+			try (var access = minecraft.getLevelSource().createAccess(levelId)) {
+				access.deleteLevel();
+			}
+			return null;
+		});
+		check(!onRender(() -> minecraft.getLevelSource().levelExists(levelId)), "the test world is deleted");
+		openLobby();
+		waitFor("player 1's controller again", Duration.ofSeconds(5),
+				() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
 	}
 
 	private void hostControllerRemembered() throws Exception {
@@ -801,6 +1148,136 @@ public final class E2eDriver {
 		check(onRender(() -> card(1) == null && Party.current().profileOf(1).name().equals("Birch")),
 				"B backs out and keeps Birch");
 		check(onRender(() -> Party.current().seatView(1).status()).equals("Ready"), "the seat is ready again");
+	}
+
+	private GuestProfile storedProfile(String name) throws IOException {
+		return new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json")).load().stream()
+				.filter(p -> p.name().equals(name)).findFirst().orElseThrow();
+	}
+
+	private void controlsRemap() throws Exception {
+		check(onRender(() -> minecraft.gui.screen().children().stream()
+				.filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance).count()) == 2,
+				"the lobby's footer has only Back and Start (a seat's own buttons are on its card)");
+		screenshot("lobby-ready");
+		press(LOBBY_PAD, PadButton.X);
+		check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.MORE), "X on the ready card opens More");
+		check(onRender(() -> card(1).moreFocus()) == SeatCard.MoreEntry.CONTROLS, "More starts on Controls");
+		check(onRender(() -> minecraft.gui.screen().getFocused()) == null,
+				"nothing in the lobby looks selected (its controllers drive cards and the pointer, not focus)");
+		screenshot("lobby-more");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ControlsScreen c && c.seat() == 1),
+				"A on Controls opens that seat's controls");
+		ControlsScreen screen = onRender(() -> (ControlsScreen) minecraft.gui.screen());
+		check(onRender(screen::focusedAction) == Action.JUMP, "focus starts on Jump");
+		checkOwnHintsOnly("the controls screen");
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> screen.model().listening()) == Action.JUMP, "A waits for Jump's button");
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> screen.model().scheme().controlFor(Action.JUMP).orElse(null)) == Control.Y
+				&& onRender(() -> screen.model().scheme().controlFor(Action.INVENTORY).orElse(null)) == Control.A,
+				"Y is Jump now, and Inventory took A (a swap)");
+		check(onRender(() -> screen.model().name()).equals("Custom"), "the layout is Custom");
+		screenshot("controls");
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		check(onRender(() -> screen.model().name()).equals("Southpaw") && onRender(() -> screen.model().scheme().swapSticks()),
+				"RB tries the presets: Southpaw swaps the sticks");
+		press(LOBBY_PAD, PadButton.LEFT_BUMPER);
+		press(LOBBY_PAD, PadButton.LEFT_BUMPER);
+		press(LOBBY_PAD, PadButton.LEFT_BUMPER);
+		check(onRender(() -> screen.model().name()).equals("Custom")
+				&& onRender(() -> screen.model().scheme().controlFor(Action.JUMP).orElse(null)) == Control.Y,
+				"LB comes back to the edited layout");
+		press(LOBBY_PAD, PadButton.START);
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) != null
+				&& card(1).stage() == SeatCard.Stage.MORE), "Menu saves and goes back to the card's More");
+		check(storedProfile("Birch").controls().controlFor(Action.JUMP).orElse(null) == Control.Y,
+				"the profile is saved with Y for Jump");
+		check(onRender(() -> Party.current().profileOf(1).controls().controlFor(Action.JUMP).orElse(null)) == Control.Y,
+				"the seat plays with it");
+		waitFor("the guest's game told", Duration.ofSeconds(10), () -> satelliteLog().contains("setcontrols jump=y"));
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().seatView(1).status().equals("Ready")),
+				"B in More goes back to the ready seat");
+		check(storedProfile("Birch").controls().controlFor(Action.JUMP).orElse(null) == Control.Y,
+				"leaving More keeps the saved controls");
+		// Back to Bedrock for the steps after, through the screen again: RB from the saved layout is Bedrock.
+		press(LOBBY_PAD, PadButton.X);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ControlsScreen), "the controls open again");
+		press(LOBBY_PAD, PadButton.RIGHT_BUMPER);
+		check(onRender(() -> ((ControlsScreen) minecraft.gui.screen()).model().name()).equals("Bedrock"),
+				"RB from Custom is Bedrock");
+		press(LOBBY_PAD, PadButton.START);
+		press(LOBBY_PAD, PadButton.B);
+		check(ControlScheme.presetName(storedProfile("Birch").controls()).orElse("").equals("Bedrock")
+				&& onRender(() -> card(1) == null), "Birch is back on Bedrock and ready");
+	}
+
+	/** Holds a button down for a while, then lets go. */
+	private void hold(int pad, PadButton button, long millis) throws InterruptedException {
+		PADS.set(pad, new InputFrame(0, InputFrame.buttons(button), 0, 0, 0, 0, 0, 0));
+		Thread.sleep(millis);
+		PADS.set(pad, InputFrame.NEUTRAL);
+		Thread.sleep(150);
+	}
+
+	private boolean stored(String name) throws IOException {
+		return new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json")).load().stream()
+				.anyMatch(p -> p.name().equals(name));
+	}
+
+	private void manageProfiles() throws Exception {
+		// A spare profile nobody plays, first in the list.
+		ProfileStore store = new ProfileStore(minecraft.gameDirectory.toPath().resolve("hearthside/profiles.json"));
+		List<GuestProfile> saved = new ArrayList<>(store.load());
+		saved.add(0, new GuestProfile(UUID.nameUUIDFromBytes("Spare".getBytes()), "Spare", SkinRef.defaultSkin("steve"),
+				null));
+		store.save(saved);
+		press(LOBBY_PAD, PadButton.X);
+		pressUntil(LOBBY_PAD, PadButton.DPAD_DOWN, 3, () -> card(1).moreFocus() == SeatCard.MoreEntry.MANAGE);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ManageProfilesScreen m && m.seat() == 1
+				&& m.names().contains("Spare") && m.names().contains("Birch")), "Profiles lists the saved profiles");
+		ManageProfilesScreen screen = onRender(() -> (ManageProfilesScreen) minecraft.gui.screen());
+		checkOwnHintsOnly("the profiles screen");
+		pressUntil(LOBBY_PAD, PadButton.DPAD_RIGHT, 8, () -> "Birch".equals(screen.focusedName()));
+		hold(LOBBY_PAD, PadButton.Y, 2000);
+		check(stored("Birch") && onRender(screen::problem) != null && onRender(screen::problem).contains("playing"),
+				"Birch is seat 2's: holding Y is refused, and the card says why");
+		// Still holding Y while moving to Spare must not start deleting it: a delete takes a fresh press.
+		PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y), 0, 0, 0, 0, 0, 0));
+		Thread.sleep(300);
+		for (int i = 0; i < 4 && !"Spare".equals(onRender(screen::focusedName)); i++) {
+			PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y, PadButton.DPAD_LEFT), 0, 0, 0, 0, 0, 0));
+			Thread.sleep(250);
+			PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y), 0, 0, 0, 0, 0, 0));
+			Thread.sleep(150);
+		}
+		Thread.sleep(2000);
+		PADS.set(LOBBY_PAD, InputFrame.NEUTRAL);
+		Thread.sleep(200);
+		check(stored("Spare"), "a Y held over from another card deletes nothing");
+		pressUntil(LOBBY_PAD, PadButton.DPAD_LEFT, 8, () -> "Spare".equals(screen.focusedName()));
+		hold(LOBBY_PAD, PadButton.Y, 600);
+		check(stored("Spare") && onRender(screen::progress) == 0, "letting go early keeps it");
+		PADS.set(LOBBY_PAD, new InputFrame(0, InputFrame.buttons(PadButton.Y), 0, 0, 0, 0, 0, 0));
+		Thread.sleep(300);
+		screenshot("manage-profiles");
+		Thread.sleep(1200);
+		PADS.set(LOBBY_PAD, InputFrame.NEUTRAL);
+		Thread.sleep(300);
+		check(!stored("Spare") && !onRender(screen::names).contains("Spare"), "holding Y for 1.5 s deletes it");
+		check(stored("Birch") && stored("Hazel"), "nothing else is deleted");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) != null
+				&& card(1).stage() == SeatCard.Stage.MORE), "B goes back to the card's More");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().seatView(1).status().equals("Ready")),
+				"and B again to the ready seat");
 	}
 
 	private void cardBackAndLeave() throws Exception {
@@ -955,10 +1432,20 @@ public final class E2eDriver {
 				() -> satelliteLog().contains("hearthside satellite connected as player"));
 	}
 
-	private void lobbyIntoWorld() throws Exception {
+	private String madeName, shownName;
+
+	private CoopWorldsStore coopStore() {
+		return new CoopWorldsStore(minecraft.gameDirectory.toPath().resolve("hearthside/coop-worlds.json"));
+	}
+
+	private void lobbyToPicker() throws Exception {
 		// Seat 1 is ready as the profile quick setup made (L3). A second controller takes seat 2 and is still on its
 		// card when the world opens: it goes in with what its card shows (the first profile nobody holds).
 		String made = onRender(() -> Party.current().seatView(1).name());
+		madeName = made;
+		// The co-op record says the E2E world was last played with Ember and Birch (W1 checks the picker shows it).
+		Files.deleteIfExists(minecraft.gameDirectory.toPath().resolve("hearthside/coop-worlds.json"));
+		coopStore().played(WORLD, System.currentTimeMillis(), List.of("Ember", "Birch"));
 		PADS.plug(SECOND_LOBBY_PAD, "fake-lobby-pad-2", PadStyle.XBOX);
 		Thread.sleep(300);
 		check(onRender(() -> Party.current().joinStyle()) == PadStyle.XBOX,
@@ -967,12 +1454,36 @@ public final class E2eDriver {
 		waitFor("seat 2 choosing on its card", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
 		screenshot("lobby-three-players");
 		String shown = onRender(() -> cardShows(2));
+		shownName = shown;
 		press(LOBBY_PAD, PadButton.START);
-		check(onRender(() -> minecraft.gui.screen() instanceof SelectWorldScreen), "Menu continues to world select");
-		openWorld();
+		check(onRender(() -> minecraft.gui.screen() instanceof WorldsScreen), "Menu opens the world picker");
+		waitFor("the picker has listed the worlds", Duration.ofSeconds(15),
+				() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+	}
+
+	private void pickerFocusesLastCoopWorld() throws Exception {
+		WorldsScreen picker = onRender(() -> (WorldsScreen) minecraft.gui.screen());
+		check(onRender(() -> minecraft.getLevelSource().levelExists(WORLD)), "the E2E world exists (created by earlier runs)");
+		check(WORLD.equals(onRender(picker::focusedLevelId)), "the last co-op world is first and focused");
+		check("Last played with Ember and Birch".equals(onRender(() -> picker.playedWithText(WORLD))),
+				"its card says who played it");
+		screenshot("worlds");
+	}
+
+	private void pickerOpensWorld() throws Exception {
+		if (onRender(() -> minecraft.gui.screen() instanceof WorldsScreen)) {
+			press(LOBBY_PAD, PadButton.A);
+		}
+		Thread.sleep(500);
+		if (onRender(() -> minecraft.level == null) && !onRender(() -> minecraft.getLevelSource().levelExists(WORLD))) {
+			openWorld();
+		}
+		String made = madeName, shown = shownName;
 		waitFor("both lobby guests in the world", Duration.ofSeconds(240), () -> playerCount() == 3);
 		check(guest(made) != null, made + " is in the world under that name (the game launched as Seat1)");
 		check(guest(shown) != null, "seat 2 went in as what its card showed (" + shown + ")");
+		waitFor("the co-op record has both guests", Duration.ofSeconds(10), () -> coopStore().load().stream()
+				.anyMatch(w -> w.levelId().equals(WORLD) && w.players().contains(made) && w.players().contains(shown)));
 		// Back to the starting point for the rest of the run: the lobby guest leaves.
 		onRender(() -> {
 			Party party = Party.current();
