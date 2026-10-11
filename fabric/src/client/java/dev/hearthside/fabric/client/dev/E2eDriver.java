@@ -100,6 +100,7 @@ public final class E2eDriver {
 	 * state (the title screen; the world with the host alone) needs nothing.
 	 */
 	private static final String[][] NEEDS = {
+			{"X1"},
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
 			{"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
@@ -165,6 +166,7 @@ public final class E2eDriver {
 						heard.add(new Heard(System.nanoTime(), sound.getIdentifier().toString())));
 				return null;
 			});
+			step("X1 a shared image round-trips through this game's backend", this::sharedImageRoundTrips);
 			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
 			// The lobby and in-world pad blocks are only steps: with none of theirs selected, each reports SKIP and
@@ -337,6 +339,30 @@ public final class E2eDriver {
 	}
 
 	// ---- Compositor steps ----
+
+	/**
+	 * X1: memory exported by the export device and imported twice through this game's backend is one image: magenta
+	 * cleared through one import reads back through the other. An image whose description doesn't match this game's is
+	 * refused (Spec C section 3.5 and Review Focus 4).
+	 */
+	private void sharedImageRoundTrips() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> {
+			SharedImageCheck.start();
+			return null;
+		});
+		// The readback is asynchronous: the result is logged from its callback a frame or two later.
+		waitFor("shared image round trip", Duration.ofSeconds(15),
+				() -> hostLogSince(mark).contains("hearthside shared image round trip backend="));
+		String log = hostLogSince(mark);
+		check(Pattern.compile("hearthside shared image round trip backend=(opengl|vulkan) rgb=ff00ff").matcher(log).find(),
+				"magenta cleared through one import reads back through the other (got: "
+						+ log.lines().filter(l -> l.contains("round trip")).findFirst().orElse("nothing") + ")");
+		check(log.contains("hearthside shared image mismatch refused"),
+				"an image whose description doesn't match this game's is refused, not imported");
+		check(!log.contains("validation error"), "no Vulkan validation errors");
+		check(!log.contains("hearthside shared image check failed"), "the check ran to the end");
+	}
 
 	private static final String PATTERN = "rgb=ff00ff";
 
