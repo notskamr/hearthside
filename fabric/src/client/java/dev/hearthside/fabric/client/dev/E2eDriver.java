@@ -15,6 +15,7 @@ import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
@@ -89,7 +90,14 @@ public final class E2eDriver {
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
 
-			openWorld();
+			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
+				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
+				step("B5 continuing into a world brings the seated guest in", this::lobbyIntoWorld);
+			}
+			if (onRender(() -> minecraft.level == null)) {
+				openWorld();
+			}
 			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
@@ -521,6 +529,54 @@ public final class E2eDriver {
 		profiles.add(new GuestProfile(UUID.randomUUID(), "Player2", SkinRef.defaultSkin("alex"), null,
 				ControlScheme.BEDROCK.withBinding(Action.JUMP, Control.Y)));
 		store.save(profiles);
+	}
+
+	// ---- Lobby steps (before any world) ----
+
+	private static final int LOBBY_PAD = 103;
+
+	private LobbyScreen openLobby() throws Exception {
+		return onRender(() -> {
+			LobbyScreen lobby = new LobbyScreen(new TitleScreen(), Party.openLobby(minecraft));
+			minecraft.gui.setScreen(lobby);
+			return lobby;
+		});
+	}
+
+	private void lobbyCancelStopsGuests() throws Exception {
+		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		LobbyScreen lobby = openLobby();
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a guest game warming up in the lobby", Duration.ofSeconds(30), () -> !satellites().isEmpty());
+		onRender(() -> {
+			lobby.onClose();
+			return null;
+		});
+		waitFor("every guest game stopped", Duration.ofSeconds(30), () -> satellites().isEmpty());
+		check(Party.current() == null, "the party is gone");
+	}
+
+	private void lobbySeatsAndPrewarms() throws Exception {
+		openLobby();
+		press(LOBBY_PAD, PadButton.A);
+		waitFor("a guest game warming up", Duration.ofSeconds(30), () -> !satellites().isEmpty());
+		check(onRender(() -> minecraft.level == null), "no world is open yet");
+		waitFor("the guest's game connected to the party", Duration.ofSeconds(120),
+				() -> satelliteLog().contains("hearthside satellite connected as player"));
+	}
+
+	private void lobbyIntoWorld() throws Exception {
+		openWorld();
+		waitFor("the lobby guest in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+		// Back to the starting point for the rest of the run: the lobby guest leaves.
+		onRender(() -> {
+			Party party = Party.current();
+			party.leaveAll();
+			return null;
+		});
+		PADS.unplug(LOBBY_PAD);
+		waitFor("lobby guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
 	}
 
 	private void oneADoesNotJoin() throws Exception {

@@ -115,8 +115,9 @@ public final class Party {
 		}
 	}
 
-	private Party(Minecraft minecraft) throws IOException {
+	private Party(Minecraft minecraft, JoinFlow.Mode mode) throws IOException {
 		this.minecraft = minecraft;
+		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
 		this.controlServer = ControlServer.start(this::verifyHello);
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
@@ -177,6 +178,9 @@ public final class Party {
 	/** A world opened: let every guest whose game is ready log in to it. */
 	private void attach(WorldLink link) {
 		world = link;
+		// The lobby is over: seats stay, and from now on new controllers join with A, A.
+		flow.enterGame();
+		minecraft.execute(this::afterGuestsChanged);
 		for (Slot slot : slots.values()) {
 			ControlConnection connection = slot.connection;
 			if (connection != null) {
@@ -218,7 +222,7 @@ public final class Party {
 			if (server instanceof IntegratedServer) {
 				try {
 					if (current == null) {
-						current = new Party(Minecraft.getInstance());
+						current = new Party(Minecraft.getInstance(), JoinFlow.Mode.IN_GAME);
 					}
 					current.attach(new WorldLink(server, current.tokens));
 				} catch (IOException e) {
@@ -233,6 +237,50 @@ public final class Party {
 				session.close();
 			}
 		});
+	}
+
+	/** The party for the co-op lobby: the current one, or a new one waiting for a world. Render thread. */
+	public static Party openLobby(Minecraft minecraft) throws IOException {
+		if (current == null) {
+			current = new Party(minecraft, JoinFlow.Mode.LOBBY);
+		}
+		return current;
+	}
+
+	/** Ends the party: every guest's game stops. */
+	public void disband() {
+		if (current == this) {
+			current = null;
+		}
+		close();
+	}
+
+	/** Every guest leaves (their games stop); the party stays. Render thread. */
+	public void leaveAll() {
+		for (Slot slot : List.copyOf(slots.values())) {
+			endSlot(slot);
+			removeSlot(slot);
+		}
+	}
+
+	/** What a lobby card shows for a guest seat. */
+	public record SeatView(String name, String status, int color, boolean taken) {}
+
+	/** The lobby card for player {@code index} (1-3). */
+	public SeatView seatView(int index) {
+		Slot slot = slots.get(index);
+		if (slot == null) {
+			return new SeatView("Press A to join", "", 0x555555, false);
+		}
+		String controller = controllerOfSlot.get(index);
+		dev.hearthside.core.session.SeatState state = controller == null ? null : flow.seats().get(controller);
+		String status = state instanceof dev.hearthside.core.session.SeatState.Disconnected ? "Controller disconnected"
+				: slot.connection == null ? "Getting ready" : "Ready";
+		return new SeatView(slot.profile.name(), status, slot.profile.color(), true);
+	}
+
+	public int seatedCount() {
+		return slots.size();
 	}
 
 	public static Party current() {
@@ -339,7 +387,7 @@ public final class Party {
 
 	// ---- Join flow: controllers joining with A, A (Spec A section 3.2) ----
 
-	private final JoinFlow flow = new JoinFlow(JoinFlow.Mode.IN_GAME, 3, Clock.systemUTC());
+	private final JoinFlow flow;
 	/** Join-flow controller id ("pad-<SDL id>") of each guest slot. */
 	private final Map<Integer, String> controllerOfSlot = new ConcurrentHashMap<>();
 	private final Map<String, Integer> instanceOf = new HashMap<>();
@@ -591,6 +639,13 @@ public final class Party {
 	/** Re-lays out the views, or leaves split-screen mode when the last guest has gone. Render thread. */
 	private void afterGuestsChanged() {
 		List<Slot> guests = new ArrayList<>(slots.values());
+		if (world == null) {
+			// In the lobby guests' games wait hidden; views are laid out once a world is open.
+			if (Compositor.active() != null) {
+				Compositor.deactivate(minecraft);
+			}
+			return;
+		}
 		if (guests.isEmpty()) {
 			leaveSplitScreen();
 			return;

@@ -4,6 +4,7 @@ import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.GamepadSource;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.InputRouter;
+import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadSnapshot;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.input.RouterEvent;
@@ -46,6 +47,7 @@ final class HostInput implements Runnable {
 	// Each controller's model id, for remembering which controller a profile last used.
 	private final Map<Integer, String> guids = new HashMap<>();
 	private long lastFlowTick;
+	private final Map<Integer, Integer> lobbyButtons = new HashMap<>();
 
 	HostInput(Minecraft minecraft, Party session, GamepadSource source, ControlScheme hostScheme) {
 		this.minecraft = minecraft;
@@ -78,6 +80,18 @@ final class HostInput implements Runnable {
 			}
 		}
 		refreshStyles();
+		if (minecraft.gui.screen() instanceof LobbyScreen lobby) {
+			// Shared screen: Menu on any seated controller moves the party on (Spec A section 7.1).
+			for (Map.Entry<Integer, InputFrame> entry : update.frames().entrySet()) {
+				int buttons = entry.getValue().buttons();
+				int before = lobbyButtons.getOrDefault(entry.getKey(), 0);
+				int start = InputFrame.buttons(PadButton.START);
+				if ((buttons & start) != 0 && (before & start) == 0) {
+					lobby.continueToWorlds();
+				}
+				lobbyButtons.put(entry.getKey(), buttons);
+			}
+		}
 		long now = System.nanoTime();
 		update.frames().forEach((player, frame) -> {
 			if (player == 0) {
