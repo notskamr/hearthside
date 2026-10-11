@@ -130,6 +130,28 @@ class SatelliteSupervisorTest {
 	}
 
 	@Test
+	void commandFailureDuringRestartCountsAsFailure() throws Exception {
+		AtomicInteger calls = new AtomicInteger();
+		var flaky = new SatelliteSupervisor(launcher,
+				() -> {
+					if (calls.incrementAndGet() == 2) {
+						throw new java.io.UncheckedIOException(new IOException("disk full"));
+					}
+					return new LaunchCommand(List.of("java"), Map.of(), Set.of());
+				},
+				Path.of("launch.log"), RestartPolicy.DEFAULT, scheduler, clock,
+				new SatelliteSupervisor.Listener() {
+					@Override public void started(RunningProcess p) { events.add("started"); }
+					@Override public void restarting(int failures, Duration delay) { events.add("restarting " + failures + " " + delay.toSeconds() + "s"); }
+					@Override public void gaveUp(int exitCode) { events.add("gaveUp " + exitCode); }
+				});
+		flaky.start();
+		launcher.last().crash();
+		scheduler.runNext();
+		assertThat(events).containsExactly("started", "restarting 1 1s", "restarting 2 2s");
+	}
+
+	@Test
 	void launchFailureDuringRestartCountsAsFailure() throws Exception {
 		launcher.failOnAttempt.add(2);
 		supervisor.start();

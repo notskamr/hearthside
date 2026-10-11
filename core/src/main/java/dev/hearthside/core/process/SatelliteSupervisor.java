@@ -109,7 +109,8 @@ public final class SatelliteSupervisor {
 		}
 		try {
 			launch();
-		} catch (IOException e) {
+		} catch (IOException | RuntimeException e) {
+			// Runs on the scheduler's thread: an escaping exception would silently end supervision.
 			LOG.log(Level.WARNING, "Satellite relaunch failed", e);
 			failed(-1);
 		}
