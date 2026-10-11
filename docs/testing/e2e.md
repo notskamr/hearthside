@@ -1,6 +1,7 @@
-# Walking skeleton — end-to-end check
+# End-to-end checks
 
-Automated by `E2eDriver` (enabled with `-Dhearthside.e2e=true`). Run it with:
+Automated by `E2eDriver` (enabled with `-Dhearthside.e2e=true`; `-Dhearthside.e2e.fakePads=true` adds scripted
+controllers). Run it with:
 
 ```bash
 ./gradlew :fabric:runE2eClient
@@ -25,6 +26,44 @@ Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 | 5 | `leave Guest2` → 1 player, satellite process gone, host window back to its original bordered `533,300 854×480` | PASS |
 | 6 | Closing the world closes satellites | PASS (gone 475 ms after close) |
 | 7 | Force-killing the host → satellite exits by itself; no Hearthside java processes left | PASS (0.9 s) |
+
+## Controllers (scripted) — 2026-10-11, same machine
+
+Run between steps 5 and 6 with a fake PlayStation-style pad; guest movement is measured on the host's server, on a
+barrier platform at y = 249 so terrain never blocks it.
+
+| # | Check | Result |
+|---|---|---|
+| P0 | `Player2` profile rebinds JUMP to Y | PASS |
+| P1 | START on a new controller adds `Player2` | PASS (11 s, incl. satellite start) |
+| P2 | Left stick forward 2 s moves the guest | PASS (7.73 blocks) |
+| P3 | Right stick 0.4 s turns the guest | PASS (112.5°, ≈ 280°/s) |
+| P4 | RB advances the guest's hotbar slot | PASS |
+| P7 | Rebound Y makes the guest jump | PASS (rose 1.25 blocks) |
+| P5 | Unplug pauses the guest; replug (same model, new id) resumes and movement works | PASS |
+| P6 | Satellite ignores the OS keyboard and mouse | PASS (log line) |
+| P8 | Satellite received the PlayStation pad style | PASS |
+| P9 | `Player2` leaves | PASS |
+
+Found while building this: satellites never see OS input, so Minecraft capped them at its 10 fps "away from keyboard"
+frame rate. Controller input now counts as activity.
+
+## Controllers (manual — needs real pads)
+
+Use two physical controllers, ideally two identical ones, and one of a different family if available.
+
+1. Open a world. Press START on a controller: a second window opens and that controller plays it.
+2. Press START on a second controller: a third window; each controller moves only its own player.
+3. In the world: does the Bedrock layout feel right? (A jump, B sneak, Y inventory, X inventory with recipe book,
+   RT/LT attack/use, LB/RB hotbar, D-pad down drop, D-pad up camera, left-stick click sprint.)
+4. Open an inventory (Y): the cursor snaps to slots and the D-pad hops between them. **Confirm the Bedrock roles:
+   A take/place, X take half, Y quick move, B close.** Tell me if any of these are wrong.
+5. Button hints show in the bottom-right in the world and along the bottom in inventories, with the right glyphs for
+   each controller (✕ ○ □ △ on PlayStation).
+6. Unplug one controller: only that player pauses. Plug it back: that player resumes — also with two identical pads.
+7. Click on a guest window with the mouse: nothing happens in that game and the cursor is not captured.
+8. `/hearthside pad`, then press A on a free controller: it now drives your (host) player.
+9. In `.minecraft/hearthside/profiles.json`, set `"invertY": true` for a guest; their next join uses it.
 
 ### Problems found and fixed
 
