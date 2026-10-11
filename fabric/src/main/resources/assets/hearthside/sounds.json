@@ -1,0 +1,11 @@
+{
+  "ui.tick": {"sounds": [{"name": "block.wooden_button.click_off", "type": "event"}]},
+  "ui.page": {"sounds": [{"name": "item.book.page_turn", "type": "event"}]},
+  "ui.key": {"sounds": [{"name": "block.bamboo_wood_button.click_on", "type": "event"}]},
+  "ui.key_delete": {"sounds": [{"name": "block.bamboo_wood_button.click_on", "type": "event", "pitch": 0.85}]},
+  "ui.knock": {"sounds": [{"name": "block.wooden_button.click_on", "type": "event"}]},
+  "ui.join": {"sounds": [{"name": "block.campfire.crackle", "type": "event"}]},
+  "ui.leave": {"sounds": [{"name": "block.candle.extinguish", "type": "event"}]},
+  "ui.prompt_in": {"sounds": [{"name": "ui.toast.in", "type": "event"}]},
+  "ui.prompt_out": {"sounds": [{"name": "ui.toast.out", "type": "event"}]}
+}

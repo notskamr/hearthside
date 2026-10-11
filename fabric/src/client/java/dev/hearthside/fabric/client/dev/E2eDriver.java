@@ -116,6 +116,12 @@ public final class E2eDriver {
 			waitFor("resources loaded", Duration.ofSeconds(180),
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
+			onRender(() -> {
+				// Every sound the host plays from here on, for S1 and S2.
+				minecraft.getSoundManager().addListener((sound, events, range) ->
+						heard.add(new Heard(System.nanoTime(), sound.getIdentifier().toString())));
+				return null;
+			});
 			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
@@ -136,6 +142,7 @@ public final class E2eDriver {
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
 				step("L1 a seated controller's last profile is pre-selected on its card", this::cardPreselects);
+				long lobbySounds = System.nanoTime();
 				step("L2 Y and the D-pad cycle profiles on the card; A confirms", this::cardCyclesAndConfirms);
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
@@ -151,6 +158,7 @@ public final class E2eDriver {
 				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
 				step("B5 Menu on a seated controller opens the world picker", this::lobbyToPicker);
 				step("W1 the world picker puts the last co-op world first, focused, with who played it", this::pickerFocusesLastCoopWorld);
+				step("S1 Hearthside's screens, cards and keyboards make their warm sounds", () -> screensMakeSounds(lobbySounds));
 				step("W2 A on it opens the world; the guests come in by name; the co-op record has them", this::pickerOpensWorld);
 			}
 			if (onRender(() -> minecraft.level == null)) {
@@ -187,11 +195,12 @@ public final class E2eDriver {
 			step("D7 a guest whose game gives up is shown, then removed", this::gaveUpShownThenRemoved);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
+				long dropInSounds = System.nanoTime();
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
 				step("D3 the drop-in toast shows that controller's own button and slides", this::toastShowsTheControllersButton);
 				step("B3 the join prompt expires after 5 s", this::joinPromptExpires);
 				step("D2 a newcomer picks their profile inside their own view", this::pickInOwnView);
-			step("D1 a joining guest's view shows the card, never its loading screens, until it is in the world", this::joiningShowsTheCard);
+				step("D1 a joining guest's view shows the card, never its loading screens, until it is in the world", this::joiningShowsTheCard);
 				step("P1 A, A on a new controller adds Player2", this::startJoins);
 				step("P2 left stick moves the guest", this::stickMoves);
 				step("P3 right stick turns the guest", this::stickTurns);
@@ -208,6 +217,7 @@ public final class E2eDriver {
 				step("A3 LT places a block", this::triggerPlaces);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
 				step("P9 Player2 leaves", this::player2Leaves);
+				step("S2 the join prompt, a drop-in and a leave make their warm sounds", () -> dropInMakesSounds(dropInSounds));
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
@@ -1695,6 +1705,64 @@ public final class E2eDriver {
 		check("Last played with Ember and Birch".equals(onRender(() -> picker.playedWithText(WORLD))),
 				"its card says who played it");
 		screenshot("worlds");
+	}
+
+	/** A sound the host played: when, and which event. */
+	private record Heard(long nanos, String id) {}
+
+	private final List<Heard> heard = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+	private java.util.Set<String> heardSince(long since) {
+		return heard.stream().filter(h -> h.nanos() >= since).map(Heard::id)
+				.collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new));
+	}
+
+	private long timesHeard(long since, String id) {
+		return heard.stream().filter(h -> h.nanos() >= since && h.id().equals(id)).count();
+	}
+
+	/**
+	 * S1: since the lobby cards (L2 on): the carousel's page turns, the keyboard's taps, the knock of Hearthside's buttons
+	 * and of confirming a card, a seat's crackle and snuff, and never vanilla's click. Then on the picker: a D-pad move
+	 * ticks, and six moves inside 100 ms tick at most three times.
+	 */
+	private void screensMakeSounds(long since) throws Exception {
+		java.util.Set<String> lobby = heardSince(since);
+		log("   heard since the cards: " + lobby);
+		for (String id : List.of("hearthside:ui.page", "hearthside:ui.knock", "hearthside:ui.key", "hearthside:ui.key_delete",
+				"hearthside:ui.tick", "hearthside:ui.join", "hearthside:ui.leave")) {
+			check(lobby.contains(id), id + " was heard");
+		}
+		check(!lobby.contains("minecraft:ui.button.click"), "no vanilla click on Hearthside's screens");
+		long move = System.nanoTime();
+		press(LOBBY_PAD, PadButton.DPAD_DOWN);
+		press(LOBBY_PAD, PadButton.DPAD_UP);
+		check(timesHeard(move, "hearthside:ui.tick") >= 1, "a D-pad move on the picker ticks");
+		long burst = System.nanoTime();
+		onRender(() -> {
+			for (int i = 0; i < 6; i++) {
+				dev.hearthside.fabric.client.menu.MenuNavigator.apply(minecraft, minecraft.gui.screen(),
+						i % 2 == 0 ? dev.hearthside.core.input.MenuNav.Action.DOWN : dev.hearthside.core.input.MenuNav.Action.UP,
+						0x3F7FD0);
+				Thread.sleep(15);
+			}
+			return null;
+		});
+		long ticks = timesHeard(burst, "hearthside:ui.tick");
+		log("   six moves in 90 ms ticked " + ticks + " times");
+		check(ticks >= 1 && ticks <= 3, "six quick moves tick at most three times");
+		check(WORLD.equals(onRender(() -> ((WorldsScreen) minecraft.gui.screen()).focusedLevelId())),
+				"focus is back on the E2E world for W2");
+	}
+
+	/** S2: since B2: the join prompt slides in and out, a drop-in confirm crackles, and a leave snuffs. */
+	private void dropInMakesSounds(long since) throws Exception {
+		java.util.Set<String> world = heardSince(since);
+		log("   heard since B2: " + world);
+		for (String id : List.of("hearthside:ui.prompt_in", "hearthside:ui.prompt_out", "hearthside:ui.join",
+				"hearthside:ui.leave")) {
+			check(world.contains(id), id + " was heard");
+		}
 	}
 
 	private void pickerOpensWorld() throws Exception {

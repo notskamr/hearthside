@@ -2,11 +2,14 @@ package dev.hearthside.fabric.client.menu;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.core.input.MenuNav;
+import dev.hearthside.fabric.client.ui.HearthSounds;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.InputType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.events.ContainerEventHandler;
+import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
 
@@ -38,7 +41,20 @@ public final class MenuNavigator {
 		}
 		focusColour = colour & 0xFFFFFF;
 		minecraft.setLastInputType(InputType.KEYBOARD_ARROW);
-		return screen.keyPressed(new KeyEvent(key, keycode(key), 0));
+		boolean move = action != MenuNav.Action.ACCEPT && action != MenuNav.Action.BACK;
+		GuiEventListener before = move ? deepFocus(screen) : null;
+		boolean used = screen.keyPressed(new KeyEvent(key, keycode(key), 0));
+		if (move && minecraft.gui.screen() == screen && deepFocus(screen) != before) {
+			// A wooden tick as the highlight moves (the mouse hovering stays silent).
+			HearthSounds.play(HearthSounds.Ui.TICK);
+		}
+		return used;
+	}
+
+	/** The innermost focused element (a world card inside its list, say). */
+	private static GuiEventListener deepFocus(ContainerEventHandler container) {
+		GuiEventListener focused = container.getFocused();
+		return focused instanceof ContainerEventHandler inner && inner.getFocused() != null ? deepFocus(inner) : focused;
 	}
 
 	/**

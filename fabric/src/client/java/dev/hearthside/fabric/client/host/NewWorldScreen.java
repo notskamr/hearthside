@@ -12,6 +12,7 @@ import dev.hearthside.fabric.client.menu.MenuNavigator;
 import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.ui.HearthButton;
 import dev.hearthside.fabric.client.ui.HearthDraw;
+import dev.hearthside.fabric.client.ui.HearthSounds;
 import dev.hearthside.fabric.client.ui.HearthTextField;
 import dev.hearthside.fabric.client.ui.HintChip;
 import dev.hearthside.fabric.client.ui.KeyboardWidget;
@@ -179,13 +180,17 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 				int step = action == MenuNav.Action.RIGHT ? 1 : -1;
 				if (focused == modeRow) {
 					cycleMode(step);
+					HearthSounds.play(HearthSounds.Ui.PAGE);
 				} else if (focused == difficultyRow && difficultyRow.active) {
 					cycleDifficulty(step);
-				} else if (cheatsRow.active) {
+					HearthSounds.play(HearthSounds.Ui.PAGE);
+				} else if (focused == cheatsRow && cheatsRow.active) {
 					cheats = !cheats;
 					refreshLabels();
+					HearthSounds.play(HearthSounds.Ui.PAGE);
 				}
 			} else if (action == MenuNav.Action.ACCEPT && focused == nameBox) {
+				HearthSounds.play(HearthSounds.Ui.KNOCK);
 				keyboard = KeyboardModel.forText(name, 32);
 				keyboardPlayer = player;
 				keyboardButtons = -1;
@@ -206,25 +211,32 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 		int moveY = keysY.step(dy, nanos) > 0 ? dy : 0;
 		if (moveX != 0 || moveY != 0) {
 			keyboard.move(moveX, moveY);
+			HearthSounds.play(HearthSounds.Ui.TICK);
 		}
 		if (down(pressed, PadButton.A)) {
 			keyboard.type();
+			HearthSounds.play(HearthSounds.Ui.KEY);
 		}
 		if (down(pressed, PadButton.X)) {
 			keyboard.delete();
+			HearthSounds.play(HearthSounds.Ui.KEY_DELETE);
 		}
 		if (down(pressed, PadButton.Y)) {
 			keyboard.space();
+			HearthSounds.play(HearthSounds.Ui.KEY);
 		}
 		if (down(pressed, PadButton.LEFT_BUMPER)) {
 			keyboard.previousLayer();
+			HearthSounds.play(HearthSounds.Ui.PAGE);
 		}
 		if (down(pressed, PadButton.RIGHT_BUMPER)) {
 			keyboard.nextLayer();
+			HearthSounds.play(HearthSounds.Ui.PAGE);
 		}
 		if (down(pressed, PadButton.START)) {
 			name = keyboard.text();
 			nameBox.setValue(name);
+			HearthSounds.play(HearthSounds.Ui.KNOCK);
 			closeKeyboard();
 		} else if (down(pressed, PadButton.B)) {
 			closeKeyboard();

@@ -1281,7 +1281,9 @@ public final class Party {
 						"A player's controller is still disconnected. Plug it back in to carry on.")
 						.withStyle(ChatFormatting.YELLOW));
 				case JoinFlow.Effect.HideJoinPrompt hide -> joinToast.hide(hide.controller(), System.nanoTime());
-				case JoinFlow.Effect.ClaimSeat claim -> { }
+				// A crackle as the fire takes another player.
+				case JoinFlow.Effect.ClaimSeat claim -> dev.hearthside.fabric.client.ui.HearthSounds.play(
+						dev.hearthside.fabric.client.ui.HearthSounds.Ui.JOIN);
 			}
 		}
 	}
@@ -1381,6 +1383,8 @@ public final class Party {
 			link.remove(slot.index);
 		}
 		minecraft.execute(() -> {
+			// A snuff as their light goes out.
+			dev.hearthside.fabric.client.ui.HearthSounds.play(dev.hearthside.fabric.client.ui.HearthSounds.Ui.LEAVE);
 			if (input != null) {
 				input.release(slot.index);
 			}

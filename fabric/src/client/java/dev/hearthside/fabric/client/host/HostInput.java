@@ -17,6 +17,7 @@ import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.menu.SeatScreen;
+import dev.hearthside.fabric.client.ui.HearthSounds;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -232,6 +233,7 @@ final class HostInput implements Runnable {
 			}
 			if ((pressed & start) != 0) {
 				// Menu on anyone's controller, player 1's included, goes on to choose a world.
+				HearthSounds.play(HearthSounds.Ui.KNOCK);
 				lobby.continueToWorlds();
 				continue;
 			}

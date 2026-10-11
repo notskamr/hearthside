@@ -6,6 +6,7 @@ import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 
@@ -19,6 +20,12 @@ public final class HearthButton extends Button {
 
 	public HearthButton(int x, int y, int width, int height, Component message, OnPress onPress) {
 		super(x, y, width, height, message, onPress, DEFAULT_NARRATION);
+	}
+
+	/** Hearthside's knock, not vanilla's click. */
+	@Override
+	public void playDownSound(SoundManager soundManager) {
+		HearthSounds.play(HearthSounds.Ui.KNOCK);
 	}
 
 	/** Shows this control's glyph (in the family {@code style} gives) before the label. */

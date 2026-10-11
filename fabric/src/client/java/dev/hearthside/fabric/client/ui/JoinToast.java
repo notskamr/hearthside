@@ -35,6 +35,10 @@ public final class JoinToast implements OverlayLayer {
 
 	/** A new controller pressed A once: show the prompt for {@code window}, in that controller's family. */
 	public void show(String controller, PadStyle style, long now, Duration window, boolean reduce) {
+		expire(now);
+		if (shown == null || !shown.controller().equals(controller)) {
+			HearthSounds.play(HearthSounds.Ui.PROMPT_IN);
+		}
 		shown = new Prompt(controller, style, now, now + window.toNanos());
 		leaving = null;
 		reduceMotion = reduce;
@@ -46,6 +50,7 @@ public final class JoinToast implements OverlayLayer {
 	/** That controller confirmed, cancelled or let the prompt expire. */
 	public void hide(String controller, long now) {
 		if (shown != null && shown.controller().equals(controller)) {
+			HearthSounds.play(HearthSounds.Ui.PROMPT_OUT);
 			leaving = shown;
 			leavingSince = now;
 			shown = null;
@@ -60,6 +65,7 @@ public final class JoinToast implements OverlayLayer {
 	/** A prompt whose window ran out leaves by itself. */
 	private void expire(long now) {
 		if (shown != null && now >= shown.until()) {
+			HearthSounds.play(HearthSounds.Ui.PROMPT_OUT);
 			leaving = shown;
 			leavingSince = shown.until();
 			shown = null;

@@ -9,6 +9,7 @@ import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.ui.HoldToConfirm;
 import dev.hearthside.fabric.client.menu.SeatScreen;
 import dev.hearthside.fabric.client.ui.HearthDraw;
+import dev.hearthside.fabric.client.ui.HearthSounds;
 import dev.hearthside.fabric.client.ui.HintChip;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -128,6 +129,7 @@ public final class ManageProfilesScreen extends Screen implements SeatScreen {
 		progress = hold.step(y, nanos);
 		if (hold.done()) {
 			if (party.deleteProfile(focused.id())) {
+				HearthSounds.play(HearthSounds.Ui.LEAVE); // snuffed out
 				problem = null;
 				hold = new HoldToConfirm(HOLD);
 				progress = 0;
@@ -146,7 +148,11 @@ public final class ManageProfilesScreen extends Screen implements SeatScreen {
 		if (profiles.isEmpty()) {
 			return;
 		}
+		int before = focus;
 		focus = Math.clamp(focus + step, 0, profiles.size() - 1);
+		if (focus != before) {
+			HearthSounds.play(HearthSounds.Ui.TICK);
+		}
 		problem = null;
 		hold = new HoldToConfirm(HOLD);
 		progress = 0;
