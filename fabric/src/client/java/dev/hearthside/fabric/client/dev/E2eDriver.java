@@ -33,8 +33,11 @@ import java.util.concurrent.Callable;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.AbstractButton;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
@@ -91,6 +94,7 @@ public final class E2eDriver {
 			log("   first screen: " + onRender(() -> minecraft.gui.screen().getClass().getSimpleName()));
 
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
 				step("B4 lobby: A seats a controller and its game starts before any world", this::lobbySeatsAndPrewarms);
 				step("B5 continuing into a world brings the seated guest in", this::lobbyIntoWorld);
@@ -535,12 +539,44 @@ public final class E2eDriver {
 
 	private static final int LOBBY_PAD = 103;
 
+	/** Opens the lobby the way a player does: Co-op on the title screen. */
 	private LobbyScreen openLobby() throws Exception {
 		return onRender(() -> {
-			LobbyScreen lobby = new LobbyScreen(new TitleScreen(), Party.openLobby(minecraft));
-			minecraft.gui.setScreen(lobby);
-			return lobby;
+			minecraft.gui.setScreen(new TitleScreen());
+			coopButton().onPress(new KeyEvent(0, 0, 0));
+			return (LobbyScreen) minecraft.gui.screen();
 		});
+	}
+
+	/** The title screen's Co-op button, or null. Render thread. */
+	private AbstractButton coopButton() {
+		return Screens.getWidgets(minecraft.gui.screen()).stream()
+				.filter(w -> w instanceof AbstractButton && w.getMessage().getString().startsWith("Co-op"))
+				.map(w -> (AbstractButton) w).findFirst().orElse(null);
+	}
+
+	private void titleCoopOpensLobby() throws Exception {
+		PADS.plug(LOBBY_PAD, PAD_GUID, PadStyle.PLAYSTATION);
+		onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			return null;
+		});
+		AbstractButton coop = onRender(this::coopButton);
+		check(coop != null, "the title screen has a Co-op button");
+		waitFor("the Co-op button counts the controller", Duration.ofSeconds(5),
+				() -> onRender(() -> coop.getMessage().getString().equals("Co-op (1 controller)")));
+		onRender(() -> {
+			coop.onPress(new KeyEvent(0, 0, 0));
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen), "Co-op opens the lobby");
+		onRender(() -> {
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() instanceof TitleScreen) && Party.current() == null,
+				"Back returns to the title screen with no party");
+		PADS.unplug(LOBBY_PAD);
 	}
 
 	private void lobbyCancelStopsGuests() throws Exception {
