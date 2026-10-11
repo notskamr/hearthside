@@ -41,6 +41,8 @@ public final class FrameExporter {
 	private final boolean pattern = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
 	private final ArrayDeque<Pending> pending = new ArrayDeque<>();
 	private final InWorldSignal world = new InWorldSignal();
+	/** When this game last told the host it was in the world (0 once checked). */
+	private long liveSince;
 	private int generation = FrameNames.firstGeneration() - 1;
 	private SegmentSlotTable table;
 	private FrameSlots slots;
@@ -119,9 +121,17 @@ public final class FrameExporter {
 	}
 
 	private void observeWorld() {
-		if (world.observe(minecraft.level != null && minecraft.player != null, minecraft.gui.screen() != null, true)) {
+		// In the world means nothing covers it: no screen, and not Minecraft's loading overlay (a game that has just
+		// started may still be finishing its first resource load, drawn over everything as the Mojang screen).
+		boolean covered = minecraft.gui.screen() != null || minecraft.gui.overlay() != null;
+		if (world.observe(minecraft.level != null && minecraft.player != null, covered, true)) {
 			HearthsideMod.LOGGER.info("Hearthside in world");
 			tell(new ControlMessage.InWorld());
+			liveSince = System.nanoTime();
+		}
+		if (liveSince != 0 && System.nanoTime() - liveSince < 5_000_000_000L && minecraft.gui.overlay() != null) {
+			HearthsideMod.LOGGER.warn("Hearthside loading overlay over a live view");
+			liveSince = 0;
 		}
 		if (world.observeLeft(minecraft.getConnection() != null)) {
 			HearthsideMod.LOGGER.info("Hearthside left the world");

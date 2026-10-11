@@ -86,6 +86,7 @@ final class HostInput implements Runnable {
 		List<PadSnapshot> pads = source.poll();
 		for (PadSnapshot pad : pads) {
 			guids.put(pad.instanceId(), pad.guid());
+			padStyles.put(pad.instanceId(), pad.style());
 		}
 		InputRouter.Update update = router.update(pads);
 		takeTitlePad(pads);
@@ -301,6 +302,13 @@ final class HostInput implements Runnable {
 		lastSent.remove(player);
 		lastSentAt.remove(player);
 		styles.remove(player);
+	}
+
+	private final Map<Integer, PadStyle> padStyles = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/** A controller's family by SDL instance id (assigned or not). Any thread. */
+	PadStyle styleOfPad(int instanceId) {
+		return padStyles.getOrDefault(instanceId, PadStyle.GENERIC);
 	}
 
 	/** Any thread. */

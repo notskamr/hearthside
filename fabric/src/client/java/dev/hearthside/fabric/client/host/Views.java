@@ -26,6 +26,8 @@ final class Views implements ViewSource {
 	private final List<Integer> order = new ArrayList<>();
 	private Rect window;
 	private Optional<Rect> panel = Optional.empty();
+	/** When the layout last changed (name tags show again for a while after). */
+	private long changedAt;
 
 	/** The guests now in the world and the window's size: views glide to the new layout (or jump, if the window changed). */
 	void update(Collection<Integer> guests, Rect newWindow, long now, boolean reduceMotion) {
@@ -43,6 +45,7 @@ final class Views implements ViewSource {
 			targets.put(seats.get(i), plan.players().get(i));
 		}
 		panel = plan.panel();
+		changedAt = now;
 		if (first) {
 			// Player 1 had the whole window until now: their view glides from there.
 			motion.retarget(Map.of(0, newWindow), now, reduceMotion);
@@ -67,6 +70,10 @@ final class Views implements ViewSource {
 	@Override
 	public Set<Integer> seats() {
 		return motion.seats();
+	}
+
+	long changedAt() {
+		return changedAt;
 	}
 
 	/** The party panel's place (with three players), or empty. */

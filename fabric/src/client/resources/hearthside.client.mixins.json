@@ -19,6 +19,7 @@
 		"PresentMixin",
 		"SatelliteInputMixin",
 		"SatelliteSwapMixin",
+		"SatelliteToastMixin",
 		"SatelliteWindowMixin",
 		"TextFieldStyleMixin",
 		"TitleButtonStyleMixin",

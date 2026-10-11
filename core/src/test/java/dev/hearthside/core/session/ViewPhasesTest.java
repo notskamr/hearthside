@@ -19,6 +19,7 @@ class ViewPhasesTest {
 		long in = 10_000 * MS;
 		phases.inWorld(1, in);
 		assertThat(phases.phase(1)).contains(ViewPhase.LIVE);
+		assertThat(phases.since(1)).as("in the world since").isEqualTo(in);
 		assertThat(phases.cardCover(1, in + 125 * MS, false)).isCloseTo(0.5f, within(0.01f));
 		assertThat(phases.cardCover(1, in + 250 * MS, false)).isEqualTo(0f);
 	}

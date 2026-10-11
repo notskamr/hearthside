@@ -32,6 +32,8 @@ final class ViewOverlay implements OverlayLayer {
 	/** The frosted glass over a picture shown at the wrong size, about 35% opaque. */
 	private static final int FROST = 0x59FFFFFF;
 	private static final int ERROR_INK = 0xFFA8321E;
+	/** Name tags show this long after a player arrives or the layout changes, then fade over {@link #TAG_FADE}. */
+	private static final long TAG_SHOW = 4_000_000_000L, TAG_FADE = 400_000_000L;
 
 	private final Party party;
 
@@ -91,6 +93,36 @@ final class ViewOverlay implements OverlayLayer {
 		CardPainter.skin(g, party.pickerSkin(seat), c.x() + c.width() / 2 - height / 4, c.y() + 19, height / 2, height, 30f);
 	}
 
+	/** A thin border in the player's colour, and for a while their name in an Ember-glass tag (Spec A 4.1, 6). */
+	private void borderAndTag(GuiGraphicsExtractor g, Font font, ViewFrame view, OverlayContext context) {
+		Rect r = view.rect();
+		int seat = view.seat();
+		boolean live = seat == 0 || party.viewPhase(seat) == dev.hearthside.core.session.ViewPhase.LIVE;
+		int colour = party.colorOf(seat) & 0xFFFFFF;
+		int edge = Math.round(0xD9 * view.alpha()) << 24 | colour;
+		g.fill(r.x(), r.y(), r.x() + r.width(), r.y() + 1, edge);
+		g.fill(r.x(), r.y() + r.height() - 1, r.x() + r.width(), r.y() + r.height(), edge);
+		g.fill(r.x(), r.y() + 1, r.x() + 1, r.y() + r.height() - 1, edge);
+		g.fill(r.x() + r.width() - 1, r.y() + 1, r.x() + r.width(), r.y() + r.height() - 1, edge);
+		if (!live) {
+			return; // their card already says who they are
+		}
+		long since = Math.max(party.layoutChangedAt(), seat == 0 ? Long.MIN_VALUE : party.liveSince(seat));
+		long age = context.nanos() - since;
+		float shown = age < TAG_SHOW ? 1f : context.reduceMotion() ? 0f : 1f - (age - TAG_SHOW) / (float) TAG_FADE;
+		shown *= view.alpha();
+		if (shown <= 0.05f) {
+			return;
+		}
+		String name = font.plainSubstrByWidth(party.nameOf(seat), r.width() - 30);
+		int a = Math.round(shown * 255);
+		int w = 6 + 5 + 4 + font.width(name) + 6;
+		int x = r.x() + 6, y = r.y() + 6;
+		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_CHIP, x, y, w, 15, a << 24 | 0xFFFFFF);
+		g.fill(x + 6, y + 5, x + 11, y + 10, a << 24 | colour);
+		g.text(font, Component.literal(name), x + 15, y + 4, a << 24 | (HearthDraw.CREAM & 0xFFFFFF), true);
+	}
+
 	private static void ink(GuiGraphicsExtractor g, Font font, String text, int centre, int y, int maxWidth, int argb) {
 		String fitted = font.plainSubstrByWidth(text, maxWidth);
 		g.text(font, Component.literal(fitted), centre - font.width(fitted) / 2, y, argb, false);
@@ -120,6 +152,9 @@ final class ViewOverlay implements OverlayLayer {
 					CardPainter.joining(g, font, r, party.who(seat), party.viewPhase(seat),
 							party.joiningStuck(seat, context.nanos()), cover, context.nanos(), context.reduceMotion());
 				}
+			}
+			if (context.views().size() > 1) {
+				borderAndTag(g, font, view, context);
 			}
 			if (view.alpha() < 1f) {
 				int alpha = Math.round((1f - view.alpha()) * 255);

@@ -182,6 +182,8 @@ public final class Party {
 			hostReduceMotion = file.host().settings().reduceMotion();
 			ButtonGuideRenderer.setReduceMotion(hostReduceMotion);
 			dev.hearthside.fabric.client.compositor.OverlayPass.setReduceMotion(hostReduceMotion);
+			OverlayPass.unregister(joinToast);
+			OverlayPass.register(joinToast);
 			hostControllerGuid = file.host().preferredControllerGuid();
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.warn("Could not read the host's controls; using Bedrock defaults", e);
@@ -262,7 +264,21 @@ public final class Party {
 		return new ProfileStore(gameDir.resolve("hearthside").resolve("profiles.json"));
 	}
 
+	/** The join toast for the party, if one is open (the E2E reads it). */
+	public dev.hearthside.fabric.client.ui.JoinToast joinToast() {
+		return joinToast;
+	}
+
 	public static void register() {
+		// When player 1 plays alone there is no overlay pass: the join toast draws on their HUD instead.
+		net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry.attachElementAfter(
+				net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements.CHAT,
+				net.minecraft.resources.Identifier.fromNamespaceAndPath(HearthsideMod.MOD_ID, "join_toast"), (g, delta) -> {
+					Party party = current;
+					if (party != null && Compositor.active() == null) {
+						party.joinToast.draw(g, g.guiWidth(), System.nanoTime());
+					}
+				});
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			if (server instanceof IntegratedServer) {
 				try {
@@ -431,6 +447,7 @@ public final class Party {
 				input.close();
 				input = null;
 			}
+			OverlayPass.unregister(joinToast);
 			leaveSplitScreen();
 		});
 		HearthsideMod.LOGGER.info("Hearthside session closed");
@@ -455,6 +472,10 @@ public final class Party {
 	private final Map<Integer, String> controllerOfSlot = new ConcurrentHashMap<>();
 	private final Map<String, Integer> instanceOf = new HashMap<>();
 	private final Map<String, String> guidOf = new HashMap<>();
+	/** Each unassigned controller's family, so the join toast names its own button. */
+	private final Map<String, PadStyle> styleOfController = new HashMap<>();
+	/** The drop-in prompt (over the views, or on player 1's HUD when they play alone). */
+	final dev.hearthside.fabric.client.ui.JoinToast joinToast = new dev.hearthside.fabric.client.ui.JoinToast();
 	private final Map<String, GuestProfile> chosen = new HashMap<>();
 	/** Controllers whose lobby card opens once their seat's game has started. */
 	private final java.util.Set<String> pendingCards = new java.util.HashSet<>();
@@ -470,6 +491,8 @@ public final class Party {
 		String controller = controllerId(instanceId);
 		instanceOf.put(controller, instanceId);
 		guidOf.put(controller, guid);
+		HostInput currentInput = input;
+		styleOfController.put(controller, currentInput == null ? PadStyle.GENERIC : currentInput.styleOfPad(instanceId));
 		apply(flow.press(controller, button == PadButton.A ? Control.A : Control.B));
 	}
 
@@ -985,6 +1008,24 @@ public final class Party {
 		return phases.cardCover(seat, now, reduceMotion);
 	}
 
+	/** When the views were last laid out anew. */
+	long layoutChangedAt() {
+		return views.changedAt();
+	}
+
+	/** When a guest's game came into the world (their current phase's start). */
+	long liveSince(int seat) {
+		return phases.since(seat);
+	}
+
+	/** A player's name as their tag shows it: player 1's account name, or a guest's profile. */
+	String nameOf(int seat) {
+		if (seat == 0) {
+			return minecraft.getUser().getName();
+		}
+		return who(seat).name();
+	}
+
 	/** What a seat's view shows now (for the E2E and the overlay). */
 	public dev.hearthside.core.session.ViewPhase viewPhaseOf(int seat) {
 		return viewPhase(seat);
@@ -1058,9 +1099,9 @@ public final class Party {
 	private void apply(JoinFlow.Result result) {
 		for (JoinFlow.Effect effect : result.effects()) {
 			switch (effect) {
-				case JoinFlow.Effect.ShowJoinPrompt prompt -> minecraft.gui.toastManager().addToast(new SystemToast(
-						SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal("New controller"),
-						Component.literal("Press A again to join")));
+				case JoinFlow.Effect.ShowJoinPrompt prompt -> joinToast.show(prompt.controller(),
+						styleOfController.getOrDefault(prompt.controller(), PadStyle.GENERIC), System.nanoTime(),
+						JoinFlow.CONFIRM_WINDOW, hostReduceMotion);
 				case JoinFlow.Effect.OpenProfilePicker pick -> {
 					// The player picks on their card, which opens once their seat's game starts: on the lobby's card, or
 					// (dropping in) inside their own new view while everyone else plays on.
@@ -1079,7 +1120,7 @@ public final class Party {
 				case JoinFlow.Effect.OfferTakeover offer -> chat(Component.literal(
 						"A player's controller is still disconnected. Plug it back in to carry on.")
 						.withStyle(ChatFormatting.YELLOW));
-				case JoinFlow.Effect.HideJoinPrompt hide -> { }
+				case JoinFlow.Effect.HideJoinPrompt hide -> joinToast.hide(hide.controller(), System.nanoTime());
 				case JoinFlow.Effect.ClaimSeat claim -> { }
 			}
 		}

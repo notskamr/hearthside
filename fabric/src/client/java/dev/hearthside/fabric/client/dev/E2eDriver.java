@@ -182,6 +182,7 @@ public final class E2eDriver {
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
+				step("D3 the drop-in toast shows that controller's own button and slides", this::toastShowsTheControllersButton);
 				step("B3 the join prompt expires after 5 s", this::joinPromptExpires);
 				step("D2 a newcomer picks their profile inside their own view", this::pickInOwnView);
 			step("D1 a joining guest's view shows the card, never its loading screens, until it is in the world", this::joiningShowsTheCard);
@@ -261,6 +262,11 @@ public final class E2eDriver {
 	private void guestFramesComposited() throws Exception {
 		waitInWorld(1);
 		waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+		windowShot("two-players");
+		check(!satelliteLog().contains("hearthside loading overlay over a live view"),
+				"the guest's view went live only once Minecraft's loading screen was gone");
+		check(satelliteLog().contains("hearthside skipped the chat-verification toast"),
+				"a guest arriving isn't greeted with Minecraft's chat-verification warning");
 	}
 
 	private void overlayDrawsOverViews() throws Exception {
@@ -460,9 +466,35 @@ public final class E2eDriver {
 			waitInWorld(2);
 			waitForProbe(3, mark, Duration.ofSeconds(30));
 			waitForProbe(2, mark, Duration.ofSeconds(10));
+			// The join toast over split play (a pad nobody uses yet presses A once).
+			PADS.plug(110, "fake-toast-pad", PadStyle.XBOX);
+			Thread.sleep(300);
+			press(110, PadButton.A);
+			Thread.sleep(400);
+			windowShot("toast-split");
+			PADS.unplug(110);
+			// A fourth player, for the four-view layout, then back to three.
+			onRender(() -> {
+				Party.current().join("Guest4");
+				return null;
+			});
+			waitFor("4 players", Duration.ofSeconds(180), () -> playerCount() == 4);
+			waitInWorld(3);
+			Thread.sleep(1200);
+			windowShot("four-players");
+			onRender(() -> {
+				Party.current().leave("Guest4");
+				return null;
+			});
+			waitFor("3 players again", Duration.ofSeconds(30), () -> playerCount() == 3);
 		} finally {
 			onRender(() -> {
 				Party.current().leave("Guest3");
+				try {
+					Party.current().leave("Guest4");
+				} catch (IllegalArgumentException alreadyGone) {
+					// it left above (or never came)
+				}
 				return null;
 			});
 		}
@@ -1587,6 +1619,23 @@ public final class E2eDriver {
 		check(guest("Player2") == null && satellites().isEmpty(), "one A only asks; nobody joined");
 	}
 
+	private void toastShowsTheControllersButton() throws Exception {
+		var toast = onRender(() -> Party.current().joinToast());
+		check(onRender(toast::visible), "the join toast is up");
+		check(hostLogSince(0).contains("hearthside toast glyph playstation"), "it shows the PlayStation controller's own button");
+		check(onRender(() -> minecraft.gui.toastManager().getToast(net.minecraft.client.gui.components.toasts.SystemToast.class,
+				net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId.PERIODIC_NOTIFICATION)) == null,
+				"Minecraft's own toast is gone");
+		long since = onRender(toast::shownSince);
+		float mid = onRender(() -> toast.offset(since + 90_000_000L));
+		float done = onRender(() -> toast.offset(since + 180_000_000L));
+		check(mid < 0 && done == 0, "it slides down into place within 180 ms (" + mid + ", " + done + ")");
+		var still = new dev.hearthside.fabric.client.ui.JoinToast();
+		still.show("e2e", PadStyle.XBOX, 0, Duration.ofSeconds(5), true);
+		check(still.offset(0) == 0, "with reduce motion it is simply there");
+		screenshot("toast");
+	}
+
 	private void joinPromptExpires() throws Exception {
 		Thread.sleep(3500); // past the 5 s window of B2's press
 		press(101, PadButton.A); // a fresh prompt, not a confirmation
@@ -1633,6 +1682,8 @@ public final class E2eDriver {
 		check(!Pattern.compile("probe player=2 gen=[0-9]+ rgb=ff00ff").matcher(beforeIn).find(),
 				"while joining, the view showed the card, never the guest's own frames (its loading screens)");
 		waitFor("the guest's world in their view", Duration.ofSeconds(5), () -> lastProbeRgb(2).equals("ff00ff"));
+		check(!satelliteLog().contains("hearthside loading overlay over a live view"),
+				"no loading screen after the card went");
 	}
 
 	private void startJoins() throws Exception {

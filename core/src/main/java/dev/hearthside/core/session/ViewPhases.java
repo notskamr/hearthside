@@ -52,6 +52,12 @@ public final class ViewPhases {
 		return state == null ? Optional.empty() : Optional.of(state.phase());
 	}
 
+	/** When the seat's current phase began ({@link Long#MIN_VALUE} for a seat with none). */
+	public long since(int seat) {
+		State state = states.get(seat);
+		return state == null ? Long.MIN_VALUE : state.since();
+	}
+
 	/** How much the card covers the view: 1 = only the card shows, 0 = only the game's frames. */
 	public float cardCover(int seat, long now, boolean reduceMotion) {
 		State state = states.get(seat);
