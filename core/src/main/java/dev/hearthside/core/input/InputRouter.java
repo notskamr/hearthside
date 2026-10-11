@@ -120,6 +120,12 @@ public final class InputRouter {
 		return playerToPad.containsKey(player);
 	}
 
+	/** The style of the controller currently bound to this player, if any. */
+	public Optional<PadStyle> styleOf(int player) {
+		Integer pad = playerToPad.get(player);
+		return pad == null ? Optional.empty() : Optional.ofNullable(previous.get(pad)).map(PadSnapshot::style);
+	}
+
 	private void bind(int instanceId, int player) {
 		padToPlayer.put(instanceId, player);
 		playerToPad.put(player, instanceId);

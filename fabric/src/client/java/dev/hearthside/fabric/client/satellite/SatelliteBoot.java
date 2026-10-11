@@ -2,11 +2,16 @@ package dev.hearthside.fabric.client.satellite;
 
 import dev.hearthside.core.channel.ControlClient;
 import dev.hearthside.core.channel.ControlConnection;
+import dev.hearthside.core.input.ControlSchemeJson;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.protocol.ControlCodec;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
+import dev.hearthside.fabric.client.input.FrameHook;
+import dev.hearthside.fabric.client.input.InputApplier;
+import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import dev.hearthside.fabric.server.GuestLoginHooks;
 import io.netty.buffer.Unpooled;
@@ -16,6 +21,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientLoginNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
@@ -29,6 +35,7 @@ import net.minecraft.sounds.SoundSource;
  */
 public final class SatelliteBoot {
 	private static volatile String loginToken;
+	private static InputApplier applier;
 
 	private SatelliteBoot() {}
 
@@ -54,6 +61,11 @@ public final class SatelliteBoot {
 		HearthsideMod.LOGGER.info("Hearthside satellite ignores OS keyboard and mouse");
 		// World audio plays once, from the host; per-player UI sounds return with Plan 5.
 		minecraft.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
+
+		applier = new InputApplier(minecraft);
+		FrameHook.register(applier::onFrame);
+		VirtualCursor.enableDrawing();
+		ButtonGuideRenderer.enable(applier::scheme);
 
 		Thread.ofPlatform().daemon().name("hearthside-satellite-connect").start(() -> connect(minecraft, port, index, secret));
 	}
@@ -89,6 +101,23 @@ public final class SatelliteBoot {
 					new ServerAddress("127.0.0.1", m.port()),
 					new ServerData("Hearthside", "127.0.0.1:" + m.port(), ServerData.Type.LAN), false, null));
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.QUIT -> minecraft.execute(minecraft::stop);
+			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.PAUSE -> minecraft.execute(() -> {
+				HearthsideMod.LOGGER.info("Hearthside satellite paused (controller disconnected)");
+				applier.release();
+				minecraft.pauseGame(false);
+			});
+			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.RESUME -> minecraft.execute(() -> {
+				HearthsideMod.LOGGER.info("Hearthside satellite resumed (controller reconnected)");
+				if (minecraft.gui.screen() instanceof PauseScreen) {
+					minecraft.gui.setScreen(null);
+				}
+			});
+			case ControlMessage.Input m -> applier.accept(m.frame());
+			case ControlMessage.SetControls m -> minecraft.execute(() -> applier.setScheme(ControlSchemeJson.fromJson(m.schemeJson())));
+			case ControlMessage.SetPadStyle m -> {
+				HearthsideMod.LOGGER.info("Hearthside SetPadStyle {}", m.style());
+				ButtonGuideRenderer.setStyle(m.style());
+			}
 			default -> { }
 		}
 	}

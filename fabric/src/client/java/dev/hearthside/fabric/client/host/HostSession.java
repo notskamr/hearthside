@@ -4,6 +4,10 @@ import dev.hearthside.core.auth.GuestTokenAuthority;
 import dev.hearthside.core.channel.ControlConnection;
 import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
+import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.ControlSchemeJson;
+import dev.hearthside.core.input.GamepadSource;
+import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.launch.HostJvm;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.launch.SatelliteLaunch;
@@ -26,6 +30,9 @@ import dev.hearthside.core.session.GuestRoster;
 import dev.hearthside.core.session.SatelliteDirectories;
 import dev.hearthside.core.supervise.RestartPolicy;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.dev.FakeGamepadSource;
+import dev.hearthside.fabric.client.input.FrameHook;
+import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import dev.hearthside.fabric.server.HostServerBridge;
 import java.io.IOException;
@@ -48,6 +55,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.server.IntegratedServer;
@@ -77,6 +85,8 @@ public final class HostSession {
 	private final Thread shutdownHook = new Thread(this::stopAllSatellites, "hearthside-shutdown");
 	/** Loopback port guests join on; 0 until the first guest needs it. */
 	private volatile int gamePort;
+	/** The controller loop; created and used on the render thread. */
+	private volatile HostInput input;
 
 	// Render-thread state for split-screen mode.
 	private boolean splitScreen;
@@ -105,7 +115,58 @@ public final class HostSession {
 		this.controlServer = ControlServer.start(this::verifyHello);
 		HostServerBridge.activate(new HostServerBridge.Active(roster, tokens, this::reopenGuestListener));
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
+		minecraft.execute(this::startInput);
 		HearthsideMod.LOGGER.info("Hearthside session open: control channel on {}", controlServer.port());
+	}
+
+	/** Opens the controllers and starts the per-frame input loop. Render thread (SDL). */
+	private void startInput() {
+		GamepadSource source;
+		try {
+			source = Boolean.getBoolean("hearthside.e2e.fakePads") ? FakeGamepadSource.INSTANCE : SdlGamepadSource.open();
+		} catch (IllegalStateException e) {
+			HearthsideMod.LOGGER.error("Controllers are unavailable", e);
+			return;
+		}
+		ControlScheme hostScheme;
+		try {
+			hostScheme = profileStore().loadFile().hostControls();
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.warn("Could not read the host's controls; using Bedrock defaults", e);
+			hostScheme = ControlScheme.BEDROCK;
+		}
+		input = new HostInput(minecraft, this, source, hostScheme);
+		FrameHook.register(input);
+		if (FabricLoader.getInstance().isModLoaded("controlify")) {
+			minecraft.gui.chatListener().handleSystemMessage(Component.literal(
+					"Controlify is installed: it may also react to controllers. Hearthside handles controllers itself.")
+					.withStyle(ChatFormatting.YELLOW), false);
+		}
+	}
+
+	/** Lowest free guest slot, or -1. */
+	public int nextFreeIndex() {
+		return roster.freeIndex().orElse(-1);
+	}
+
+	/** {@code /hearthside pad}: the next controller to press A becomes the host's. Render thread. */
+	public void armHostClaim() {
+		if (input == null) {
+			throw new IllegalStateException("Controllers are unavailable");
+		}
+		input.armClaim();
+	}
+
+	void sendToGuest(int index, ControlMessage message) {
+		Slot slot = slots.get(index);
+		ControlConnection connection = slot == null ? null : slot.connection;
+		if (connection != null) {
+			send(connection, message);
+		}
+	}
+
+	private ProfileStore profileStore() {
+		return new ProfileStore(gameDir.resolve("hearthside").resolve("profiles.json"));
 	}
 
 	public static void register() {
@@ -131,8 +192,8 @@ public final class HostSession {
 		return current;
 	}
 
-	/** Adds a guest and starts their satellite. Runs on the render thread. */
-	public void join(String name) throws IOException, UnsupportedLauncherException {
+	/** Adds a guest and starts their satellite; returns their player index. Runs on the render thread. */
+	public int join(String name) throws IOException, UnsupportedLauncherException {
 		GuestNames.requireValid(name);
 		HostJvm host = HostJvm.capture(HostLaunchFacts.read());
 		ensureGuestListener();
@@ -165,6 +226,7 @@ public final class HostSession {
 			throw e;
 		}
 		minecraft.execute(this::afterGuestsChanged);
+		return index;
 	}
 
 	/** Removes a guest and closes their satellite. Runs on the render thread. */
@@ -190,7 +252,14 @@ public final class HostSession {
 		} catch (IllegalStateException alreadyShuttingDown) {
 			// the hook is running or about to; nothing to undo
 		}
-		minecraft.execute(this::leaveSplitScreen);
+		minecraft.execute(() -> {
+			if (input != null) {
+				FrameHook.unregister(input);
+				input.close();
+				input = null;
+			}
+			leaveSplitScreen();
+		});
 		HearthsideMod.LOGGER.info("Hearthside session closed");
 	}
 
@@ -233,7 +302,12 @@ public final class HostSession {
 	private void removeSlot(Slot slot) {
 		slots.remove(slot.index, slot);
 		roster.remove(slot.index);
-		minecraft.execute(this::afterGuestsChanged);
+		minecraft.execute(() -> {
+			if (input != null) {
+				input.release(slot.index);
+			}
+			afterGuestsChanged();
+		});
 	}
 
 	private void stopAllSatellites() {
@@ -262,6 +336,10 @@ public final class HostSession {
 							slot.connection = null;
 						}
 					});
+					send(connection, new ControlMessage.SetControls(ControlSchemeJson.toJson(slot.profile.controls())));
+					HostInput currentInput = input;
+					send(connection, new ControlMessage.SetPadStyle(
+							currentInput == null ? PadStyle.GENERIC : currentInput.styleFor(slot.index)));
 					send(connection, new ControlMessage.JoinWorld(gamePort));
 					minecraft.execute(this::afterGuestsChanged);
 				});
@@ -311,7 +389,7 @@ public final class HostSession {
 	}
 
 	private GuestProfile loadOrCreateProfile(String name) throws IOException {
-		ProfileStore store = new ProfileStore(gameDir.resolve("hearthside").resolve("profiles.json"));
+		ProfileStore store = profileStore();
 		List<GuestProfile> profiles = new ArrayList<>(store.load());
 		for (GuestProfile p : profiles) {
 			if (p.name().toLowerCase(Locale.ROOT).equals(name.toLowerCase(Locale.ROOT))) {

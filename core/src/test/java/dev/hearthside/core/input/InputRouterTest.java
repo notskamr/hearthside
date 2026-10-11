@@ -125,6 +125,17 @@ class InputRouterTest {
 	}
 
 	@Test
+	void styleFollowsTheBoundPad() {
+		var ps = new PadSnapshot(31, "ps5", "DualSense", PadStyle.PLAYSTATION, InputFrame.NEUTRAL);
+		router.update(List.of(ps));
+		assertThat(router.styleOf(2)).isEmpty();
+		router.assign(31, 2);
+		assertThat(router.styleOf(2)).contains(PadStyle.PLAYSTATION);
+		router.update(List.of());
+		assertThat(router.styleOf(2)).isEmpty();
+	}
+
+	@Test
 	void assignRejectsDoubleBinding() {
 		router.update(List.of(pad(11, "xbox"), pad(12, "xbox")));
 		router.assign(11, 1);

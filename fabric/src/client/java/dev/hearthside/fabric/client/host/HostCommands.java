@@ -24,7 +24,24 @@ public final class HostCommands {
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
 				literal("hearthside")
 						.then(literal("join").then(argument("name", StringArgumentType.word()).executes(HostCommands::join)))
-						.then(literal("leave").then(argument("name", StringArgumentType.word()).executes(HostCommands::leave)))));
+						.then(literal("leave").then(argument("name", StringArgumentType.word()).executes(HostCommands::leave)))
+						.then(literal("pad").executes(HostCommands::pad))));
+	}
+
+	private static int pad(CommandContext<FabricClientCommandSource> ctx) {
+		HostSession session = HostSession.current();
+		if (session == null) {
+			ctx.getSource().sendError(Component.literal("Open a singleplayer world first."));
+			return 0;
+		}
+		try {
+			session.armHostClaim();
+			ctx.getSource().sendFeedback(Component.literal("Press A on the controller you want to use."));
+			return 1;
+		} catch (IllegalStateException e) {
+			ctx.getSource().sendError(Component.literal(e.getMessage()));
+			return 0;
+		}
 	}
 
 	private static int join(CommandContext<FabricClientCommandSource> ctx) {
