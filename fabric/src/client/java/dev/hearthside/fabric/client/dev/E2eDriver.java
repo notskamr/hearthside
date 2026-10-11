@@ -215,7 +215,17 @@ public final class E2eDriver {
 		}
 	}
 
+	/** Where the host log stood when the last guest was asked in (its "seat N in world" line comes after). */
+	private long joinMark;
+
+	/** Waits for the host to hear from a guest's game that it is in the world (past its loading screens). */
+	private void waitInWorld(int seat) throws Exception {
+		waitFor("seat " + seat + " in world", Duration.ofSeconds(120),
+				() -> hostLogSince(joinMark).contains("hearthside seat " + seat + " in world"));
+	}
+
 	private void guestJoins() throws Exception {
+		joinMark = hostLogLength();
 		onRender(() -> {
 			Party.current().join(GUEST);
 			return null;
@@ -234,6 +244,7 @@ public final class E2eDriver {
 
 	/** The guest paints its frame's top-left corner magenta in E2E; the host logs what it composited there. */
 	private void guestFramesComposited() throws Exception {
+		waitInWorld(1);
 		waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
 	}
 
@@ -1521,9 +1532,11 @@ public final class E2eDriver {
 
 	private void startJoins() throws Exception {
 		Thread.sleep(5500); // let B3's prompt expire
+		joinMark = hostLogLength();
 		press(101, PadButton.A);
 		press(101, PadButton.A);
 		waitFor("Player2 in the world", Duration.ofSeconds(180), () -> guest("Player2") != null);
+		waitInWorld(1);
 		// The server counts the guest as joined while its client still shows the terrain-loading
 		// screen; controller input only drives the player once that screen is gone.
 		waitFor("satellite in world mode", Duration.ofSeconds(60),

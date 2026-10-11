@@ -966,14 +966,22 @@ public final class Party {
 		}
 	}
 
-	/** Once a second: expire join prompts, offer take-overs, and mark guests who reached the world. Render thread. */
+	/** Once a second: expire join prompts, offer take-overs, and record co-op worlds guests reached. Render thread. */
+	/** A guest's game says it is in the world (past its loading screens). Render thread. */
+	private void guestInWorld(int index) {
+		HearthsideMod.LOGGER.info("Hearthside seat {} in world", index);
+		String controller = controllerOfSlot.get(index);
+		if (controller != null) {
+			apply(flow.loaded(controller));
+		}
+	}
+
 	void tickFlow() {
 		WorldLink link = world;
 		controllerOfSlot.forEach((index, controller) -> {
 			Slot slot = slots.get(index);
 			GuestProfile profile = slot == null ? null : slot.profile;
 			if (link != null && profile != null && link.hasPlayer(profile.name())) {
-				flow.loaded(controller);
 				if (recordedInWorld.add(profile.id())) {
 					recordCoopWorld(link);
 				}
@@ -1131,7 +1139,11 @@ public final class Party {
 				connection -> {
 					slot.connection = connection;
 					connection.onMessage(message -> {
-						if (message instanceof ControlMessage.FrameSlotsReady ready) {
+						if (message instanceof ControlMessage.InWorld) {
+							minecraft.execute(() -> guestInWorld(slot.index));
+						} else if (message instanceof ControlMessage.LeftWorld) {
+							minecraft.execute(() -> HearthsideMod.LOGGER.info("Hearthside seat {} left its world", slot.index));
+						} else if (message instanceof ControlMessage.FrameSlotsReady ready) {
 							minecraft.execute(() -> {
 								Compositor compositor = Compositor.active();
 								if (compositor != null) {

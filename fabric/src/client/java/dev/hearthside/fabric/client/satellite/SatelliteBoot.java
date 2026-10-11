@@ -115,6 +115,10 @@ public final class SatelliteBoot {
 			});
 			case ControlMessage.JoinWorld m -> minecraft.execute(() -> {
 				loginToken = m.loginToken();
+				FrameExporter exporter = FrameExporter.instance();
+				if (exporter != null) {
+					exporter.joinRequested();
+				}
 				if (!minecraft.getUser().getName().equals(m.playerName())) {
 					// Started under a placeholder (pre-warmed before a profile was chosen): join as the player.
 					((MinecraftUserAccessor) minecraft).hearthside$setUser(new User(m.playerName(),

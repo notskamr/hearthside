@@ -129,8 +129,14 @@ class ControlCodecTest {
 	}
 
 	@Test
-	void protocolVersionIsThree() {
-		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(3);
+	void protocolVersionIsFour() {
+		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(4);
+	}
+
+	@Test
+	void inWorldAndLeftWorldRoundTrip() throws IOException {
+		assertThat(roundTrip(new ControlMessage.InWorld())).isEqualTo(new ControlMessage.InWorld());
+		assertThat(roundTrip(new ControlMessage.LeftWorld())).isEqualTo(new ControlMessage.LeftWorld());
 	}
 
 	@Test

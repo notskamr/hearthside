@@ -100,6 +100,12 @@ public sealed interface ControlMessage {
 	 */
 	record UseCopyTransport() implements ControlMessage {}
 
+	/** Type 11, satellite → host: its game is in the world (the first frame with no loading screen after JoinWorld). */
+	record InWorld() implements ControlMessage {}
+
+	/** Type 12, satellite → host: its game left the world on its own (quit from its pause menu, or disconnected). */
+	record LeftWorld() implements ControlMessage {}
+
 	/** A message whose type this version does not know; produced only by decoding, never written. */
 	record Unknown(int typeId) implements ControlMessage {}
 }

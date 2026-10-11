@@ -11,6 +11,7 @@ import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.ViewportMath;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.protocol.ControlMessage;
+import dev.hearthside.core.session.InWorldSignal;
 import dev.hearthside.fabric.HearthsideMod;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -39,6 +40,7 @@ public final class FrameExporter {
 	private final Path dir;
 	private final boolean pattern = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
 	private final ArrayDeque<Pending> pending = new ArrayDeque<>();
+	private final InWorldSignal world = new InWorldSignal();
 	private int generation = FrameNames.firstGeneration() - 1;
 	private SegmentSlotTable table;
 	private FrameSlots slots;
@@ -108,6 +110,31 @@ public final class FrameExporter {
 		// No buffer swap follows (the window is hidden), so make sure the GPU actually gets this frame's work.
 		glFlush();
 		pending.addLast(new Pending(slot, fence, ++frame));
+		observeWorld();
+	}
+
+	/** JoinWorld arrived: the first frame exported in the world, past its loading screens, tells the host. */
+	public void joinRequested() {
+		world.joinRequested();
+	}
+
+	private void observeWorld() {
+		if (world.observe(minecraft.level != null && minecraft.player != null, minecraft.gui.screen() != null, true)) {
+			HearthsideMod.LOGGER.info("Hearthside in world");
+			tell(new ControlMessage.InWorld());
+		}
+		if (world.observeLeft(minecraft.getConnection() != null)) {
+			HearthsideMod.LOGGER.info("Hearthside left the world");
+			tell(new ControlMessage.LeftWorld());
+		}
+	}
+
+	private void tell(ControlMessage message) {
+		try {
+			connection.send(message);
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.warn("Could not tell the host {}: {}", message, e.toString());
+		}
 	}
 
 	/** Publishes, in order, every pending frame the GPU has finished. */
