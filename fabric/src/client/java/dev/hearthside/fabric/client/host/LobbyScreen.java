@@ -86,9 +86,10 @@ public final class LobbyScreen extends Screen {
 		useController = addRenderableWidget(new HearthButton(host.x + 4, host.bottom() - 19, host.w - 8, 14,
 				Component.literal("+ Controller"), b -> party.useController()));
 		// The hints along the bottom, as in the draft; Back and Start are also mouse buttons.
-		Supplier<PadStyle> style = () -> party.padStyleOf(-1);
+		// Join is for controllers without a seat, so it shows theirs; the rest show whoever drives the screen.
+		Supplier<PadStyle> style = party::sharedStyle;
 		HintChip[] chips = {
-				new HintChip(0, 0, Control.A, style, Component.literal("Join"), b -> { }),
+				new HintChip(0, 0, Control.A, party::joinStyle, Component.literal("Join"), b -> { }),
 				new HintChip(0, 0, Control.Y, style, Component.literal("Profile"), b -> { }),
 				new HintChip(0, 0, Control.B, style, Component.literal("Back"), b -> onClose()),
 				new HintChip(0, 0, Control.START, style, Component.literal("Start"), b -> continueToWorlds()),
@@ -213,7 +214,7 @@ public final class LobbyScreen extends Screen {
 			int glyph = HearthDraw.glyphWidth(Control.A);
 			int total = glyph + 4 + font.width(join);
 			int x = c.centre() - total / 2;
-			HearthDraw.glyph(g, Control.A, PadStyle.XBOX, x, middle - 6);
+			HearthDraw.glyph(g, Control.A, party.joinStyle(), x, middle - 6);
 			HearthDraw.label(g, font, join, x + glyph + 4, middle - 4, HearthDraw.CREAM);
 		} else {
 			HearthDraw.labelCentred(g, font, Component.literal("Connect a"), c.centre(), middle - 9, FADED);

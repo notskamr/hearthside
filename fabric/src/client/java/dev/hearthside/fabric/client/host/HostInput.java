@@ -55,6 +55,8 @@ final class HostInput implements Runnable {
 	/** Whether a guest's controller is driving the host's shared screen (the host has no pad of its own). */
 	private boolean sharedDriving;
 	private volatile int freePads;
+	private volatile PadStyle freeStyle;
+	private volatile int lastDriver = -1;
 	/** When a guest last moved the shared pointer; it hides a while after, for the mouse. */
 	private long lastGuestDrive;
 	private static final long POINTER_LINGER_NANOS = 3_000_000_000L;
@@ -79,12 +81,16 @@ final class HostInput implements Runnable {
 		InputRouter.Update update = router.update(pads);
 		autoClaimHost(pads);
 		int free = 0;
+		PadStyle freeKind = null;
 		for (PadSnapshot pad : pads) {
 			if (router.playerFor(pad.instanceId()).isEmpty()) {
 				free++;
+				// One family's buttons if every free controller is that family; generic letters for a mix.
+				freeKind = freeKind == null || freeKind == pad.style() ? pad.style() : PadStyle.GENERIC;
 			}
 		}
 		freePads = free;
+		freeStyle = freeKind;
 		long tickNow = System.nanoTime();
 		if (tickNow - lastFlowTick >= 1_000_000_000L) {
 			lastFlowTick = tickNow;
@@ -170,8 +176,10 @@ final class HostInput implements Runnable {
 				? (shared.containsKey(0) ? Map.of(0, shared.get(0)) : Map.of()) : shared;
 		int lobbyButtons = start | b | InputFrame.buttons(PadButton.Y);
 		SharedScreenInput.Driver driver = SharedScreenInput.drive(drivers, lobby != null ? lobbyButtons : start);
-		if (driver != null && (driver.player() != 0 || drivers.containsKey(0))) {
+		if (driver != null && (driver.player() != 0 || drivers.containsKey(0))
+				&& (SharedScreenInput.isActive(driver.frame()) || lastDriver < 0)) {
 			VirtualCursor.setTint(session.colorOf(driver.player()));
+			lastDriver = driver.player();
 		}
 		if (drivers.containsKey(0)) {
 			hostApplier.accept(driver.frame());
@@ -290,6 +298,16 @@ final class HostInput implements Runnable {
 	/** Controllers connected but not assigned to anyone, as of the last poll. */
 	int freePadCount() {
 		return freePads;
+	}
+
+	/** The button family of the free controllers (generic for a mix), or null when there are none. */
+	PadStyle freePadStyle() {
+		return freeStyle;
+	}
+
+	/** The player who last moved the shared screen with a controller, or -1. */
+	int lastSharedDriver() {
+		return lastDriver;
 	}
 
 	boolean hasPadFor(int player) {

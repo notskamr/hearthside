@@ -529,6 +529,26 @@ public final class Party {
 		return current == null ? 0 : current.freePadCount();
 	}
 
+	/**
+	 * The buttons to show for joining: the free controllers' family (generic letters for a mix), as those are the
+	 * controllers that would press it. Xbox when none is free.
+	 */
+	public PadStyle joinStyle() {
+		HostInput current = input;
+		PadStyle style = current == null ? null : current.freePadStyle();
+		return style != null ? style : PadStyle.XBOX;
+	}
+
+	/**
+	 * The buttons to show for the shared screen (Back, Start, Profile): the controller that last drove it, as with the
+	 * pointer's colour; before anyone has, the first controller in the party.
+	 */
+	public PadStyle sharedStyle() {
+		HostInput current = input;
+		int driver = current == null ? -1 : current.lastSharedDriver();
+		return driver >= 0 && current.hasPadFor(driver) ? current.styleFor(driver) : padStyleOf(-1);
+	}
+
 	/** A guest's chosen profile, or null while they are choosing (or the seat is free). */
 	public GuestProfile profileOf(int index) {
 		Slot slot = slots.get(index);

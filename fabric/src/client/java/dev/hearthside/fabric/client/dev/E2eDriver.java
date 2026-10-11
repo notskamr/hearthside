@@ -673,6 +673,8 @@ public final class E2eDriver {
 		double x = onRender(VirtualCursor::x);
 		int centre = onRender(() -> minecraft.getWindow().getScreenWidth() / 2);
 		check(x > centre + 20, "the stick moved the host's cursor right (x " + x + ", centre " + centre + ")");
+		check(onRender(() -> Party.current().sharedStyle()) == PadStyle.PLAYSTATION,
+				"the shared hints show the PlayStation buttons of the controller driving the screen");
 		check(!satelliteLog().contains("hearthside controller: menu mode"),
 				"the guest's game, idle on its title screen, got no controller input");
 	}
@@ -896,6 +898,8 @@ public final class E2eDriver {
 		String made = onRender(() -> Party.current().seatView(1).name());
 		PADS.plug(SECOND_LOBBY_PAD, "fake-lobby-pad-2", PadStyle.XBOX);
 		Thread.sleep(300);
+		check(onRender(() -> Party.current().joinStyle()) == PadStyle.XBOX,
+				"the Join hints show the free Xbox controller's buttons, not seat 1's PlayStation ones");
 		press(SECOND_LOBBY_PAD, PadButton.A);
 		waitFor("seat 2 choosing on its card", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
 		screenshot("lobby-three-players");
