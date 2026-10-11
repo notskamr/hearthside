@@ -150,14 +150,16 @@ public final class ProfileStore {
 	/** What is written (always the current schema). */
 	private record WrittenFileDto(int schemaVersion, List<ProfileDto> profiles, HostDto host) {}
 
-	private record HostDto(JsonElement controls, SettingsDto settings, Integer color) {
+	/** {@code controller} is optional: absent (and not written) when player 1 hasn't taken a controller. */
+	private record HostDto(JsonElement controls, SettingsDto settings, Integer color, String controller) {
 		static HostDto from(HostProfile h) {
-			return new HostDto(ControlSchemeJson.toTree(h.controls()), SettingsDto.from(h.settings()), h.color());
+			return new HostDto(ControlSchemeJson.toTree(h.controls()), SettingsDto.from(h.settings()), h.color(),
+					h.preferredControllerGuid());
 		}
 
 		HostProfile toHost() {
 			return new HostProfile(ControlSchemeJson.fromTree(controls), SettingsDto.toSettings(settings),
-					color != null ? color : PlayerColors.DEFAULTS[0]);
+					color != null ? color : PlayerColors.DEFAULTS[0], controller);
 		}
 	}
 
