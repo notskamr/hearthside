@@ -1,0 +1,19 @@
+{
+	"schemaVersion": 1,
+	"id": "hearthside",
+	"version": "${version}",
+	"name": "Hearthside",
+	"description": "Seamless local split-screen co-op.",
+	"license": "All-Rights-Reserved",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["dev.hearthside.fabric.HearthsideMod"],
+		"client": ["dev.hearthside.fabric.client.HearthsideClient"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

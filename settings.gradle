@@ -12,3 +12,4 @@ pluginManagement {
 rootProject.name = 'hearthside'
 
 include 'core'
+include 'fabric'
