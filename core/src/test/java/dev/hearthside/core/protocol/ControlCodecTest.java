@@ -3,6 +3,8 @@ package dev.hearthside.core.protocol;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.ControlSchemeJson;
 import dev.hearthside.core.layout.Rect;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -91,6 +93,19 @@ class ControlCodecTest {
 	void joinWorldWithBadPortIsRejected() {
 		assertThatThrownBy(() -> ControlCodec.read(input(frame(2 + 4, 6, ByteBuffer.allocate(4).putInt(0).array()))))
 				.isInstanceOf(ProtocolException.class);
+	}
+
+	@Test
+	void setControlsCarriesBedrock() throws IOException {
+		var bytes = new ByteArrayOutputStream();
+		ControlCodec.write(new ControlMessage.SetControls(ControlSchemeJson.toJson(ControlScheme.BEDROCK)), new DataOutputStream(bytes));
+		var decoded = (ControlMessage.SetControls) ControlCodec.read(input(bytes.toByteArray()));
+		assertThat(ControlSchemeJson.fromJson(decoded.schemeJson())).isEqualTo(ControlScheme.BEDROCK);
+	}
+
+	@Test
+	void badPadStyleIsRejected() {
+		assertThatThrownBy(() -> ControlCodec.read(input(frame(3, 8, (byte) 200)))).isInstanceOf(ProtocolException.class);
 	}
 
 	@Test
