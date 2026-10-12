@@ -13,8 +13,9 @@ import java.nio.file.StandardOpenOption;
 
 /**
  * The host's split-screen settings on disk, {@code <gameDir>/config/hearthside.json}. Read when each party session
- * opens, so an edit applies to the next session. A missing file is created with the defaults; an unreadable one gives
- * the defaults and is left as it is.
+ * opens, so an edit applies to the next session (the next world opened, or the next co-op lobby). A missing file is
+ * created with every setting at its default, so players can find them all; an unreadable one gives the defaults and is
+ * left as it is.
  */
 public final class SplitScreenConfigFile {
 	private SplitScreenConfigFile() {}
@@ -41,8 +42,7 @@ public final class SplitScreenConfigFile {
 		} catch (FileAlreadyExistsException e) {
 			return load(gameDir); // created by someone else meanwhile: read theirs
 		} catch (IOException e) {
-			HearthsideMod.LOGGER.warn("Could not read or create {}; guests get the default memory and render distance",
-					file, e);
+			HearthsideMod.LOGGER.warn("Could not read or create {}; the party uses the default split-screen settings", file, e);
 			return SplitScreenConfig.DEFAULTS;
 		}
 	}

@@ -122,6 +122,10 @@ public final class SatelliteDirectories {
 		}
 	}
 
+	/**
+	 * A file's content as SHA-256. In a {@code .properties} file comments don't count: Iris, for one, rewrites its
+	 * settings with the date in a comment each time a game starts, which would otherwise look like the guest's change.
+	 */
 	private static String hash(Path file) throws IOException {
 		MessageDigest digest;
 		try {
@@ -129,9 +133,30 @@ public final class SatelliteDirectories {
 		} catch (NoSuchAlgorithmException e) {
 			throw new IllegalStateException("Every Java has SHA-256", e);
 		}
-		try (InputStream in = new DigestInputStream(Files.newInputStream(file), digest)) {
-			in.transferTo(OutputStream.nullOutputStream());
+		if (file.getFileName().toString().endsWith(".properties")) {
+			boolean continued = false;
+			for (String line : Files.readAllLines(file, StandardCharsets.ISO_8859_1)) {
+				String text = line.strip();
+				boolean comment = !continued && (text.isEmpty() || text.startsWith("#") || text.startsWith("!"));
+				if (!comment) {
+					digest.update((line + "\n").getBytes(StandardCharsets.ISO_8859_1));
+				}
+				continued = !comment && endsWithOddBackslashes(line);
+			}
+		} else {
+			try (InputStream in = new DigestInputStream(Files.newInputStream(file), digest)) {
+				in.transferTo(OutputStream.nullOutputStream());
+			}
 		}
 		return HexFormat.of().formatHex(digest.digest());
+	}
+
+	/** Whether a properties line goes on to the next: it ends in an odd number of backslashes. */
+	private static boolean endsWithOddBackslashes(String line) {
+		int n = 0;
+		for (int i = line.length() - 1; i >= 0 && line.charAt(i) == '\\'; i--) {
+			n++;
+		}
+		return n % 2 == 1;
 	}
 }
