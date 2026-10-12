@@ -265,16 +265,33 @@ public final class Party {
 		return choice.preset();
 	}
 
-	/** This game's GPU, as Minecraft's device reports it (E2E: {@code hearthside.e2e.fakeGpuType}). */
+	/**
+	 * This game's GPU, as Minecraft's device reports it (E2E: {@code hearthside.e2e.fakeGpuType}). Minecraft's OpenGL
+	 * only tells Intel GPUs apart; for any other, Vulkan is asked which kind the GPU OpenGL runs on is (plan ruling T5-6).
+	 */
 	private static PresetChooser.GpuKind gpuKind() {
-		DeviceType type;
 		String fake = System.getProperty("hearthside.e2e.fakeGpuType");
-		try {
-			type = fake != null ? DeviceType.valueOf(fake.strip().toUpperCase(Locale.ROOT))
-					: RenderSystem.getDevice().getDeviceInfo().type();
-		} catch (RuntimeException e) {
-			type = DeviceType.OTHER;
+		if (fake != null) {
+			try {
+				return kindOf(DeviceType.valueOf(fake.strip().toUpperCase(Locale.ROOT)));
+			} catch (IllegalArgumentException e) {
+				return PresetChooser.GpuKind.UNKNOWN;
+			}
 		}
+		com.mojang.renderpearl.api.device.DeviceInfo info;
+		try {
+			info = RenderSystem.getDevice().getDeviceInfo();
+		} catch (RuntimeException e) {
+			return PresetChooser.GpuKind.UNKNOWN;
+		}
+		PresetChooser.GpuKind kind = kindOf(info.type());
+		if (kind == PresetChooser.GpuKind.UNKNOWN && "OpenGL".equals(info.backendName())) {
+			return dev.hearthside.fabric.client.compositor.backend.VulkanProbe.gpuKind(info.name(), info.vendorName());
+		}
+		return kind;
+	}
+
+	private static PresetChooser.GpuKind kindOf(DeviceType type) {
 		return switch (type) {
 			case INTEGRATED -> PresetChooser.GpuKind.INTEGRATED;
 			case DISCRETE -> PresetChooser.GpuKind.DISCRETE;
