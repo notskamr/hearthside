@@ -21,6 +21,7 @@ import dev.hearthside.core.session.CoopWorldsStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.systems.RenderSystem;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
@@ -45,6 +46,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -101,7 +103,7 @@ public final class E2eDriver {
 	 * state (the title screen; the world with the host alone) needs nothing.
 	 */
 	private static final String[][] NEEDS = {
-			{"X1"},
+			{"X1"}, {"X1b"},
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
 			{"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
@@ -112,7 +114,8 @@ public final class E2eDriver {
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
-			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"D5", "C7b"},
+			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
+			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
 			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"},
@@ -170,6 +173,7 @@ public final class E2eDriver {
 				return null;
 			});
 			step("X1 a shared image round-trips through this game's backend", this::sharedImageRoundTrips);
+			step("X1b an import whose real image settings differ from the guest's is refused", this::realCreateInfoMismatchRefused);
 			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
 			// The lobby and in-world pad blocks are only steps: with none of theirs selected, each reports SKIP and
@@ -237,9 +241,11 @@ public final class E2eDriver {
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
 			step("V3 a device mismatch copies frames and says why", this::deviceMismatchCopies);
+			step("V9 a game without Vulkan copies frames instead of crashing", this::noVulkanCopies);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
+			step("V10 with four players the guests drop almost no frames", this::fourPlayersDropAlmostNothing);
 			step("D5 a leaving view fades out, then the others glide", () -> sampleGaps(this::leavingFades));
 			step("D6 a guest who quits from their own game leaves the party", () -> sampleGaps(this::guestQuitsItself));
 			step("C7c back to two players, re-laid out without GL errors", this::backToTwo);
@@ -374,6 +380,34 @@ public final class E2eDriver {
 				"an image whose description doesn't match this game's is refused, not imported");
 		check(!log.contains("validation error"), "no Vulkan validation errors");
 		check(!log.contains("hearthside shared image check failed"), "the check ran to the end");
+	}
+
+	/** X1b: the import compares Minecraft's real image settings with the shared image's description (final review I1). */
+	private void realCreateInfoMismatchRefused() throws Exception {
+		boolean vulkan = hostLogSince(0).contains("hearthside graphics backend=vulkan")
+				|| onRender(() -> RenderSystem.getDevice().getDeviceInfo().backendName()).equals("Vulkan");
+		if (!vulkan) {
+			log("   OpenGL imports have no create info to compare; Vulkan only");
+			return;
+		}
+		long mark = hostLogLength();
+		System.setProperty("hearthside.e2e.perturbImportCreateInfo", "true");
+		try {
+			onRender(() -> {
+				SharedImageCheck.importOnce();
+				return null;
+			});
+			waitFor("the import's outcome", Duration.ofSeconds(10), () -> {
+				String log = hostLogSince(mark);
+				return log.contains("hearthside shared image mismatch refused") || log.contains("hearthside shared image imported");
+			});
+		} finally {
+			System.clearProperty("hearthside.e2e.perturbImportCreateInfo");
+		}
+		String log = hostLogSince(mark);
+		check(log.contains("hearthside shared image mismatch refused") && !log.contains("hearthside shared image imported"),
+				"an import whose real create info differs is refused, not imported");
+		check(!log.contains("validation error"), "no Vulkan validation errors");
 	}
 
 	private static final String PATTERN = "rgb=ff00ff";
@@ -541,23 +575,26 @@ public final class E2eDriver {
 		minecraft.options.fullscreen().set(!minecraft.options.fullscreen().get());
 	}
 
-	/** V8: if our view shader can't be built (a resource pack overriding it badly), views still draw (Review Focus 3). */
+	/** V8: a resource pack with a broken view shader leaves every view drawn, and is only compiled once (Review Focus 3). */
 	private void brokenViewShaderFallsBack() throws Exception {
 		long mark = hostLogLength();
-		System.setProperty("hearthside.e2e.breakViewPipeline", "true");
+		Collection<String> before = onRender(() -> List.copyOf(minecraft.getResourcePackRepository().getSelectedIds()));
+		BrokenViewPack.write(minecraft.gameDirectory.toPath());
 		try {
-			onRender(() -> minecraft.reloadResourcePacks()).get(60, TimeUnit.SECONDS);
+			onRender(() -> BrokenViewPack.select(minecraft, true)).get(120, TimeUnit.SECONDS);
 			waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+			Thread.sleep(3000); // a few hundred frames on the fallback
 			String log = hostLogSince(mark);
 			int warnings = log.split("hearthside view pipeline unavailable; drawing views without fades", -1).length - 1;
 			check(warnings == 1, "the fallback was logged once, not " + warnings + " times");
+			int compiles = log.split("hearthside view pipeline compiling", -1).length - 1;
+			check(compiles <= 2, "the broken shader was compiled once per reload, not every frame (" + compiles + " compiles)");
 		} finally {
-			System.clearProperty("hearthside.e2e.breakViewPipeline");
+			onRender(() -> BrokenViewPack.restore(minecraft, before)).get(120, TimeUnit.SECONDS);
 		}
-		long restoring = hostLogLength();
-		onRender(() -> minecraft.reloadResourcePacks()).get(60, TimeUnit.SECONDS);
-		check(hostLogSince(restoring).contains("hearthside view pipeline warmed"), "the view pipeline is back after the next reload");
-		waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+		long restored = hostLogLength();
+		waitForProbe(2, restored, Duration.ofSeconds(15));
+		check(hostLogSince(mark).contains("hearthside view pipeline warmed"), "the view pipeline is back after the pack is removed");
 	}
 
 	private void copyTransportWorks() throws Exception {
@@ -708,6 +745,30 @@ public final class E2eDriver {
 		}
 	}
 
+	/** V9: a guest whose machine has no Vulkan runtime copies its frames instead of crashing (final review M6). */
+	private void noVulkanCopies() throws Exception {
+		System.setProperty("hearthside.e2e.noVulkanLoader", "true");
+		try {
+			onRender(() -> {
+				Party.current().leave(GUEST);
+				return null;
+			});
+			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			check(!satelliteLog().contains("unsatisfiedlinkerror") || satelliteLog().contains("copying frames instead"),
+					"the guest caught the missing Vulkan runtime and copies frames");
+		} finally {
+			System.clearProperty("hearthside.e2e.noVulkanLoader");
+		}
+	}
+
 	/** In the world, player 1's mouse buttons always count, wherever the hidden OS cursor has drifted. */
 	private void hostWorldClicksAnywhere() throws Exception {
 		double guestX = onRender(() -> minecraft.getWindow().queryFramebufferSize().width() * 0.75 * Compositor.active().screenPerFramebuffer());
@@ -785,6 +846,24 @@ public final class E2eDriver {
 		waitInWorld(3);
 		Thread.sleep(1200);
 		windowShot("four-players");
+	}
+
+	/** V10: with four players each guest finds a free slot for nearly every frame (final review I2). */
+	private void fourPlayersDropAlmostNothing() throws Exception {
+		Thread.sleep(11_000); // two exporter reports
+		Pattern line = Pattern.compile("hearthside exporter fps=([0-9]+) dropped=([0-9]+)");
+		for (int seat = 1; seat <= 3; seat++) {
+			Path file = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-" + seat + "/logs/latest.log");
+			Matcher m = line.matcher(Files.readString(file).toLowerCase(Locale.ROOT));
+			long fps = 0, dropped = 0;
+			while (m.find()) {
+				fps = Long.parseLong(m.group(1));
+				dropped = Long.parseLong(m.group(2));
+			}
+			log("   guest " + seat + ": fps " + fps + ", dropped " + dropped + " in 5 s");
+			check(fps > 0, "guest " + seat + " reported its frame rate");
+			check(dropped * 100 <= fps * 5, "guest " + seat + " dropped at most 1% of its frames (" + dropped + ")");
+		}
 	}
 
 	/** D5: Guest4 leaves: their view fades out where it is, then the others glide into its space. */

@@ -41,6 +41,11 @@ import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 public final class ExportDevice {
 	/** {@code GENERIC_ALL}: the named memory may be opened for anything by other processes of this user. */
 	private static final int GENERIC_ALL = 0x10000000;
+	/**
+	 * E2E: set to 1 in a guest's environment (by a host with {@code -Dhearthside.e2e.noVulkanLoader=true}), this process
+	 * behaves as if it had no Vulkan runtime.
+	 */
+	public static final String NO_VULKAN_LOADER_ENV = "HEARTHSIDE_E2E_NO_VULKAN_LOADER";
 
 	private static ExportDevice instance;
 	/** Every exported slot still open: its handle → {image, memory} on the export device. */
@@ -59,6 +64,10 @@ public final class ExportDevice {
 	 * UUID or it can't export Win32 memory, or when this process already exports from another GPU.
 	 */
 	public static synchronized ExportDevice forGpu(UUID deviceUuid) {
+		if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader") || "1".equals(System.getenv(NO_VULKAN_LOADER_ENV))) {
+			// E2E: what LWJGL throws on a machine without a Vulkan runtime.
+			throw new UnsatisfiedLinkError("E2E: no Vulkan runtime on this machine");
+		}
 		if (instance != null) {
 			if (!instance.deviceUuid.equals(deviceUuid)) {
 				throw new IllegalStateException("This process exports from GPU " + instance.deviceUuid + ", not " + deviceUuid);

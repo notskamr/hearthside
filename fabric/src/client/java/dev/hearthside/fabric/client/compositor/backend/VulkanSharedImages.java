@@ -70,7 +70,7 @@ public final class VulkanSharedImages implements SharedImages {
 		}
 		GpuTexture texture;
 		boolean imported;
-		VulkanImport.request(memory);
+		VulkanImport.request(memory, image);
 		try {
 			texture = device.createTexture(label, SLOT_USAGE, GpuFormat.RGBA8_UNORM, image.width(), image.height(), 1, 1);
 		} catch (VulkanImport.Failed e) {

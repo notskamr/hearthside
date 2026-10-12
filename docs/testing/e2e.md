@@ -25,8 +25,9 @@ Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 - It stops the run as soon as the report ends with `DONE`, `READY_FOR_HOST_KILL host=… satellite=…` or `ABORTED …`.
 - On `READY_FOR_HOST_KILL` it performs step 7: it force-kills the host and prints `STEP 7 PASS` once the guest's
   game exits by itself (or `STEP 7 FAIL` after 15 s).
-- It then kills every leftover game and Gradle process (`powershell` on Windows, `pkill` on macOS) and prints
-  `PASS n  FAIL n  SKIP n` and any failures.
+- It then kills the game and Gradle wrapper processes left over from this checkout: those whose command line names a
+  path inside it (`C:\…`, `C:/…` or `/c/…`), so a Minecraft being played or another checkout's run is left alone
+  (`powershell` on Windows, `ps` and `kill` on macOS). It prints `PASS n  FAIL n  SKIP n` and any failures.
 
 Switches (Gradle properties, read by the `e2eClient` run in `fabric/build.gradle`):
 

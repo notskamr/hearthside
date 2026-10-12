@@ -13,6 +13,7 @@ import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.launch.GraphicsBackend;
 import dev.hearthside.core.launch.HostJvm;
+import dev.hearthside.core.launch.LaunchCommand;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.launch.SatelliteLaunch;
 import dev.hearthside.core.launch.UnsupportedLauncherException;
@@ -49,6 +50,7 @@ import dev.hearthside.core.compositor.TransportDecision;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.compositor.Presentation;
+import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
@@ -445,10 +447,18 @@ public final class Party {
 			slot.secret = newSecret();
 			try {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
-				return LaunchCommandBuilder.build(host,
+				LaunchCommand command = LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
 						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
 								guestBackend));
+				if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader")) {
+					// E2E: the guest behaves as if its machine had no Vulkan runtime (satellites get no -Dhearthside.*).
+					Map<String, String> environment = new HashMap<>(command.environment());
+					environment.put(ExportDevice.NO_VULKAN_LOADER_ENV, "1");
+					command = new LaunchCommand(command.command(), environment, command.removedEnvironment(),
+							command.workingDirectory());
+				}
+				return command;
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}

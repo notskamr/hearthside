@@ -74,6 +74,31 @@ public final class SharedImageCheck {
 		}
 	}
 
+	/**
+	 * E2E step X1b: one image exported and imported once by name with its own description, as the host imports a guest's
+	 * slot. Logs whether it was imported or refused, then closes everything. Render thread.
+	 */
+	public static void importOnce() {
+		List<AutoCloseable> open = new ArrayList<>();
+		try {
+			SharedImages images = SharedImages.forThisGame();
+			ImageDescription description = images.describe(SIZE, SIZE);
+			String name = "hearthside-x1b-" + ProcessHandle.current().pid();
+			ExportedSlot slot = ExportDevice.forGpu(images.facts().deviceUuid()).export(description, name);
+			open.add(slot);
+			try {
+				open.add(images.importSlot(description, slot.byName(name), "hearthside x1b import"));
+				HearthsideMod.LOGGER.info("Hearthside shared image imported");
+			} catch (ImportFailed refused) {
+				HearthsideMod.LOGGER.info("Hearthside shared image mismatch refused: {}", refused.getMessage());
+			}
+		} catch (RuntimeException e) {
+			HearthsideMod.LOGGER.error("Hearthside shared image check failed", e);
+		} finally {
+			closeAll(open);
+		}
+	}
+
 	/** An image that differs from this game's only in its usage bits (Review Focus 4) is refused, not imported. */
 	private static void refusesAMismatch(SharedImages images, ImageDescription d, SlotMemory memory) {
 		ImageDescription other = new ImageDescription(d.vkFormat(), d.width(), d.height(), d.tiling(), d.createFlags(),
