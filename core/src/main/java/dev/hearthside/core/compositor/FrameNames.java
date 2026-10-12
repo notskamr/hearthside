@@ -20,6 +20,14 @@ public final class FrameNames {
 		return "Local\\Hearthside-" + shortHash(controlFile.toLowerCase(Locale.ROOT)) + "-" + generation + "-" + slot;
 	}
 
+	/**
+	 * The Windows kernel object name for the copy transport's pixel memory. Each generation has its own slot table, so
+	 * its path alone tells generations apart.
+	 */
+	public static String pixels(String controlFile) {
+		return "Local\\Hearthside-" + shortHash(controlFile.toLowerCase(Locale.ROOT)) + "-pixels";
+	}
+
 	/** A positive starting generation, different for each guest process. */
 	public static int firstGeneration() {
 		return ThreadLocalRandom.current().nextInt(1, 1 << 30);
