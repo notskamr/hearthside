@@ -1,5 +1,6 @@
 package dev.hearthside.fabric.client.input;
 
+import dev.hearthside.core.input.BundleState;
 import dev.hearthside.core.input.ButtonGuide;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.ControlScheme;
@@ -49,7 +50,10 @@ import net.minecraft.client.gui.screens.recipebook.RecipeBookComponent;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ItemUseAnimation;
@@ -89,6 +93,13 @@ public final class ButtonGuideRenderer {
 	/** Mods' screens the hints stayed off, each logged once. */
 	private static final Set<String> skippedScreens = ConcurrentHashMap.newKeySet();
 	private static volatile boolean screenHintsHidden;
+	/** E2E runs log how many hint rows each frame drew on its screen (player 1's game, and a guest's under the pattern). */
+	private static final boolean COUNT_ROWS = Boolean.getBoolean("hearthside.e2e")
+			|| "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
+	/** Render thread: the screen this frame's hints were drawn for and the rows drawn; the last counts logged. */
+	private static Screen rowScreen;
+	private static int rowsThisFrame, loggedRows = -1;
+	private static String loggedRowScreen;
 
 	private ButtonGuideRenderer() {}
 
@@ -104,6 +115,9 @@ public final class ButtonGuideRenderer {
 				(graphics, delta) -> drawWorld(graphics));
 		ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) ->
 				ScreenEvents.afterExtract(screen).register((s, graphics, mouseX, mouseY, delta) -> drawScreen(s, graphics, mouseX, mouseY)));
+		if (COUNT_ROWS) {
+			FrameHook.register(ButtonGuideRenderer::countRows);
+		}
 	}
 
 	public static void disable() {
@@ -164,6 +178,7 @@ public final class ButtonGuideRenderer {
 	 */
 	private static void drawScreen(Screen screen, GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
 		Minecraft mc = Minecraft.getInstance();
+		rowScreen = screen;
 		Supplier<ControlScheme> scheme = schemeSource;
 		if (scheme == null || screenHintsHidden || screen instanceof LobbyScreen || screen instanceof PadScreen
 				|| screen instanceof ChatScreen) {
@@ -183,14 +198,15 @@ public final class ButtonGuideRenderer {
 		}
 		boolean container = screen instanceof AbstractContainerScreen<?>;
 		boolean holding = container && !((AbstractContainerScreen<?>) screen).getMenu().getCarried().isEmpty();
-		var context = new GuideContext(container, !container, false, false, false, holding, false);
+		BundleState bundle = container ? bundleState((AbstractContainerScreen<?>) screen) : BundleState.NONE;
+		var context = new GuideContext(container, !container, false, false, false, holding, false, bundle);
 		List<ButtonGuide.Prompt> prompts = new ArrayList<>(ButtonGuide.prompts(context, scheme.get()));
 		if (!container) {
 			boolean select = overClickable(screen.children(), mouseX, mouseY);
 			prompts.removeIf(p -> p.labelKey().equals(SELECT) && !select
 					|| p.labelKey().equals(BACK) && !screen.shouldCloseOnEsc());
 		}
-		List<Rect> obstacles = obstacles(screen);
+		List<Rect> obstacles = obstacles(screen, ToastRects.visible(mc));
 		Rect bounds = new Rect(0, 0, graphics.guiWidth(), graphics.guiHeight());
 		boolean labels = true;
 		List<Hint> layout = arrange(mc.font, prompts, true, bounds, obstacles);
@@ -203,6 +219,7 @@ public final class ButtonGuideRenderer {
 			return;
 		}
 		drewOn = screen;
+		rowsThisFrame++;
 		for (int i = 0; i < prompts.size(); i++) {
 			Rect chip = layout.get(i).rect();
 			drawPrompt(graphics, mc.font, prompts.get(i), chip.x() + GROW + PAD, chip.y() + GROW + 2, labels);
@@ -246,11 +263,11 @@ public final class ButtonGuideRenderer {
 
 	/**
 	 * What a hint row must not cover: every widget the screen shows (inside lists and their entries too, clipped to
-	 * what the list shows), a container's panel with its tabs, an open recipe book and the hotbar. Each grown by a pixel
-	 * so the row never quite touches them.
+	 * what the list shows), a container's panel with its tabs, an open recipe book, the hotbar, and Minecraft's toasts,
+	 * which draw over the screen. Each grown by a pixel so the row never quite touches them.
 	 */
-	private static List<Rect> obstacles(Screen screen) {
-		List<Rect> obstacles = new ArrayList<>();
+	private static List<Rect> obstacles(Screen screen, List<Rect> toasts) {
+		List<Rect> obstacles = new ArrayList<>(toasts);
 		collect(screen.children(), new Rect(0, 0, screen.width, screen.height), obstacles);
 		Minecraft mc = Minecraft.getInstance();
 		LocalPlayer player = mc.player;
@@ -286,6 +303,43 @@ public final class ButtonGuideRenderer {
 			}
 		}
 		return obstacles.stream().map(r -> new Rect(r.x() - 1, r.y() - 1, r.width() + 2, r.height() + 2)).toList();
+	}
+
+	/**
+	 * Where a bundle is: under the pointer (with or without an item held), or held over a slot. Creative's item picker
+	 * handles its own clicks (a click there with a bundle held replaces it), so only the player's inventory counts there.
+	 */
+	private static BundleState bundleState(AbstractContainerScreen<?> screen) {
+		Slot hovered = ((ContainerScreenAccessor) screen).hearthside$hoveredSlot();
+		if (hovered == null) {
+			return BundleState.NONE;
+		}
+		ItemStack carried = screen.getMenu().getCarried();
+		ItemStack under = hovered.getItem();
+		boolean realSlot = !(screen instanceof CreativeModeInventoryScreen) || hovered.container instanceof Inventory;
+		return BundleState.of(carried.is(ItemTags.BUNDLES), carried.isEmpty(), under.is(ItemTags.BUNDLES), under.isEmpty(),
+				realSlot);
+	}
+
+	/**
+	 * Frame start (E2E): logs the hint rows the last frame drew on its screen whenever that number or the screen
+	 * changes. A screen must never draw two (Spec D section 3.5).
+	 */
+	private static void countRows() {
+		Screen screen = rowScreen;
+		int rows = rowsThisFrame;
+		rowScreen = null;
+		rowsThisFrame = 0;
+		if (screen == null) {
+			loggedRowScreen = null;
+			return;
+		}
+		String name = screen.getClass().getSimpleName();
+		if (rows != loggedRows || !name.equals(loggedRowScreen)) {
+			HearthsideMod.LOGGER.info("Hearthside hint rows={} screen={}", rows, name);
+			loggedRows = rows;
+			loggedRowScreen = name;
+		}
 	}
 
 	private static void collect(List<? extends GuiEventListener> children, Rect clip, List<Rect> into) {
