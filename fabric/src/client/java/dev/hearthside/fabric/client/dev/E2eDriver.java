@@ -108,9 +108,10 @@ public final class E2eDriver {
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
 			{"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
-			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"}, {"W9", "L5"}, {"L6", "W9"},
-			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"L11", "R1"},
-			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"},
+			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"},
+			{"W10", "L5"}, {"W11", "L5"}, {"W9", "L5"}, {"L6", "W9"},
+			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"R2", "R1"}, {"L11", "R1"},
+			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"}, {"L12", "L3"},
 			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
@@ -193,6 +194,8 @@ public final class E2eDriver {
 				step("W6 B on New World goes back one screen, not two", this::newWorldBackOnce);
 				step("W7 B on the name keyboard closes only the keyboard", this::keyboardBackOnce);
 				step("W8 with no worlds yet the picker shows one Create card", this::pickerWithNoWorlds);
+				step("W10 Cheats toggles with A, a click or left/right, and its row always says which", this::cheatsToggle);
+				step("W11 the world picker's \"Last played with …\" line is warm ink, not an alarm red", this::playedWithInk);
 				step("W9 back in the lobby with player 1's controller", this::ensureLobby);
 				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
@@ -203,6 +206,7 @@ public final class E2eDriver {
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
 						this::controlsRemap);
+				step("R2 the Controls screen: one selected row, D-pad directions told apart", this::controlsSelectionAndDpad);
 				step("L11 holding Y deletes an unused profile; a profile in use is refused; letting go early cancels",
 						this::manageProfiles);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
@@ -212,6 +216,7 @@ public final class E2eDriver {
 				step("L8 unplugging mid-keyboard keeps the card; replugging resumes it", this::cardSurvivesUnplug);
 				step("L10 two identical controllers never share a profile or a new name", this::twinsNeverClash);
 				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
+				step("L12 the typing card's keyboard shows every key it uses, and B closes only the keyboard", this::cardKeyboardLegend);
 				step("B5 Menu on a seated controller opens the world picker", this::lobbyToPicker);
 				step("W1 the world picker puts the last co-op world first, focused, with who played it", this::pickerFocusesLastCoopWorld);
 				step("S1 Hearthside's screens, cards and keyboards make their warm sounds", () -> screensMakeSounds(lobbySounds));
@@ -1842,6 +1847,120 @@ public final class E2eDriver {
 		}
 	}
 
+	/** Moves player 1's mouse to a point given in GUI coordinates, and optionally clicks there. Render thread. */
+	private void mouseAt(double guiX, double guiY, boolean click) {
+		var window = minecraft.getWindow();
+		double toScreen = (double) window.getScreenWidth() / window.getGuiScaledWidth();
+		long handle = window.handle();
+		minecraft.mouseHandler.onMove(handle, guiX * toScreen, guiY * toScreen, 0, 0);
+		if (click) {
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 1);
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 0);
+		}
+	}
+
+	private void cheatsToggle() throws Exception {
+		ensureLobby();
+		String levelId = null;
+		try {
+			NewWorldScreen screen = openNewWorld();
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 4, () -> screen.focusedRow().equals("cheats"));
+			check(onRender(screen::focusedRow).equals("cheats"), "the Cheats row is focused");
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ Off ›") && !onRender(screen::cheats),
+					"Cheats starts Off (" + onRender(screen::cheatsLabel) + ")");
+			press(HOST_PAD, PadButton.A);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ On ›") && onRender(screen::cheats),
+					"A turns Cheats on and the row says so (" + onRender(screen::cheatsLabel) + ")");
+			onRender(() -> {
+				var row = Screens.getWidgets(screen).stream().filter(w -> w.getMessage().getString().startsWith("Cheats"))
+						.findFirst().orElseThrow();
+				mouseAt(row.getX() + row.getWidth() / 2.0, row.getY() + row.getHeight() / 2.0, true);
+				return null;
+			});
+			Thread.sleep(300);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ Off ›") && !onRender(screen::cheats),
+					"a click turns it off and the row says so (" + onRender(screen::cheatsLabel) + ")");
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 4, () -> screen.focusedRow().equals("cheats"));
+			press(HOST_PAD, PadButton.DPAD_RIGHT);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ On ›") && onRender(screen::cheats), "right: On");
+			press(HOST_PAD, PadButton.DPAD_LEFT);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ Off ›") && !onRender(screen::cheats), "left: Off");
+			press(HOST_PAD, PadButton.DPAD_RIGHT);
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 4, () -> screen.focusedRow().equals("mode"));
+			press(HOST_PAD, PadButton.DPAD_LEFT);
+			check(onRender(screen::mode) == NewWorldScreen.Mode.HARDCORE, "left on Mode from Survival is Hardcore");
+			check(onRender(screen::cheatsLabel).equals("Cheats:  Off") && !onRender(screen::cheatsActive),
+					"in Hardcore the row reads Off, greyed (" + onRender(screen::cheatsLabel) + ")");
+			press(HOST_PAD, PadButton.DPAD_RIGHT);
+			check(onRender(screen::mode) == NewWorldScreen.Mode.SURVIVAL, "right is Survival again");
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ On ›") && onRender(screen::cheatsActive),
+					"back in Survival the last value is back (" + onRender(screen::cheatsLabel) + ")");
+			screenshot("new-world-cheats");
+			pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 6, () -> screen.focusedRow().equals("create"));
+			press(HOST_PAD, PadButton.A);
+			waitFor("the new world", Duration.ofSeconds(180), () -> onRender(() -> minecraft.level != null
+					&& minecraft.getSingleplayerServer() != null && minecraft.player != null));
+			levelId = onRender(() -> minecraft.getSingleplayerServer()
+					.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).toAbsolutePath().normalize()
+					.getFileName().toString());
+			check(onRender(() -> minecraft.getSingleplayerServer().getWorldData().isAllowCommands()),
+					"the world created with Cheats On allows commands");
+		} finally {
+			if (onRender(() -> minecraft.level != null)) {
+				onRender(() -> {
+					minecraft.disconnectFromWorld(Component.literal("E2E"));
+					return null;
+				});
+				waitFor("back on a menu", Duration.ofSeconds(60),
+						() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+			}
+			if (levelId != null) {
+				String id = levelId;
+				onRender(() -> {
+					try (var access = minecraft.getLevelSource().createAccess(id)) {
+						access.deleteLevel();
+					}
+					return null;
+				});
+				check(!onRender(() -> minecraft.getLevelSource().levelExists(id)), "the test world is deleted");
+			}
+			backToLobby();
+			if (!onRender(() -> Party.current() != null && minecraft.gui.screen() instanceof LobbyScreen)) {
+				openLobby();
+			}
+			waitFor("player 1's controller again", Duration.ofSeconds(5),
+					() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
+		}
+	}
+
+	private void playedWithInk() throws Exception {
+		ensureLobby();
+		check(onRender(() -> minecraft.getLevelSource().levelExists(WORLD)), "the E2E world exists (created by earlier runs)");
+		Path record = minecraft.gameDirectory.toPath().resolve("hearthside/coop-worlds.json");
+		byte[] before = Files.exists(record) ? Files.readAllBytes(record) : null;
+		try {
+			coopStore().played(WORLD, System.currentTimeMillis(), List.of("Ember", "Birch"));
+			WorldsScreen picker = openPicker();
+			check("Last played with Ember and Birch".equals(onRender(() -> picker.playedWithText(WORLD))),
+					"the E2E world's card says who played it");
+			Thread.sleep(300);
+			int colour = onRender(() -> picker.playedWithColour(WORLD));
+			int r = colour >> 16 & 0xFF, gr = colour >> 8 & 0xFF, b = colour & 0xFF;
+			check(!(r >= 0xC0 && gr <= 0x50 && b <= 0x50) && !(r >= 0xA0 && gr <= 0x40 && b <= 0x40),
+					"the line is not an alarm red (" + Integer.toHexString(colour) + ")");
+			check(colour == dev.hearthside.fabric.client.ui.HearthDraw.MUTED,
+					"it is Hearthside's warm ink for secondary text (" + Integer.toHexString(colour) + ")");
+			screenshot("worlds-played-with");
+		} finally {
+			backToLobby();
+			if (before == null) {
+				Files.deleteIfExists(record);
+			} else {
+				Files.write(record, before);
+			}
+		}
+	}
+
 	/** Presses a direction until the condition holds (at most {@code tries} times). */
 	private void pressUntil(int pad, PadButton button, int tries, Callable<Boolean> done) throws Exception {
 		for (int i = 0; i < tries && !onRender(done); i++) {
@@ -2076,6 +2195,52 @@ public final class E2eDriver {
 				&& onRender(() -> card(1) == null), "Birch is back on Bedrock and ready");
 	}
 
+	private void controlsSelectionAndDpad() throws Exception {
+		press(LOBBY_PAD, PadButton.X);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ControlsScreen c && c.seat() == 1), "the seat's controls open");
+		ControlsScreen screen = onRender(() -> (ControlsScreen) minecraft.gui.screen());
+		try {
+			press(LOBBY_PAD, PadButton.DPAD_DOWN);
+			press(LOBBY_PAD, PadButton.DPAD_UP);
+			check(onRender(screen::focusedAction) == Action.JUMP, "the pad focuses Jump");
+			// The pointer over another row (Drop, in the same column).
+			onRender(() -> {
+				double[] centre = screen.rowCentre(Action.DROP);
+				mouseAt(centre[0], centre[1], false);
+				return null;
+			});
+			Thread.sleep(400);
+			check(onRender(screen::hoveredAction) == Action.DROP, "the pointer is over Drop");
+			check(onRender(screen::selectedRowCount) == 1 && onRender(screen::selectedAction) == Action.JUMP,
+					"exactly one row draws as selected, the focused one (" + onRender(screen::selectedRowCount) + " drawn, "
+							+ onRender(screen::selectedAction) + ")");
+			screenshot("controls-selection");
+			List<String> dpad = new ArrayList<>();
+			for (Action action : List.of(Action.DROP, Action.PERSPECTIVE, Action.SWAP_OFFHAND, Action.CHAT)) {
+				dpad.add(onRender(() -> screen.drawnGlyph(action)));
+			}
+			log("   D-pad glyphs: " + dpad);
+			check(dpad.stream().distinct().count() == 4
+					&& dpad.stream().allMatch(id -> id != null && id.matches("hearthside:glyph/playstation/dpad_(up|down|left|right)")),
+					"the four D-pad bindings draw four different D-pad glyphs in the seat's family");
+			check(onRender(() -> dev.hearthside.fabric.client.ui.HearthDraw.dpadArmsDrawn) > 0,
+					"the pressed arm is painted in the accent at draw time");
+		} finally {
+			onRender(() -> {
+				mouseAt(0, 0, false);
+				return null;
+			});
+			if (onRender(() -> minecraft.gui.screen() == screen)) {
+				press(LOBBY_PAD, PadButton.B);
+			}
+			if (onRender(() -> card(1) != null)) {
+				press(LOBBY_PAD, PadButton.B);
+			}
+		}
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) == null), "back on the ready seat");
+	}
+
 	/** Holds a button down for a while, then lets go. */
 	private void hold(int pad, PadButton button, long millis) throws InterruptedException {
 		PADS.set(pad, new InputFrame(0, InputFrame.buttons(button), 0, 0, 0, 0, 0, 0));
@@ -2252,6 +2417,101 @@ public final class E2eDriver {
 		check(colour == PlayerColors.DEFAULTS[1], "the first free colour was pre-picked");
 		waitFor("the seat ready as " + suggestion, Duration.ofSeconds(120),
 				() -> onRender(() -> Party.current().seatView(1).status()).equals("Ready"));
+	}
+
+	/** The glyphs the shared screen's hint chips draw, after a moment. */
+	private java.util.Set<String> chipGlyphs() throws InterruptedException {
+		dev.hearthside.fabric.client.ui.HintChip.drawn.clear();
+		Thread.sleep(400);
+		return new java.util.TreeSet<>(dev.hearthside.fabric.client.ui.HintChip.drawn);
+	}
+
+	private static boolean allFamily(java.util.Set<String> glyphs, String family) {
+		return !glyphs.isEmpty() && glyphs.stream().allMatch(id -> id.startsWith("hearthside:glyph/" + family + "/"));
+	}
+
+	private void cardKeyboardLegend() throws Exception {
+		String made = onRender(() -> Party.current().seatView(1).name());
+		LobbyScreen lobby = onRender(() -> (LobbyScreen) minecraft.gui.screen());
+		List<Object> chips = onRender(() -> lobby.children().stream()
+				.filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance).map(c -> (Object) c).toList());
+		// Player2 types a new name on their card.
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> card(1) != null && card(1).changing()), "Y reopens Player2's card");
+		toNew(1, LOBBY_PAD);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1).keyboard() != null), "New opens the name keyboard");
+		Thread.sleep(300);
+		List<String> legend = dev.hearthside.fabric.client.ui.KeyboardWidget.drawnLegend;
+		log("   legend: " + legend);
+		List<String> labels = legend.stream().map(entry -> entry.substring(entry.indexOf(' ') + 1)).toList();
+		check(labels.equals(List.of("Type", "Close", "Space", "Del", "Aa", "Done")),
+				"the legend says A Type, B Close, Y Space, X Del, LB/RB Aa and Menu Done (" + labels + ")");
+		check(legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/a "))
+				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/b "))
+				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/left_bumper+hearthside:glyph/playstation/right_bumper "))
+				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/start ")),
+				"in the PlayStation pad's own glyphs (L1/R1 for the layers)");
+		screenshot("lobby-keyboard-legend");
+		// B closes only the keyboard: the card stays on its carousel, the lobby stays, its chips are the same.
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) != null && card(1).keyboard() == null && card(1).stage() == SeatCard.Stage.CAROUSEL),
+				"B closes the keyboard; the card stays");
+		check(onRender(() -> minecraft.gui.screen()) == lobby, "the lobby does not go back");
+		check(onRender(() -> lobby.children().stream().filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance)
+				.map(c -> (Object) c).toList()).equals(chips), "the lobby's chips are unchanged");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().seatView(1).name().equals(made)),
+				"B on the carousel keeps " + made);
+		// The shared screens' chips follow the controller driving them.
+		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			// Player 1 takes it (a run that skipped L6 still remembers it as theirs, and it is taken at once).
+			if (!onRender(() -> Party.current().hostHasController())) {
+				onRender(() -> {
+					Screens.getWidgets(lobby).stream()
+							.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("+ Controller"))
+							.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+					return null;
+				});
+				press(HOST_PAD, PadButton.A);
+			}
+			waitFor("player 1 has the Xbox pad", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+			// Player 1 nudges the pointer: the lobby's chips are theirs.
+			PADS.set(HOST_PAD, new InputFrame(0, 0, 0.6f, 0, 0, 0, 0, 0));
+			Thread.sleep(150);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			java.util.Set<String> lobbyGlyphs = chipGlyphs();
+			check(allFamily(lobbyGlyphs, "xbox"), "player 1's Xbox pad moved the pointer: the lobby's chips are Xbox " + lobbyGlyphs);
+			// Menu on Player2's PlayStation pad opens the picker: its chips are theirs at once.
+			press(LOBBY_PAD, PadButton.START);
+			waitFor("the world picker", Duration.ofSeconds(15),
+					() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+			java.util.Set<String> pickerGlyphs = chipGlyphs();
+			check(allFamily(pickerGlyphs, "playstation"), "Menu on the PlayStation pad: the picker's chips are PlayStation " + pickerGlyphs);
+			WorldsScreen picker = onRender(() -> (WorldsScreen) minecraft.gui.screen());
+			pressUntil(LOBBY_PAD, PadButton.DPAD_DOWN, 12, () -> "".equals(picker.focusedLevelId()));
+			press(LOBBY_PAD, PadButton.A);
+			check(onRender(() -> minecraft.gui.screen() instanceof NewWorldScreen), "Create opens New World");
+			java.util.Set<String> newWorldGlyphs = chipGlyphs();
+			check(allFamily(newWorldGlyphs, "playstation"), "New World driven by the PlayStation pad: PlayStation chips " + newWorldGlyphs);
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			newWorldGlyphs = chipGlyphs();
+			check(allFamily(newWorldGlyphs, "xbox"), "then driven by the Xbox pad: Xbox chips " + newWorldGlyphs);
+		} finally {
+			backToLobby();
+			onRender(() -> {
+				if (Party.current() != null && Party.current().hostHasController()) {
+					Party.current().releaseController();
+				}
+				return null;
+			});
+			PADS.unplug(HOST_PAD);
+			Thread.sleep(300);
+		}
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) == null
+				&& Party.current().seatView(1).status().equals("Ready")), "back in the lobby with Player2 ready");
 	}
 
 	private void orphanedTitleReturnsToLobby() throws Exception {

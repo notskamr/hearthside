@@ -88,11 +88,15 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 		nameBox.setValue(name);
 		nameBox.setResponder(value -> name = value);
 		y += ROW_H + ROW_GAP;
-		modeRow = addRenderableWidget(new HearthButton(x, y, ROW_W, ROW_H, Component.empty(), b -> cycleMode(1)));
+		// The choice rows turn a page when pressed (A or a click), as left and right on them do.
+		modeRow = addRenderableWidget(new HearthButton(x, y, ROW_W, ROW_H, Component.empty(), b -> cycleMode(1))
+				.withSound(HearthSounds.Ui.PAGE));
 		y += ROW_H + ROW_GAP;
-		difficultyRow = addRenderableWidget(new HearthButton(x, y, ROW_W, ROW_H, Component.empty(), b -> cycleDifficulty(1)));
+		difficultyRow = addRenderableWidget(new HearthButton(x, y, ROW_W, ROW_H, Component.empty(), b -> cycleDifficulty(1))
+				.withSound(HearthSounds.Ui.PAGE));
 		y += ROW_H + ROW_GAP;
-		cheatsRow = addRenderableWidget(new HearthButton(x, y, ROW_W, ROW_H, Component.empty(), b -> cheats = !cheats));
+		cheatsRow = addRenderableWidget(new HearthButton(x, y, ROW_W, ROW_H, Component.empty(), b -> toggleCheats())
+				.withSound(HearthSounds.Ui.PAGE));
 		y += ROW_H + ROW_GAP + 6;
 		createButton = addRenderableWidget(new HearthButton(x, y, ROW_W, ROW_H + 4, Component.literal("Create"),
 				b -> create()));
@@ -119,13 +123,23 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 		setInitialFocus(createButton);
 	}
 
+	/**
+	 * The rows say their values, between arrows while they can change. Hardcore fixes difficulty (Hard) and cheats
+	 * (Off): those rows grey out without arrows, and the choices made come back with another mode.
+	 */
 	private void refreshLabels() {
+		boolean hardcore = mode == Mode.HARDCORE;
 		modeRow.setMessage(Component.literal("Mode:  ‹ " + mode.label + " ›"));
-		Difficulty shown = mode == Mode.HARDCORE ? Difficulty.HARD : difficulty;
-		difficultyRow.setMessage(Component.literal("Difficulty:  ‹ " + shown.getDisplayName().getString() + " ›"));
-		difficultyRow.active = mode != Mode.HARDCORE;
-		cheatsRow.setMessage(Component.literal("Cheats:  " + (cheats && mode != Mode.HARDCORE ? "On" : "Off")));
-		cheatsRow.active = mode != Mode.HARDCORE;
+		difficultyRow.setMessage(Component.literal("Difficulty:  "
+				+ (hardcore ? Difficulty.HARD.getDisplayName().getString() : "‹ " + difficulty.getDisplayName().getString() + " ›")));
+		difficultyRow.active = !hardcore;
+		cheatsRow.setMessage(Component.literal("Cheats:  " + (hardcore ? "Off" : cheats ? "‹ On ›" : "‹ Off ›")));
+		cheatsRow.active = !hardcore;
+	}
+
+	private void toggleCheats() {
+		cheats = !cheats;
+		refreshLabels();
 	}
 
 	private void cycleMode(int step) {
@@ -185,8 +199,7 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 					cycleDifficulty(step);
 					HearthSounds.play(HearthSounds.Ui.PAGE);
 				} else if (focused == cheatsRow && cheatsRow.active) {
-					cheats = !cheats;
-					refreshLabels();
+					toggleCheats();
 					HearthSounds.play(HearthSounds.Ui.PAGE);
 				}
 			} else if (action == MenuNav.Action.ACCEPT && focused == nameBox) {
@@ -271,6 +284,19 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 
 	public boolean typing() {
 		return keyboard != null;
+	}
+
+	/** The cheats choice (kept while Hardcore greys it out). */
+	public boolean cheats() {
+		return cheats;
+	}
+
+	public String cheatsLabel() {
+		return cheatsRow.getMessage().getString();
+	}
+
+	public boolean cheatsActive() {
+		return cheatsRow.active;
 	}
 
 	/** Which row has focus: "name", "mode", "difficulty", "cheats", "create" or "". For the E2E. */
