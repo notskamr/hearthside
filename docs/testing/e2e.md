@@ -15,6 +15,11 @@ confirm the satellite pid exits.
 
 Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 
+**Tested Sodium range: 0.9.2 and later 0.9.x releases (not 0.10 or later).** On these, a guest's Sodium Video Settings show
+Fullscreen greyed out. On any other Sodium the guest's game leaves Sodium's options alone and logs
+`Hearthside left Sodium's video options alone: Sodium <version> is untested` (Q4b); fullscreen is refused either way.
+The range lives in `SodiumVersion.TESTED`.
+
 ## Running
 
 `tools/e2e/run-e2e.sh <log name> [-P…]` runs the E2E from Git Bash on Windows or from a macOS shell:
@@ -25,8 +30,10 @@ Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 - It stops the run as soon as the report ends with `DONE`, `READY_FOR_HOST_KILL host=… satellite=…` or `ABORTED …`.
 - On `READY_FOR_HOST_KILL` it performs step 7: it force-kills the host and prints `STEP 7 PASS` once the guest's
   game exits by itself (or `STEP 7 FAIL` after 15 s).
-- It then kills the game and Gradle wrapper processes left over from this checkout: those whose command line names a
-  path inside it (`C:\…`, `C:/…` or `/c/…`), so a Minecraft being played or another checkout's run is left alone
+- It then kills this run's leftover game and Gradle wrapper processes: java processes whose command line names, in this
+  checkout (`C:\…`, `C:/…` or `/c/…`), the E2E run directory `fabric/run-e2e/` (each guest), the `runE2eClient`
+  argument file under `fabric/build/loom-cache/argFiles/` (the host), or the wrapper jar with `:fabric:runE2eClient`.
+  A dev client from `fabric/run` in the same checkout, a Minecraft being played or another checkout's run is left alone
   (`powershell` on Windows, `ps` and `kill` on macOS). It prints `PASS n  FAIL n  SKIP n` and any failures.
 
 Switches (Gradle properties, read by the `e2eClient` run in `fabric/build.gradle`):
@@ -163,6 +170,8 @@ barrier platform at y = 249 so terrain never blocks it.
 | H3 | Player 1 on a controller: no pointer in play; killed, the death screen draws it; the stick steers it onto Respawn and A respawns; START's pause menu and Y's inventory draw it, B closes them | PASS — FAILED before the fix |
 | H4 | Player 1 on a controller: hints on pause, Options, Video, death and inventory cover no widget, panel or the hotbar; none over chat; no Back on the death screen; Select only with the pointer on something to click | PASS — FAILED before the fix |
 | H5 | Player 1 on a controller, pause menu: an OS mouse move over Back to Game hides the pointer (and the hints) and its click closes the menu; reopened, the stick brings the pointer back where the mouse left it and A on Back to Game closes it | PASS — FAILED before the fix |
+| H5b | Player 1 on a controller, pause menu, the OS arrow on empty space and the pointer steered onto Options…: the OS arrow is hidden while the controller drives; a real click with no move first opens nothing (it lands where the arrow is), the mouse then drives and the arrow is back; a click on Back to Game closes the menu | PASS — FAILED before the fix (Options opened) |
+| H6 | Player 1's controller unplugged on the pause menu: two frames later the pointer and the controller hints are gone and the OS arrow is shown; the mouse closes the menu; plugged back in, it is player 1's again | PASS — FAILED before the fix (pointer still drawn) |
 
 Every controller step runs with the guest window **unfocused**, as in real play: the `e2eClient` run sets
 `HEARTHSIDE_E2E_GUEST_UNFOCUSED=1`, which guests inherit and which makes their window report no focus (P1 checks it).
@@ -217,6 +226,14 @@ Found while building this:
 - The copy transport showed an empty texture: Minecraft leaves its last upload's `GL_UNPACK_ROW_LENGTH` set. Pixel
   transfers now set the pixel-store state first (through `GlStateManager`, so its cache stays right).
 - `SDL_WINDOW_NOT_FOCUSABLE` alone does not stop a window activating when first shown; guests also start hidden.
+
+## Guests' settings (batch review fixes) — 2026-10-11, same machine
+
+| # | Check | Result |
+|---|---|---|
+| Q1b | A guest whose own render distance (12) is capped at 8 saves its options once in the world (`hearthside.e2e.guestSaveOptions`): for 5 s the host's server never hears more than 8, and its options.txt keeps 12 | PASS — FAILED before the fix (the server heard 12) |
+| Q4b | With `hearthside.e2e.pretendSodiumVersion=0.10.0` the guest leaves Sodium's options alone and says so, reaches the world, shows Sodium's Video Settings and still refuses all 3 ways into fullscreen | PASS — FAILED before the fix |
+| L12 | (changed) The name keyboard's legend says `Y _`; a world name's keyboard (W3's) says `Y Space` | PASS — FAILED before the fix |
 
 ## Seamless drop-in (Plan 5c1) — 2026-10-11, same machine
 
