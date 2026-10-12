@@ -142,7 +142,7 @@ public final class E2eDriver {
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"Q1b", "Q1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
-			{"F1", "1"}, {"F3", "1"},
+			{"F1", "1"}, {"F2", "1"}, {"F3", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
 			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
@@ -284,6 +284,7 @@ public final class E2eDriver {
 			step("C5 copy transport works", this::copyTransportWorks);
 			step("C5b two quick resizes on the copy transport keep the guest composited", this::quickResizesOnCopy);
 			step("F1 copied frames are never torn, even when copying is slow", this::copiedFramesAreWhole);
+			step("F2 copying keeps a guest's pixels in shared memory, never in a file", this::copyingLeavesNoPixelFile);
 			step("F3 no uncleared memory or see-through pixels in a guest's view, on either transport", this::noGarbageOrSeeThrough);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
@@ -757,7 +758,12 @@ public final class E2eDriver {
 				pixelFiles = files.filter(f -> f.getFileName().toString().endsWith(".pixels")).count();
 			}
 			log("   copy-transport pixel files left: " + pixelFiles);
-			check(pixelFiles <= 2, "old copy-transport files are cleaned up (found " + pixelFiles + ")");
+			// On Windows copied pixels live in shared memory (Spec D section 3.2): no file at all. Elsewhere, until phase 2's
+			// shm_open, the old files must be cleaned up.
+			boolean windows = System.getProperty("os.name", "").startsWith("Windows");
+			check(windows ? pixelFiles == 0 : pixelFiles <= 2,
+					(windows ? "no copy-transport pixel file on Windows" : "old copy-transport files are cleaned up") + " (found "
+							+ pixelFiles + ")");
 		} finally {
 			System.clearProperty("hearthside.forceCopy");
 		}
@@ -794,6 +800,26 @@ public final class E2eDriver {
 					+ " first=" + counts[3]);
 			check(counts[1].equals("0"), "no torn frame (mixed=" + counts[1] + ")");
 			check(counts[2].equals("0"), "only the guest's colours (bad=" + counts[2] + ", first=" + counts[3] + ")");
+		});
+	}
+
+	/**
+	 * F2 (Spec D section 3.2): copying keeps a guest's pixels in page-file-backed shared memory, never in a file in its
+	 * game folder (Windows writes such a file's pages back to disk). The slot table stays a small file.
+	 */
+	private void copyingLeavesNoPixelFile() throws Exception {
+		withGuestHooks(Map.of("hearthside.forceCopy", "true"), () -> {
+			long mark = rejoinGuest();
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, mark, Duration.ofSeconds(30));
+			List<String> files;
+			try (var list = Files.list(minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1"))) {
+				files = list.map(f -> f.getFileName().toString()).filter(n -> n.startsWith("frames-")).sorted().toList();
+			}
+			log("   frame files in the guest's folder: " + files);
+			check(files.stream().noneMatch(n -> n.endsWith(".pixels")), "no pixel file while copying (found " + files + ")");
+			check(files.stream().anyMatch(n -> n.endsWith(".slots")), "the slot table is still there");
 		});
 	}
 
