@@ -1,6 +1,7 @@
 package dev.hearthside.fabric.client.compositor;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.pipeline.BlendFunction;
@@ -33,7 +34,8 @@ import org.lwjgl.system.MemoryStack;
  * can't be built (say a resource pack overrides {@code hearthside:core/view} badly), views are drawn through Minecraft's
  * own {@code screenquad}/{@code blit_screen} pair instead, without fades or blur. That pair always fills its whole
  * target (a render pass's render area only scissors; it never moves the viewport, on either backend), so the fallback
- * scales a view into a scratch texture of the view's size when needed, then copies it into place. Render thread only.
+ * scales a view into a scratch texture of the view's size when needed, then copies it into place. Either way a view is
+ * opaque: its frame's alpha never reaches the window. Render thread only.
  */
 public final class ViewPipeline {
 	private static final Identifier SHADER = Identifier.fromNamespaceAndPath("hearthside", "core/view");
@@ -70,6 +72,20 @@ public final class ViewPipeline {
 			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
 			.build();
 
+	/**
+	 * The fallback's last step before the overlay: writes only alpha, from an opaque texel, over the whole canvas. The
+	 * fallback copies each view's frame in with its alpha, and views are opaque pictures (plan R10): a guest's
+	 * translucent GUI pixels must never reach the window see-through.
+	 */
+	static final RenderPipeline OPAQUE = RenderPipeline.builder()
+			.withLocation(Identifier.fromNamespaceAndPath("hearthside", "pipeline/view_fallback_opaque"))
+			.withVertexShader("core/screenquad")
+			.withFragmentShader("core/blit_screen")
+			.withBindGroupLayout(BindGroupLayouts.IN_SAMPLER)
+			.withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM, ColorTargetState.WRITE_ALPHA))
+			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+			.build();
+
 	/** Our view pipeline as the last warm-up compiled it; null when it couldn't be built. */
 	private static @Nullable CompiledRenderPipeline view;
 	/** Whether this game composites (a host), so resource reloads warm the pipelines again. */
@@ -102,6 +118,7 @@ public final class ViewPipeline {
 			encoder.clearColorTexture(source.texture(), new Vector4f(0, 0, 0, 1));
 			try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside warm-up", target.view(), Optional.empty())) {
 				blit(pass, PLAIN_BLIT, source.view(), FilterMode.NEAREST);
+				blit(pass, OPAQUE, source.view(), FilterMode.NEAREST);
 				blit(pass, OVERLAY, source.view(), FilterMode.NEAREST);
 			}
 			try {
@@ -163,6 +180,11 @@ public final class ViewPipeline {
 			pass.pushConstants(constants.flip());
 		}
 		pass.draw(6, 1, 0, 0);
+	}
+
+	/** The fallback: makes every pixel of the pass's target opaque, keeping its colour. {@code texel} is opaque. */
+	static void makeOpaque(RenderPass pass, GpuTextureView texel) {
+		blit(pass, OPAQUE, texel, FilterMode.NEAREST);
 	}
 
 	/** Draws the overlay over the whole canvas, in a pass on it. */

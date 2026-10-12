@@ -465,7 +465,7 @@ public final class FrameExporter {
 				texture = device.createTexture("hearthside export " + table.generation(),
 						GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_COPY_SRC
 								| GpuTexture.USAGE_COPY_DST, GpuFormat.RGBA8_UNORM, width, height, 1, 1);
-				FrameHooks.poison(texture);
+				Canvas.startBlack(texture);
 				long bytes = (long) width * height * 4;
 				for (int slot = 0; slot < readbacks.length; slot++) {
 					int index = slot;

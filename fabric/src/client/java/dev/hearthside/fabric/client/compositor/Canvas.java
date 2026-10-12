@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.device.GpuDevice;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import org.joml.Vector4f;
 
 /**
  * A texture every view is drawn into before Minecraft presents it (Spec C section 3.3): the host's window-sized canvas,
@@ -15,6 +16,7 @@ final class Canvas implements AutoCloseable {
 	/** Drawn into, sampled, copied from (presenting, readbacks) and copied into (the fallback's placed views). */
 	static final int USAGE = GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING
 			| GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_COPY_DST;
+	private static final Vector4f OPAQUE_BLACK = new Vector4f(0f, 0f, 0f, 1f);
 
 	private final String label;
 	private GpuTexture texture;
@@ -38,9 +40,20 @@ final class Canvas implements AutoCloseable {
 		close();
 		GpuDevice device = RenderSystem.getDevice();
 		texture = device.createTexture(label, USAGE, GpuFormat.RGBA8_UNORM, width, height, 1, 1);
-		FrameHooks.poison(texture);
+		startBlack(texture);
 		view = device.createTextureView(texture);
 		return true;
+	}
+
+	/**
+	 * Clears a texture Hearthside just created to opaque black (Spec D section 3.2). Drivers needn't clear new memory
+	 * (Intel's leave what was there before), so whatever a texture shows before it is first fully written, such as a
+	 * size mismatch or a frame drawn early, is black, never leftover memory. Needs {@code USAGE_RENDER_ATTACHMENT} (OpenGL
+	 * clears through a framebuffer) and {@code USAGE_COPY_DST} (Vulkan clears as a transfer).
+	 */
+	static void startBlack(GpuTexture texture) {
+		FrameHooks.poison(texture); // E2E: what an uncleared allocation might hold, so the clear below is tested
+		RenderSystem.getDevice().createCommandEncoder().clearColorTexture(texture, OPAQUE_BLACK);
 	}
 
 	GpuTexture texture() {

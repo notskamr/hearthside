@@ -99,7 +99,7 @@ public final class GuestImport implements AutoCloseable {
 					GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
 							| GpuTexture.USAGE_RENDER_ATTACHMENT,
 					GpuFormat.RGBA8_UNORM, ready.width(), ready.height(), 1, 1);
-			FrameHooks.poison(hostTexture);
+			Canvas.startBlack(hostTexture);
 			return new GuestImport(ready, table, images, shared, pixels, hostTexture);
 		} catch (ImportFailed | RuntimeException e) {
 			closeAll(shared);

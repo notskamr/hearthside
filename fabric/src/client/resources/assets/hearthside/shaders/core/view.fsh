@@ -29,7 +29,8 @@ void main() {
     } else {
         color = texture(InSampler, texCoord).rgb;
     }
-    // A view is an opaque picture; its alpha fades it over the divider (blended as premultiplied alpha).
+    // A view is an opaque picture: the frame's own alpha is never used (a guest's translucent GUI pixels must not let the
+    // divider show through). Only the view's fade lays it over the divider (blended as premultiplied alpha).
     float alpha = view.Params.z;
     fragColor = vec4(color * alpha, alpha);
 }
