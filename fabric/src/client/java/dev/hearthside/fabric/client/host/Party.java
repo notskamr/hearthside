@@ -4,6 +4,8 @@ import dev.hearthside.core.auth.GuestTokenAuthority;
 import dev.hearthside.core.channel.ControlConnection;
 import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
+import dev.hearthside.core.config.Preset;
+import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.core.config.SplitScreenConfig;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
@@ -471,7 +473,9 @@ public final class Party {
 				LaunchCommand command = LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
 						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
-								guestBackend, config.guestMemoryMb(), config.guestRenderDistance()));
+								guestBackend, config.guestMemoryMb(),
+								// Until presets are applied, guests keep Balanced's cap (8, as before) unless a number is set.
+								SessionTuning.of(Preset.BALANCED, config).renderDistanceCap()));
 				if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader")) {
 					// E2E: the guest behaves as if its machine had no Vulkan runtime.
 					command = withEnvironment(command, ExportDevice.NO_VULKAN_LOADER_ENV, "1");

@@ -890,8 +890,7 @@ public final class E2eDriver {
 						new java.io.StringReader(new String(before, StandardCharsets.UTF_8)));
 			}
 			try (java.io.Writer out = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
-				new dev.hearthside.core.config.SplitScreenConfig(config.guestMemoryMb(), config.guestRenderDistance(),
-						config.layout().withTwo(LayoutSettings.TwoPlayer.STACKED)).write(out);
+				config.withLayout(config.layout().withTwo(LayoutSettings.TwoPlayer.STACKED)).write(out);
 			}
 			reopenWorld();
 			check(onRender(() -> Party.current().layout().two()) == LayoutSettings.TwoPlayer.STACKED,

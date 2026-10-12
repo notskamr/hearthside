@@ -42,7 +42,7 @@ class SplitScreenConfigLayoutTest {
 
 	@Test
 	void theLayoutRoundTripsWithTheRest() throws IOException {
-		SplitScreenConfig config = new SplitScreenConfig(1024, 6,
+		SplitScreenConfig config = new SplitScreenConfig(1024, 6).withLayout(
 				LayoutSettings.DEFAULTS.withTwo(LayoutSettings.TwoPlayer.STACKED).withThree(LayoutSettings.ThreePlayer.WIDE_TOP));
 		StringWriter out = new StringWriter();
 		config.write(out);

@@ -3,6 +3,7 @@ package dev.hearthside.fabric.client.host;
 import dev.hearthside.core.config.SplitScreenConfig;
 import dev.hearthside.fabric.HearthsideMod;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -28,5 +29,12 @@ public final class SplitScreenConfigFile {
 			HearthsideMod.LOGGER.warn("Could not read or write {}; the party uses the default split-screen settings", file, e);
 			return SplitScreenConfig.DEFAULTS;
 		}
+	}
+
+	/** Writes this game's split-screen settings, such as an answer to remember; the file is never half-written. */
+	public static void save(Path gameDir, SplitScreenConfig config) throws IOException {
+		Path file = path(gameDir);
+		Files.createDirectories(file.getParent());
+		SplitScreenConfig.replace(file, config);
 	}
 }

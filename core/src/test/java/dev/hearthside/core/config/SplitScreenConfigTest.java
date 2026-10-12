@@ -14,16 +14,18 @@ class SplitScreenConfigTest {
 	}
 
 	@Test
-	void defaultsAreFifteenThirtySixAndEight() {
+	void defaultsAreFifteenThirtySixAndThePreset() {
 		assertThat(SplitScreenConfig.DEFAULTS.guestMemoryMb()).isEqualTo(1536);
-		assertThat(SplitScreenConfig.DEFAULTS.guestRenderDistance()).isEqualTo(8);
+		// Spec D: the preset decides guests' render distance by default (it was 8).
+		assertThat(SplitScreenConfig.DEFAULTS.guestRenderDistance()).isEqualTo(SplitScreenConfig.RENDER_DISTANCE_FROM_PRESET);
 	}
 
 	@Test
 	void aMissingFileOrFieldGivesTheDefaults() throws IOException {
 		assertThat(read("")).isEqualTo(SplitScreenConfig.DEFAULTS);
 		assertThat(read("{}")).isEqualTo(SplitScreenConfig.DEFAULTS);
-		assertThat(read("{\"guestMemoryMb\": 2048}")).isEqualTo(new SplitScreenConfig(2048, 8));
+		assertThat(read("{\"guestMemoryMb\": 2048}"))
+				.isEqualTo(new SplitScreenConfig(2048, SplitScreenConfig.RENDER_DISTANCE_FROM_PRESET));
 		assertThat(read("{\"guestRenderDistance\": 12}")).isEqualTo(new SplitScreenConfig(1536, 12));
 	}
 
