@@ -470,8 +470,11 @@ public final class E2eDriver {
 		while (transport.find()) {
 			last = transport.group(1);
 		}
-		double budget = ("copy".equals(last) ? 1.0 : 0.3) * guests;
-		log("   compositor cost guests=" + guests + " p95=" + p95 + " ms, budget " + budget + " ms (" + last + ")");
+		// Spec C's budget is for normal play; Vulkan's validation layer checks every call and roughly doubles the cost.
+		boolean validating = hostLogSince(0).contains("enabling vulkan validation layers");
+		double budget = ("copy".equals(last) ? 1.0 : 0.3) * guests * (validating ? 2 : 1);
+		log("   compositor cost guests=" + guests + " p95=" + p95 + " ms, budget " + budget + " ms (" + last
+				+ (validating ? ", validation on" : "") + ")");
 		check(p95 < budget, "p95 " + p95 + " ms is within the " + budget + " ms budget");
 	}
 
