@@ -3764,6 +3764,8 @@ public final class E2eDriver {
 	 * hint row; and a bundle offers Choose and Take out, with the right stick choosing.
 	 */
 	private void hintsAndToasts() throws Exception {
+		// Run on its own, the step starts as soon as the session exists: player 1 may not have spawned yet.
+		waitFor("player 1 in the world", Duration.ofSeconds(60), () -> onRender(() -> minecraft.player != null));
 		String name = onRender(() -> minecraft.player.getName().getString());
 		IntegratedServer server = minecraft.getSingleplayerServer();
 		server.submit(() -> {
