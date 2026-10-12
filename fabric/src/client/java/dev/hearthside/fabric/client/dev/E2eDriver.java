@@ -820,14 +820,22 @@ public final class E2eDriver {
 
 	/**
 	 * Runs {@code body} with host properties set (Party passes its {@code hearthside.e2e.*} hooks on to the guest games it
-	 * launches), then clears them and brings Guest2 back without them.
+	 * launches), then puts back what each property was before (a run forced to copy stays forced) and brings Guest2 back.
 	 */
 	private void withGuestHooks(Map<String, String> hooks, ThrowingRunnable body) throws Exception {
+		Map<String, String> before = new java.util.HashMap<>();
+		hooks.keySet().forEach(key -> before.put(key, System.getProperty(key)));
 		hooks.forEach(System::setProperty);
 		try {
 			body.run();
 		} finally {
-			hooks.keySet().forEach(System::clearProperty);
+			before.forEach((key, value) -> {
+				if (value == null) {
+					System.clearProperty(key);
+				} else {
+					System.setProperty(key, value);
+				}
+			});
 			rejoinGuest();
 		}
 	}
