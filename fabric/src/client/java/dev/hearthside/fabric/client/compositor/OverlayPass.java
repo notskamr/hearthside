@@ -5,6 +5,7 @@ import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import dev.hearthside.core.compositor.GuiScaleRule;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.ViewFrame;
 import dev.hearthside.fabric.HearthsideMod;
@@ -89,9 +90,11 @@ public final class OverlayPass {
 		int ownWidth = window.width;
 		int ownHeight = window.height;
 		int ownScale = window.guiScale;
-		// The scale Minecraft would pick for the whole window (player 1's own, at their split view's size, is smaller).
-		// The overlay draws no items, so changing it for this pass never rebuilds the item atlas.
-		int scale = scaleFor(width, height, minecraft.options.guiScale().get());
+		// The party's GUI scale, so what the overlay draws over a view is the size of that view's own GUI (else what
+		// Minecraft would pick for the whole window). The overlay draws no items, so changing it for this pass never
+		// rebuilds the item atlas.
+		int party = GuiScaleOverride.forced();
+		int scale = party > 0 ? party : GuiScaleRule.autoScale(minecraft.options.guiScale().get(), width, height);
 		window.width = width;
 		window.height = height;
 		window.guiScale = scale;
@@ -122,15 +125,6 @@ public final class OverlayPass {
 			window.height = ownHeight;
 			window.guiScale = ownScale;
 		}
-	}
-
-	/** Minecraft's GUI scale for a framebuffer this size: the largest fitting 320×240, capped by the setting (0 = auto). */
-	static int scaleFor(int width, int height, int setting) {
-		int scale = 1;
-		while (scale != setting && scale < width && scale < height && width / (scale + 1) >= 320 && height / (scale + 1) >= 240) {
-			scale++;
-		}
-		return scale;
 	}
 
 	/** A window-pixel rect in the overlay's GUI units (covering every pixel it touched). */

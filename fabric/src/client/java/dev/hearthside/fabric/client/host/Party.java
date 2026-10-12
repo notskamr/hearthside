@@ -48,12 +48,14 @@ import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.fabric.client.satellite.SodiumVersion;
+import dev.hearthside.core.compositor.GuiScaleRule;
 import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.TransportDecision;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.compositor.FrameHooks;
+import dev.hearthside.fabric.client.compositor.GuiScaleOverride;
 import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
@@ -129,6 +131,8 @@ public final class Party {
 	private boolean settling;
 	/** When the last leave began. */
 	private long leaveAt;
+	/** Player 1's GUI-scale setting the party's GUI scale was last worked out from (-1: not yet, or not compositing). */
+	private int guiScaleSetting = -1;
 	private final ViewOverlay viewOverlay = new ViewOverlay(this);
 	/** The party panel's live map: sampled on the server thread, drawn from a texture. */
 	private final MapSampler mapSampler;
@@ -333,6 +337,12 @@ public final class Party {
 			Party party = current;
 			if (party != null) {
 				party.mapSampler.tick(server);
+			}
+		});
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			Party party = current;
+			if (party != null) {
+				party.followGuiScaleSetting();
 			}
 		});
 		// When player 1 plays alone there is no overlay pass: the join toast draws on their HUD instead.
@@ -1666,6 +1676,70 @@ public final class Party {
 		minecraft.options.pauseOnLostFocus = pauseOnLostFocusBefore;
 	}
 
+	/**
+	 * The party's GUI scale for the views now laid out (Spec D section 3.4): Minecraft's rule for each view's size at
+	 * player 1's setting, the smallest of them. Player 1's game takes it from its next GUI layout. Render thread.
+	 */
+	private int partyGuiScale(List<Slot> guests) {
+		int setting = minecraft.options.guiScale().get();
+		List<Rect> rects = new ArrayList<>();
+		views.target(0).ifPresent(rects::add);
+		for (Slot guest : guests) {
+			views.target(guest.index).ifPresent(rects::add);
+		}
+		guiScaleSetting = setting;
+		if (rects.isEmpty()) {
+			GuiScaleOverride.set(0);
+			return 0;
+		}
+		// SetViewport carries at most 32 (a view over 10,000 pixels wide).
+		int scale = Math.min(32, GuiScaleRule.partyScale(setting, rects));
+		GuiScaleOverride.set(scale);
+		return scale;
+	}
+
+	/**
+	 * Lays player 1's GUI out at the party's scale, if it isn't already, and sends every guest its view, GUI scale and
+	 * frame size. Render thread.
+	 */
+	private void sendViewports(List<Slot> guests, int partyScale, int refresh) {
+		Window window = minecraft.getWindow();
+		if (partyScale > 0 && window.getGuiScale() != partyScale) {
+			minecraft.resizeGui();
+		}
+		views.target(0).ifPresent(host -> GuiScaleOverride.log(1, window, host.width(), host.height()));
+		// Task 5's Performance preset turns this on; until then every guest renders at its view's full size.
+		boolean reducedResolution = false;
+		for (Slot guest : guests) {
+			ControlConnection connection = guest.connection;
+			Rect target = views.target(guest.index).orElse(null);
+			if (connection == null || target == null) {
+				continue;
+			}
+			ControlMessage.SetViewport viewport = partyScale < 1 ? new ControlMessage.SetViewport(target, refresh)
+					: viewport(target, refresh, GuiScaleRule.forView(target, partyScale, reducedResolution));
+			views.sentFrame(guest.index, new Rect(0, 0, viewport.frameWidth(), viewport.frameHeight()));
+			send(connection, viewport);
+		}
+	}
+
+	private static ControlMessage.SetViewport viewport(Rect target, int refresh, GuiScaleRule.ViewScale scale) {
+		return new ControlMessage.SetViewport(target, refresh, scale.guiScale(), scale.frameWidth(), scale.frameHeight());
+	}
+
+	/**
+	 * Player 1 changed their GUI-scale setting while compositing: every view follows (until then the forced party
+	 * scale keeps player 1's GUI as it was). Polled each client tick. Render thread.
+	 */
+	private void followGuiScaleSetting() {
+		if (!composite || world == null || views == null || Compositor.active() == null || guiScaleSetting < 0
+				|| minecraft.options.guiScale().get() == guiScaleSetting) {
+			return;
+		}
+		List<Slot> guests = new ArrayList<>(slots.values());
+		sendViewports(guests, partyGuiScale(guests), WindowPlacer.refreshHz(minecraft.getWindow()));
+	}
+
 	/** Re-lays out the views, or leaves split-screen mode when the last guest has gone. Render thread. */
 	private void afterGuestsChanged() {
 		List<Slot> guests = new ArrayList<>(slots.values());
@@ -1699,16 +1773,12 @@ public final class Party {
 					}
 				}
 			}
+			// Player 1's GUI scale first, so their view is laid out once, at its new size and the party's scale.
+			int partyScale = partyGuiScale(guests);
 			Compositor.activate(minecraft, this::afterGuestsChanged,
 					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), views, size.width(), size.height());
 			OverlayPass.register(viewOverlay);
-			for (Slot guest : guests) {
-				ControlConnection connection = guest.connection;
-				Rect target = views.target(guest.index).orElse(null);
-				if (connection != null && target != null) {
-					send(connection, new ControlMessage.SetViewport(target, refresh));
-				}
-			}
+			sendViewports(guests, partyScale, refresh);
 			return;
 		}
 		if (workArea == null) {

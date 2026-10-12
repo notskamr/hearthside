@@ -133,6 +133,8 @@ public final class Compositor {
 			return;
 		}
 		active = null;
+		// Player 1's own GUI scale again, from the layout clearing the virtual size makes.
+		GuiScaleOverride.clear();
 		VirtualSizing.clear(minecraft);
 		// Minecraft destroys each texture once the GPU has finished with it.
 		c.imports.values().forEach(GuestImport::close);
@@ -149,6 +151,15 @@ public final class Compositor {
 
 	/** Window coordinates per framebuffer pixel (1.0 normally, 0.5 on a 2x display). */
 	public static double screenPerFramebuffer(Minecraft minecraft) {
+		String fake = System.getProperty("hearthside.e2e.fakeScreenPerFb");
+		if (fake != null) {
+			// E2E: a display scale (Windows' 150%, say) on a display that has none.
+			try {
+				return Double.parseDouble(fake);
+			} catch (NumberFormatException e) {
+				HearthsideMod.LOGGER.warn("Ignoring hearthside.e2e.fakeScreenPerFb={}", fake);
+			}
+		}
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			IntBuffer w = stack.mallocInt(1), h = stack.mallocInt(1);
 			SDLVideo.SDL_GetWindowSize(minecraft.getWindow().handle(), w, h);
@@ -318,7 +329,9 @@ public final class Compositor {
 					continue; // the overlay shows the hearth there
 				}
 				Rect target = views.target(view.seat()).orElse(rect);
-				boolean waiting = imp.width() != target.width() || imp.height() != target.height();
+				// The frame size its game was sent: under a reduced render resolution, smaller than its view.
+				Rect frame = views.frame(view.seat()).orElse(target);
+				boolean waiting = imp.width() != frame.width() || imp.height() != frame.height();
 				if (waiting) {
 					stale.add(view.seat());
 				}
