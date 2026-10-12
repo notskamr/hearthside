@@ -20,6 +20,7 @@ import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.ViewportMath;
+import dev.hearthside.core.compositor.VirtualSize;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.session.InWorldSignal;
@@ -54,6 +55,8 @@ public final class FrameExporter {
 
 	private final Minecraft minecraft;
 	private final ControlConnection connection;
+	/** This game's player number (2 to 4), for the log. */
+	private final int player;
 	private final Path dir;
 	private final boolean pattern = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
 	/** E2E ({@link FrameHooks#SOLID_FRAMES}): the solid frames' alpha, or 0. */
@@ -77,15 +80,16 @@ public final class FrameExporter {
 	private int droppedFrames;
 	private long fpsWindowStart = System.nanoTime();
 
-	private FrameExporter(Minecraft minecraft, ControlConnection connection) {
+	private FrameExporter(Minecraft minecraft, ControlConnection connection, int player) {
 		this.minecraft = minecraft;
 		this.connection = connection;
+		this.player = player;
 		this.dir = minecraft.gameDirectory.toPath().toAbsolutePath();
 	}
 
-	/** Called once the control channel is up; any thread. */
-	public static void install(Minecraft minecraft, ControlConnection connection) {
-		instance = new FrameExporter(minecraft, connection);
+	/** Called once the control channel is up, for player {@code player} (2 to 4); any thread. */
+	public static void install(Minecraft minecraft, ControlConnection connection, int player) {
+		instance = new FrameExporter(minecraft, connection, player);
 		minecraft.execute(() -> instance.deleteOldFiles());
 	}
 
@@ -94,11 +98,25 @@ public final class FrameExporter {
 		return instance;
 	}
 
-	/** The host gave this player a viewport: render at its size, paced to the host's display. Render thread. */
-	public void onViewport(Rect rect, int refreshHz) {
-		VirtualSizing.apply(minecraft, ViewportMath.virtualSize(rect, 1.0));
-		minecraft.options.framerateLimit().set(Math.clamp(refreshHz, 10, 260));
-		reallocate(rect.width(), rect.height(), false);
+	/**
+	 * The host gave this player a viewport: render at the frame size it was sent (the view's own, or smaller under a
+	 * reduced render resolution; the host stretches it over the view) and at the party's GUI scale, paced to the host's
+	 * display. Render thread.
+	 */
+	public void onViewport(ControlMessage.SetViewport viewport) {
+		Rect rect = viewport.rect();
+		VirtualSize size = ViewportMath.virtualSize(new Rect(0, 0, viewport.frameWidth(), viewport.frameHeight()), 1.0);
+		boolean resizes = !VirtualSizing.current().equals(Optional.of(size));
+		boolean rescales = GuiScaleOverride.forced() != viewport.guiScale();
+		GuiScaleOverride.set(viewport.guiScale());
+		VirtualSizing.apply(minecraft, size);
+		if (rescales && !resizes) {
+			// Same size, new scale: lay the GUI out again (a new size does that by itself).
+			minecraft.resizeGui();
+		}
+		GuiScaleOverride.log(player, minecraft.getWindow(), rect.width(), rect.height());
+		minecraft.options.framerateLimit().set(Math.clamp(viewport.refreshHz(), 10, 260));
+		reallocate(size.framebufferWidth(), size.framebufferHeight(), false);
 	}
 
 	/**

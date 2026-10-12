@@ -1,5 +1,6 @@
 package dev.hearthside.fabric.client.dev;
 
+import dev.hearthside.core.compositor.GuiScaleRule;
 import dev.hearthside.core.e2e.StepSelection;
 import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.Control;
@@ -141,7 +142,7 @@ public final class E2eDriver {
 			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"Q1b", "Q1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
-			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
+			{"V2", "C2"}, {"U1", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
 			{"F1", "1"}, {"F2", "1"}, {"F3", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
 			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
@@ -277,6 +278,7 @@ public final class E2eDriver {
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
 			step("V2 views are the right way up", this::viewsUpright);
+			step("U1 every view's GUI is the same size, whatever player 1's setting, display scale or fullscreen", this::oneGuiScale);
 			step("V4 a resource reload while composited keeps every view composited", this::reloadKeepsViews);
 			step("V5 composite cost within budget", this::compositeCostWithinBudget);
 			step("V7 minimise, restore and fullscreen keep views composited", this::minimiseRestoreFullscreen);
@@ -642,6 +644,106 @@ public final class E2eDriver {
 			last = "rgb=" + m.group(1) + " corner=" + m.group(2);
 		}
 		log("   probe " + last);
+	}
+
+	/**
+	 * U1 (Spec D section 3.4; plan R2, R3): every view's GUI looks the same size. As is; with player 1's own GUI scale
+	 * fixed at 4 (every view follows within a few seconds); under a faked display scale; and after fullscreen and back.
+	 */
+	private void oneGuiScale() throws Exception {
+		int settingBefore = onRender(() -> minecraft.options.guiScale().get());
+		try {
+			guiScalesMatch("as is");
+
+			onRender(() -> {
+				minecraft.options.guiScale().set(4);
+				minecraft.options.save();
+				return null;
+			});
+			guiScalesMatch("player 1's GUI scale fixed at 4");
+			onRender(() -> {
+				minecraft.options.guiScale().set(settingBefore);
+				minecraft.options.save();
+				return null;
+			});
+			guiScalesMatch("player 1's own GUI scale back");
+
+			withGuestHooks(Map.of("hearthside.e2e.fakeScreenPerFb", "1.5"), () -> {
+				rejoinGuest();
+				guiScalesMatch("a display scale of 150%");
+			});
+
+			long handle = onRender(() -> minecraft.getWindow().handle());
+			onRender(() -> {
+				toggleFullscreen();
+				return null;
+			});
+			Thread.sleep(2000);
+			guiScalesMatch("fullscreen");
+			onRender(() -> {
+				toggleFullscreen();
+				return null;
+			});
+			Thread.sleep(2000);
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
+			guiScalesMatch("back from fullscreen");
+		} finally {
+			onRender(() -> {
+				if (minecraft.options.guiScale().get() != settingBefore) {
+					minecraft.options.guiScale().set(settingBefore);
+					minecraft.options.save();
+				}
+				if (minecraft.options.fullscreen().get()) {
+					toggleFullscreen();
+				}
+				return null;
+			});
+		}
+	}
+
+	private static final Pattern GUI_SCALE_LINE = Pattern.compile(
+			"hearthside gui scale player=([0-9]+) scale=([0-9]+) frame=([0-9]+)x([0-9]+) view=([0-9]+)x([0-9]+)");
+
+	/** One player's latest logged GUI scale, frame size and view size. */
+	private record GuiScaleLine(int scale, int frameWidth, int frameHeight, int viewWidth, int viewHeight) {
+		/** The GUI scale as it looks on screen: the frame is stretched over the view. */
+		double effective() {
+			return scale * (double) viewWidth / frameWidth;
+		}
+	}
+
+	private static GuiScaleLine lastGuiScale(String log, int player) {
+		Matcher m = GUI_SCALE_LINE.matcher(log);
+		GuiScaleLine last = null;
+		while (m.find()) {
+			if (Integer.parseInt(m.group(1)) == player) {
+				last = new GuiScaleLine(Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)),
+						Integer.parseInt(m.group(5)), Integer.parseInt(m.group(6)));
+			}
+		}
+		return last;
+	}
+
+	/**
+	 * Within 5 s, player 1's and Guest2's latest logged GUI scales both look like the party's: Minecraft's rule at player
+	 * 1's setting, the smallest over both views (GuiScaleRule.partyScale).
+	 */
+	private void guiScalesMatch(String when) throws Exception {
+		String[] seen = {""};
+		waitFor("the same GUI size for every view (" + when + ")", Duration.ofSeconds(5), () -> {
+			GuiScaleLine host = lastGuiScale(hostLogSince(0), 1);
+			GuiScaleLine guest = lastGuiScale(satelliteLog(), 2);
+			if (host == null || guest == null) {
+				seen[0] = "host " + host + ", guest " + guest;
+				return false;
+			}
+			int setting = onRender(() -> minecraft.options.guiScale().get());
+			int party = GuiScaleRule.partyScale(setting, List.of(new Rect(0, 0, host.viewWidth(), host.viewHeight()),
+					new Rect(0, 0, guest.viewWidth(), guest.viewHeight())));
+			seen[0] = "party " + party + ", host " + host + ", guest " + guest;
+			return Math.abs(host.effective() - party) < 1e-6 && Math.abs(guest.effective() - party) < 1e-6;
+		});
+		log("   gui scale (" + when + "): " + seen[0]);
 	}
 
 	/** V4: a resource reload rebuilds Minecraft's pipelines; the views stay composited and ours is warmed again. */

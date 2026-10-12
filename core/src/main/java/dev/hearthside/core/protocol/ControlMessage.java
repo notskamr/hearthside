@@ -33,14 +33,29 @@ public sealed interface ControlMessage {
 
 	/**
 	 * Type 4, host → satellite: this satellite's view, in the host window's framebuffer pixels, and the host display's
-	 * refresh rate (the satellite paces its frames to it).
+	 * refresh rate (the satellite paces its frames to it). {@code guiScale} is the party's GUI scale for this view, 0
+	 * when not forced (tiled mode); the satellite renders a {@code frameWidth}×{@code frameHeight} frame, at most the
+	 * view's size (smaller under a reduced render resolution), which the host stretches over the view.
 	 */
-	record SetViewport(Rect rect, int refreshHz) implements ControlMessage {
+	record SetViewport(Rect rect, int refreshHz, int guiScale, int frameWidth, int frameHeight) implements ControlMessage {
 		public SetViewport {
 			Objects.requireNonNull(rect, "rect");
 			if (refreshHz < 1 || refreshHz > 1000) {
 				throw new IllegalArgumentException("Refresh rate out of range: " + refreshHz);
 			}
+			if (guiScale < 0 || guiScale > 32) {
+				throw new IllegalArgumentException("GUI scale out of range: " + guiScale);
+			}
+			if (frameWidth < 1 || frameWidth > Math.max(1, rect.width()) || frameHeight < 1
+					|| frameHeight > Math.max(1, rect.height())) {
+				throw new IllegalArgumentException("Frame " + frameWidth + "x" + frameHeight + " doesn't fit the view "
+						+ rect.width() + "x" + rect.height());
+			}
+		}
+
+		/** An unforced GUI scale and a frame the view's own size (at least 1×1). */
+		public SetViewport(Rect rect, int refreshHz) {
+			this(rect, refreshHz, 0, Math.max(1, Objects.requireNonNull(rect, "rect").width()), Math.max(1, rect.height()));
 		}
 	}
 

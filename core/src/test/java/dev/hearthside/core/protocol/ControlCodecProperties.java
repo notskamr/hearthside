@@ -47,7 +47,11 @@ class ControlCodecProperties {
 				.as((seq, buttons, lx, ly, rx, ry, t) ->
 						new ControlMessage.Input(new InputFrame(seq, buttons, lx, ly, rx, ry, t[0], t[1])));
 		Arbitrary<ControlMessage> viewport = Combinators.combine(ints, ints, size, size, Arbitraries.integers().between(1, 1000))
-				.as((x, y, w, h, hz) -> new ControlMessage.SetViewport(new Rect(x, y, w, h), hz));
+				.as((x, y, w, h, hz) -> new ControlMessage.SetViewport(new Rect(x, y, w, h), hz))
+				.flatMap(v -> Combinators.combine(Arbitraries.integers().between(0, 32),
+								Arbitraries.integers().between(1, Math.max(1, v.rect().width())),
+								Arbitraries.integers().between(1, Math.max(1, v.rect().height())))
+						.as((scale, fw, fh) -> new ControlMessage.SetViewport(v.rect(), v.refreshHz(), scale, fw, fh)));
 		Arbitrary<Integer> positive = Arbitraries.integers().between(1, 16384);
 		Arbitrary<ControlMessage> slotsReady = Combinators.combine(Arbitraries.of(Transport.class), positive, positive, ints, text)
 				.as(ControlMessage.FrameSlotsReady::new);

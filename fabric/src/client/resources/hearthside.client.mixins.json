@@ -18,6 +18,7 @@
 		"GameRendererAccessor",
 		"GameRendererOverlayMixin",
 		"GuiRendererTargetMixin",
+		"GuiScaleMixin",
 		"KeyboardInputMixin",
 		"KeyMappingAccessor",
 		"MinecraftUserAccessor",

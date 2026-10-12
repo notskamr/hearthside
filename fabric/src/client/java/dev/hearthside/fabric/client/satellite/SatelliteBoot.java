@@ -96,7 +96,7 @@ public final class SatelliteBoot {
 			return;
 		}
 		if (!Presentation.satelliteTiled()) {
-			FrameExporter.install(minecraft, connection);
+			FrameExporter.install(minecraft, connection, index + 1);
 		}
 		connection.onMessage(message -> handle(minecraft, message));
 		connection.onClose(() -> {
@@ -112,7 +112,7 @@ public final class SatelliteBoot {
 			case ControlMessage.SetViewport m -> minecraft.execute(() -> {
 				FrameExporter exporter = FrameExporter.instance();
 				if (exporter != null) {
-					exporter.onViewport(m.rect(), m.refreshHz());
+					exporter.onViewport(m);
 				} else {
 					WindowPlacer.place(minecraft.getWindow(), m.rect());
 				}

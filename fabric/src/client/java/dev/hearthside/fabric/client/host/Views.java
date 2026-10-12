@@ -9,6 +9,7 @@ import dev.hearthside.core.layout.ViewMotion;
 import dev.hearthside.fabric.client.compositor.ViewSource;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,8 @@ final class Views implements ViewSource {
 	private final LayoutSettings settings;
 	/** Guests' seats in the order they joined (a rejoin goes to the end, so nobody else's view moves for it). */
 	private final List<Integer> order = new ArrayList<>();
+	/** The frame size each guest's game was last told to render (see {@link #frame}). */
+	private final Map<Integer, Rect> frames = new HashMap<>();
 	private Rect window;
 	private Optional<Rect> panel = Optional.empty();
 	/** When the layout last changed (name tags show again for a while after), and the panel last appeared or went. */
@@ -44,6 +47,7 @@ final class Views implements ViewSource {
 		boolean resized = !first && !newWindow.equals(window);
 		window = newWindow;
 		order.retainAll(guests);
+		frames.keySet().retainAll(guests);
 		guests.stream().sorted().filter(seat -> !order.contains(seat)).forEach(order::add);
 		List<Integer> seats = new ArrayList<>();
 		seats.add(0);
@@ -98,6 +102,16 @@ final class Views implements ViewSource {
 	@Override
 	public Optional<Rect> target(int seat) {
 		return motion.target(seat);
+	}
+
+	/** The frame size just sent to a seat's game in its SetViewport. */
+	void sentFrame(int seat, Rect frame) {
+		frames.put(seat, frame);
+	}
+
+	@Override
+	public Optional<Rect> frame(int seat) {
+		return Optional.ofNullable(frames.get(seat));
 	}
 
 	@Override
