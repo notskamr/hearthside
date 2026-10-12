@@ -19,9 +19,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * <li>A guest's game plays offline on player 1's own machine, so Minecraft's "Chat messages can't be verified" warning
  * would greet every guest the moment they arrive; their game skips it.
  * <li>Minecraft's tutorial toasts ("Move with W, A, S and D", "Use your mouse to turn") are for keyboard and mouse
- * (Spec D section 3.5): a guest never sees them, nor player 1 while playing on a controller (those already up when they
- * take one are cleared by {@link dev.hearthside.fabric.client.input.TutorialToasts}). The tutorial itself runs on, and
- * the player's tutorial progress is left alone.
+ * (Spec D section 3.5): a guest never sees them, nor player 1 while holding a controller, even while their mouse drives a
+ * menu (one let through then would stay up once the pad drives again). Those already up when they take one are cleared
+ * by {@link dev.hearthside.fabric.client.input.TutorialToasts}. The tutorial itself runs on, and the player's tutorial
+ * progress is left alone.
  * </ul>
  */
 @Mixin(ToastManager.class)
@@ -33,14 +34,14 @@ abstract class ToastFilterMixin {
 				&& system.getToken() == SystemToast.SystemToastId.UNSECURE_SERVER_WARNING) {
 			HearthsideMod.LOGGER.info("Hearthside skipped the chat-verification toast");
 			ci.cancel();
-		} else if (toast instanceof TutorialToast && (satellite || hostOnController())) {
+		} else if (toast instanceof TutorialToast && (satellite || hostHasController())) {
 			HearthsideMod.LOGGER.info("Hearthside skipped a keyboard tutorial toast for a controller player");
 			ci.cancel();
 		}
 	}
 
-	private static boolean hostOnController() {
+	private static boolean hostHasController() {
 		Party party = Party.current();
-		return party != null && party.hostOnController();
+		return party != null && party.hostHasController();
 	}
 }

@@ -4357,6 +4357,24 @@ public final class E2eDriver {
 			Thread.sleep(1000);
 			check(!onRender(this::hasTutorialToast), "no tutorial toast for player 1 on a controller");
 
+			// Nor while their mouse drives the inventory (T7-4): one let through then would stay once the pad drives again.
+			double[] empty = onRender(this::emptySpotOnScreen);
+			osMove(empty[0] + 8, empty[1]);
+			osMove(empty[0], empty[1]);
+			check(onRender(() -> !Party.current().hostOnController()), "the mouse drives the inventory");
+			onRender(() -> {
+				minecraft.gui.toastManager().addToast(new TutorialToast(minecraft.font, TutorialToast.Icons.MOUSE,
+						Component.literal("E2E tutorial while the mouse drives"), null, false));
+				return null;
+			});
+			Thread.sleep(1000);
+			check(!onRender(this::hasTutorialToast), "no tutorial toast for player 1 holding a controller while the mouse drives");
+			PADS.set(HOST_PAD, new InputFrame(0, 0, -1, 0, 0, 0, 0, 0));
+			Thread.sleep(400);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(300);
+			check(onRender(() -> Party.current().hostOnController()) && VirtualCursor.isDrawn(), "the controller drives the inventory again");
+
 			// The bundle: the pointer over it offers Choose and Take out, and the right stick chooses.
 			Rect bundleSlot = onRender(() -> {
 				InventoryScreen screen = (InventoryScreen) minecraft.gui.screen();
