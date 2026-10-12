@@ -16,6 +16,7 @@ import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.OsCursor;
 import dev.hearthside.fabric.client.input.RealMouse;
+import dev.hearthside.fabric.client.input.TutorialToasts;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.menu.SeatScreen;
@@ -540,6 +541,8 @@ final class HostInput implements Runnable {
 		ButtonGuideRenderer.setStyle(router.styleOf(0).orElse(PadStyle.GENERIC));
 		ButtonGuideRenderer.enable(hostApplier::scheme);
 		VirtualCursor.setDrawn(true);
+		// Keyboard tutorial toasts already up would stay stuck: their steps may count only the mouse.
+		TutorialToasts.clear(minecraft);
 		chat(Component.literal("Controller assigned to you."));
 		session.onHostClaimed(guids.get(instanceId));
 	}
