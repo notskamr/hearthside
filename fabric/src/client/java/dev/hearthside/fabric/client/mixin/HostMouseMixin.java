@@ -19,7 +19,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * While the host composites, player 1's game thinks its window is just its viewport: real mouse positions are moved
  * into the viewport's coordinates, and clicks or scrolls over other players' views are ignored. Player 1's own use of
- * the mouse (not Minecraft warping the cursor) is noted for {@link RealMouse}.
+ * the mouse (not Minecraft warping the cursor) is noted for {@link RealMouse}, and a real click or scroll while their
+ * controller's pointer drove the screen is first moved to where the OS arrow is.
  */
 @Mixin(MouseHandler.class)
 abstract class HostMouseMixin {
@@ -35,13 +36,15 @@ abstract class HostMouseMixin {
 		}
 		Compositor compositor = Compositor.active();
 		if (compositor == null) {
-			RealMouse.moved(xpos, ypos);
+			RealMouse.moved(xpos, ypos, xrel, yrel);
 			return;
 		}
 		hearthside$lastWindowPosition = new ViewportMath.Point(xpos, ypos);
 		if (!hearthside$pointingAtAnotherView()) {
+			RealMouse.moved(xpos, ypos, xrel, yrel);
+		} else {
 			// Moving over another player's view isn't using player 1's screen.
-			RealMouse.moved(xpos, ypos);
+			RealMouse.arrowAt(xpos, ypos);
 		}
 		ViewportMath.Point local = ViewportMath.windowToViewport(hearthside$lastWindowPosition, compositor.hostViewport(),
 				compositor.screenPerFramebuffer());
@@ -54,8 +57,10 @@ abstract class HostMouseMixin {
 		// Releases always go through: dropping one would leave a button (attack, a drag) held down.
 		if (action == 1 && hearthside$pointingAtAnotherView()) {
 			ci.cancel();
-		} else if (action == 1 && !SyntheticMouse.active()) {
-			RealMouse.used();
+		} else if (action == 1 && !SyntheticMouse.active() && RealMouse.clicked()) {
+			// The controller's pointer was driving, so the game's mouse is where the pointer rests: the click goes where
+			// the arrow is (a move, then the press), never onto whatever the pointer happens to be on.
+			RealMouse.resync(Minecraft.getInstance());
 		}
 	}
 
@@ -63,8 +68,9 @@ abstract class HostMouseMixin {
 	private void hearthside$scrollOnlyInsideViewport(long handle, double x, double y, CallbackInfo ci) {
 		if (hearthside$pointingAtAnotherView()) {
 			ci.cancel();
-		} else if (!SyntheticMouse.active()) {
-			RealMouse.used();
+		} else if (!SyntheticMouse.active() && RealMouse.clicked()) {
+			// The wheel too scrolls what is under the arrow.
+			RealMouse.resync(Minecraft.getInstance());
 		}
 	}
 
