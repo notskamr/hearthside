@@ -20,6 +20,18 @@ case "$(uname -s)" in
   MINGW*|MSYS*) WINDOWS=1 ;;
   *) WINDOWS= ;;
 esac
+# One run at a time per machine, whichever checkout or worktree starts it: games running side by side fight for the
+# CPU and GPU and make timing checks flaky. A lock left by a run that died is broken after 45 minutes.
+LOCK="${HEARTHSIDE_E2E_LOCK:-$HOME/.hearthside-e2e.lock}"
+until mkdir "$LOCK" 2>/dev/null; do
+  if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +45 2>/dev/null)" ]; then
+    rmdir "$LOCK" 2>/dev/null
+    continue
+  fi
+  echo "waiting for another E2E run to finish ($LOCK)"
+  sleep 15
+done
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 LOGS=.superpowers/e2e-logs
 mkdir -p "$LOGS"
 R=fabric/run-e2e/hearthside-e2e-report.txt
