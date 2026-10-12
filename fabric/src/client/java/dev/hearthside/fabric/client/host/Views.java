@@ -47,7 +47,6 @@ final class Views implements ViewSource {
 		boolean resized = !first && !newWindow.equals(window);
 		window = newWindow;
 		order.retainAll(guests);
-		frames.keySet().retainAll(guests);
 		guests.stream().sorted().filter(seat -> !order.contains(seat)).forEach(order::add);
 		List<Integer> seats = new ArrayList<>();
 		seats.add(0);
@@ -76,6 +75,9 @@ final class Views implements ViewSource {
 		} else {
 			motion.retarget(targets, now, reduceMotion);
 		}
+		// Frame sizes for the seats still drawn, not just the guests now playing: a view fading out keeps its own (smaller,
+		// under a reduced resolution), or its last frame would be drawn as if it were full size.
+		frames.keySet().retainAll(motion.seats());
 	}
 
 	/** A guest leaves: their view fades out where it is while everyone else stays put; then {@link #update} without them. */

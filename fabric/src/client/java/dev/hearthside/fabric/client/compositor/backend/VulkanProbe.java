@@ -4,8 +4,14 @@ import static org.lwjgl.vulkan.KHRExternalMemoryWin32.VK_KHR_EXTERNAL_MEMORY_WIN
 import static org.lwjgl.vulkan.VK12.*;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanUtils;
+import dev.hearthside.core.config.GpuMatch;
+import dev.hearthside.core.config.PresetChooser;
 import dev.hearthside.fabric.HearthsideMod;
 import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.function.Predicate;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkApplicationInfo;
@@ -20,13 +26,16 @@ import org.lwjgl.vulkan.VkQueueFamilyProperties;
 /**
  * Whether Vulkan on this PC could share frames between games (Spec D section 3.1): the device Minecraft's Vulkan backend
  * would pick supports {@code VK_KHR_external_memory_win32}. A quick look with a Vulkan instance of its own, destroyed
- * at once; asked once per game. Any failure, a missing Vulkan runtime included, is "no".
+ * at once; asked once per game. Any failure, a missing Vulkan runtime included, is "no". On OpenGL it also tells which
+ * kind of GPU OpenGL runs on ({@link #gpuKind}), which Minecraft's OpenGL can't.
  */
 public final class VulkanProbe {
 	/** {@code VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU}. */
 	private static final int DISCRETE = 2;
 
 	private static Boolean answer;
+	/** What Vulkan said of the GPU OpenGL runs on ({@link #gpuKind}), once asked. */
+	private static PresetChooser.GpuKind kind;
 
 	private VulkanProbe() {}
 
@@ -58,7 +67,90 @@ public final class VulkanProbe {
 		return shares;
 	}
 
+	/**
+	 * The kind of GPU Minecraft's OpenGL runs on, by Vulkan's account of the devices ({@link GpuMatch}; plan ruling T5-6):
+	 * on OpenGL Minecraft itself only tells Intel GPUs apart. {@code glName} and {@code glVendor} are OpenGL's renderer
+	 * and vendor. Any thread; the first call asks Vulkan and logs which device answered, later ones repeat it. Any
+	 * failure, a missing Vulkan runtime included, is unknown.
+	 */
+	public static synchronized PresetChooser.GpuKind gpuKind(String glName, String glVendor) {
+		boolean noLoader = Boolean.getBoolean("hearthside.e2e.noVulkanLoader")
+				|| "1".equals(System.getenv(ExportDevice.NO_VULKAN_LOADER_ENV));
+		if (kind != null && !noLoader) {
+			return kind;
+		}
+		GpuMatch.Match match;
+		try {
+			if (noLoader) {
+				// E2E: what LWJGL throws on a machine without a Vulkan runtime.
+				throw new UnsatisfiedLinkError("E2E: no Vulkan runtime on this machine");
+			}
+			match = GpuMatch.choose(devices(), glName, glVendor);
+		} catch (Throwable t) {
+			match = new GpuMatch.Match(PresetChooser.GpuKind.UNKNOWN, null, "Vulkan can't be used here: " + t);
+		}
+		if (match.device() != null) {
+			HearthsideMod.LOGGER.info("Hearthside GPU kind from Vulkan: {} {} ({})", match.device(),
+					match.kind().name().toLowerCase(Locale.ROOT), match.why());
+		} else {
+			HearthsideMod.LOGGER.info("Hearthside GPU kind from Vulkan: unknown ({})", match.why());
+		}
+		if (!noLoader) {
+			kind = match.kind();
+		}
+		return match.kind();
+	}
+
+	/** Every device Vulkan lists: name, PCI vendor and kind. */
+	private static List<GpuMatch.Device> devices() {
+		List<GpuMatch.Device> devices = new ArrayList<>();
+		withInstance(instance -> {
+			try (MemoryStack stack = MemoryStack.stackPush()) {
+				IntBuffer count = stack.mallocInt(1);
+				if (vkEnumeratePhysicalDevices(instance, count, null) != VK_SUCCESS || count.get(0) == 0) {
+					return false;
+				}
+				PointerBuffer handles = stack.mallocPointer(count.get(0));
+				if (vkEnumeratePhysicalDevices(instance, count, handles) != VK_SUCCESS) {
+					return false;
+				}
+				for (int i = 0; i < count.get(0); i++) {
+					if (handles.get(i) == 0) {
+						continue;
+					}
+					VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.calloc(stack);
+					vkGetPhysicalDeviceProperties(new VkPhysicalDevice(handles.get(i), instance), props);
+					PresetChooser.GpuKind type = switch (props.deviceType()) {
+						case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> PresetChooser.GpuKind.INTEGRATED;
+						case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> PresetChooser.GpuKind.DISCRETE;
+						default -> PresetChooser.GpuKind.UNKNOWN;
+					};
+					devices.add(new GpuMatch.Device(props.deviceNameString(), props.vendorID(), type));
+				}
+				return true;
+			}
+		});
+		return devices;
+	}
+
 	private static boolean probe() {
+		return withInstance(instance -> {
+			try (MemoryStack stack = MemoryStack.stackPush()) {
+				VkPhysicalDevice device = minecraftsChoice(stack, instance);
+				if (device == null) {
+					HearthsideMod.LOGGER.info("Hearthside Vulkan probe: no device Minecraft could use");
+					return false;
+				}
+				boolean shares = ExportDevice.hasExtension(stack, device, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
+				HearthsideMod.LOGGER.info("Hearthside Vulkan probe: {} {} share frames", name(stack, device),
+						shares ? "can" : "can't");
+				return shares;
+			}
+		});
+	}
+
+	/** Runs {@code look} with a Vulkan instance of its own, destroyed straight after; false if none could be made. */
+	private static boolean withInstance(Predicate<VkInstance> look) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			VkApplicationInfo app = VkApplicationInfo.calloc(stack).sType$Default().apiVersion(VK_API_VERSION_1_2);
 			VkInstanceCreateInfo info = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(app);
@@ -70,15 +162,7 @@ public final class VulkanProbe {
 			}
 			VkInstance instance = new VkInstance(pointer.get(0), info);
 			try {
-				VkPhysicalDevice device = minecraftsChoice(stack, instance);
-				if (device == null) {
-					HearthsideMod.LOGGER.info("Hearthside Vulkan probe: no device Minecraft could use");
-					return false;
-				}
-				boolean shares = ExportDevice.hasExtension(stack, device, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
-				HearthsideMod.LOGGER.info("Hearthside Vulkan probe: {} {} share frames", name(stack, device),
-						shares ? "can" : "can't");
-				return shares;
+				return look.test(instance);
 			} finally {
 				vkDestroyInstance(instance, null);
 			}

@@ -75,6 +75,11 @@ final class WorldLink {
 		return playerNames.contains(name);
 	}
 
+	/** The world's integrated server; its state belongs to its own thread ({@code server.execute}). */
+	MinecraftServer server() {
+		return server;
+	}
+
 	/** The world's folder name (its level id). */
 	long openedAt() {
 		return openedAt;

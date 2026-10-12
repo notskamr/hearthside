@@ -63,7 +63,7 @@ public final class SdlGamepadSource implements GamepadSource, AutoCloseable {
 		return new SdlGamepadSource();
 	}
 
-	private static boolean countingStarted;
+	private static volatile boolean countingStarted;
 
 	/**
 	 * How many controllers are connected, without opening them (for the title screen). Render thread. SDL counts
@@ -76,6 +76,18 @@ public final class SdlGamepadSource implements GamepadSource, AutoCloseable {
 				return 0;
 			}
 		}
+		return listed();
+	}
+
+	/**
+	 * {@link #connectedCount}, from any thread: SDL lists gamepads safely from any thread, but its gamepad support is only
+	 * started on the render thread. 0 until it has been (the title screen counts controllers first).
+	 */
+	public static int connectedCountAnyThread() {
+		return countingStarted ? listed() : 0;
+	}
+
+	private static int listed() {
 		IntBuffer ids = SDL_GetGamepads();
 		if (ids == null) {
 			return 0;

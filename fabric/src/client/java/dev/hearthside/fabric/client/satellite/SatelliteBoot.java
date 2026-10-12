@@ -69,8 +69,9 @@ public final class SatelliteBoot {
 		HearthsideMod.LOGGER.info("Hearthside satellite ignores OS keyboard and mouse");
 		// World audio plays once, from the host; per-player UI sounds return with Plan 5.
 		minecraft.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
-		// The host's render-distance cap, for this session only: a party has to fit on a laptop.
-		SatelliteRenderDistance.apply(minecraft);
+		// The host's preset (render-distance cap, light graphics, frame-rate cap), for this session only: a party has to
+		// fit on a laptop.
+		SessionOptions.applyForGuest(minecraft);
 
 		applier = new InputApplier(minecraft);
 		FrameHook.register(applier::onFrame);
