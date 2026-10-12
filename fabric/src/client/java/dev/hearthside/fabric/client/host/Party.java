@@ -383,6 +383,11 @@ public final class Party {
 
 	/** The title screen's controller, for the controller loop to hand to player 1 when it first sees it. */
 	volatile Integer pendingHostPad;
+	/**
+	 * A controller still holding the button that answered a card before the lobby (the Vulkan offer's Not now): that
+	 * press is not a join. It isn't player 1's either, unless it also pressed Co-op.
+	 */
+	volatile Integer answeringPad;
 
 	/** Ends the party: every guest's game stops. */
 	public void disband() {

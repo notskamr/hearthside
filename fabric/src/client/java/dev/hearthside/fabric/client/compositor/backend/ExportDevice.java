@@ -202,7 +202,7 @@ public final class ExportDevice {
 		return null;
 	}
 
-	private static boolean hasExtension(MemoryStack stack, VkPhysicalDevice device, String name) {
+	static boolean hasExtension(MemoryStack stack, VkPhysicalDevice device, String name) {
 		IntBuffer count = stack.mallocInt(1);
 		vkEnumerateDeviceExtensionProperties(device, (String) null, count, null);
 		// Heap, not stack: drivers list hundreds of extensions.
