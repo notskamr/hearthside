@@ -3931,9 +3931,14 @@ public final class E2eDriver {
 
 			openPause();
 			double[] mouse = onRender(() -> new double[] {minecraft.mouseHandler.xpos(), minecraft.mouseHandler.ypos()});
+			// A small nudge, held until the pointer shows (a fixed 60 ms could fall between two slow frames under Vulkan
+			// validation and never reach the game).
 			PADS.set(HOST_PAD, new InputFrame(0, 0, 0, 0.4f, 0, 0, 0, 0));
-			Thread.sleep(60);
-			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			try {
+				waitFor("the stick takes over again: the pointer is drawn", Duration.ofSeconds(1), VirtualCursor::isDrawn);
+			} finally {
+				PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			}
 			Thread.sleep(200);
 			check(VirtualCursor.isDrawn(), "the stick takes over again: the pointer is drawn");
 			double[] pointer = {VirtualCursor.x(), VirtualCursor.y()};
