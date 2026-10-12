@@ -562,6 +562,8 @@ public final class E2eDriver {
 		System.setProperty("hearthside.e2e.preset", "balanced");
 		try {
 			writeOption(options, "renderDistance", "12");
+			// Custom graphics, so a fresh folder's named preset (fancy: render distance 16) doesn't load over the 12 (as in E1).
+			writeOption(options, "graphicsPreset", "\"custom\"");
 			guestRejoins();
 			check(satelliteLog().contains("hearthside capped the render distance at 8 for this session (own setting 12)"),
 					"the guest's own 12 is capped at 8 this session");
