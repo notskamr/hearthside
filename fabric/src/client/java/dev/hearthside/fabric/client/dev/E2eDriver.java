@@ -4312,8 +4312,30 @@ public final class E2eDriver {
 		claimHostPad();
 		waitFor("taking the controller clears the keyboard tutorial toast", Duration.ofSeconds(3),
 				() -> !onRender(this::hasTutorialToast));
-		long mark = hostLogLength();
 		try {
+			// The controller drops (the pause menu opens), a tutorial toast reaches the keyboard, and the same controller
+			// comes back: it clears that toast as a claim does (T7b review).
+			PADS.unplug(HOST_PAD);
+			waitFor("player 1's controller gone", Duration.ofSeconds(5), () -> onRender(() -> !Party.current().hostHasController()));
+			onRender(() -> {
+				minecraft.gui.toastManager().addToast(new TutorialToast(minecraft.font, TutorialToast.Icons.MOUSE,
+						Component.literal("E2E tutorial while the controller is gone"), null, false));
+				return null;
+			});
+			waitFor("the keyboard tutorial toast showing without the controller", Duration.ofSeconds(3),
+					() -> onRender(this::hasTutorialToast));
+			PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+			waitFor("player 1's controller back", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+			waitFor("the reconnected controller clears the keyboard tutorial toast", Duration.ofSeconds(3),
+					() -> !onRender(this::hasTutorialToast));
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			waitFor("back in play", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+			Thread.sleep(300);
+
+			long mark = hostLogLength();
 			press(HOST_PAD, PadButton.Y);
 			waitFor("the survival inventory", Duration.ofSeconds(5),
 					() -> onRender(() -> minecraft.gui.screen() instanceof InventoryScreen));

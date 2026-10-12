@@ -427,6 +427,9 @@ final class HostInput implements Runnable {
 					ButtonGuideRenderer.enable(hostApplier::scheme);
 				}
 				chat(Component.literal("Player " + (restored.player() + 1) + "'s controller reconnected."));
+				if (restored.player() == 0) {
+					hostGainedController();
+				}
 			}
 		}
 	}
@@ -541,10 +544,21 @@ final class HostInput implements Runnable {
 		ButtonGuideRenderer.setStyle(router.styleOf(0).orElse(PadStyle.GENERIC));
 		ButtonGuideRenderer.enable(hostApplier::scheme);
 		VirtualCursor.setDrawn(true);
-		// Keyboard tutorial toasts already up would stay stuck: their steps may count only the mouse.
-		TutorialToasts.clear(minecraft);
 		chat(Component.literal("Controller assigned to you."));
 		session.onHostClaimed(guids.get(instanceId));
+		hostGainedController();
+	}
+
+	/**
+	 * Player 1 gains a controller, claimed or reconnected. Keyboard tutorial toasts already up would stay stuck: their
+	 * steps may count only the mouse. Runs last, and a failure here leaves the controller theirs.
+	 */
+	private void hostGainedController() {
+		try {
+			TutorialToasts.clear(minecraft);
+		} catch (RuntimeException e) {
+			HearthsideMod.LOGGER.error("Hearthside could not clear the keyboard tutorial toasts", e);
+		}
 	}
 
 	private void restoreHostOptions() {
