@@ -79,7 +79,8 @@ public final class VulkanOfferScreen extends Screen {
 		VulkanOfferRule.Decision decision;
 		try {
 			decision = decide(minecraft);
-		} catch (RuntimeException e) {
+		} catch (RuntimeException | LinkageError e) {
+			// A LinkageError: this game's sharing facts or the Vulkan probe couldn't load their native bindings.
 			HearthsideMod.LOGGER.warn("Hearthside couldn't tell whether to offer Vulkan", e);
 			return false;
 		}

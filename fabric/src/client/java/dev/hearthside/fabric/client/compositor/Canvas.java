@@ -28,7 +28,8 @@ final class Canvas implements AutoCloseable {
 
 	/**
 	 * (Re)creates the texture at {@code width}×{@code height} if it isn't that size already. Returns false, and keeps
-	 * whatever it had, when either side is below 1 (a minimised window): no zero-sized texture is ever created.
+	 * whatever it had, when either side is below 1 (a minimised window): no zero-sized texture is ever created. A new
+	 * texture that can't be cleared throws, and the canvas then holds nothing.
 	 */
 	boolean ensure(int width, int height) {
 		if (width < 1 || height < 1) {
@@ -40,8 +41,14 @@ final class Canvas implements AutoCloseable {
 		close();
 		GpuDevice device = RenderSystem.getDevice();
 		texture = device.createTexture(label, USAGE, GpuFormat.RGBA8_UNORM, width, height, 1, 1);
-		startBlack(texture);
 		view = device.createTextureView(texture);
+		try {
+			startBlack(texture);
+		} catch (RuntimeException e) {
+			// Never a texture without its view: nothing is kept, and the next ensure tries again.
+			close();
+			throw e;
+		}
 		return true;
 	}
 

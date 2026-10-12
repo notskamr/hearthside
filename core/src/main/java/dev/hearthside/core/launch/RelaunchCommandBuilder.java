@@ -39,6 +39,9 @@ public final class RelaunchCommandBuilder {
 				}
 				continue;
 			}
+			if (arg.startsWith(GRAPHICS_BACKEND + "=")) {
+				continue; // the same, in the form jopt also accepts
+			}
 			cmd.add(arg);
 		}
 		return new LaunchCommand(cmd, Map.of(), Set.of(), workingDirectory);

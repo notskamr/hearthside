@@ -13,6 +13,8 @@ public final class GuiScaleRule {
 	/** Minecraft's smallest GUI: a scale only grows while the view stays at least this many pixels per scale. */
 	private static final int MIN_GUI_WIDTH = 320;
 	private static final int MIN_GUI_HEIGHT = 240;
+	/** The smallest party GUI scale at which a reduced render resolution applies (r = 3/4 there). */
+	private static final int MIN_REDUCED_PARTY_SCALE = 4;
 
 	private GuiScaleRule() {}
 
@@ -62,12 +64,13 @@ public final class GuiScaleRule {
 	}
 
 	/**
-	 * What {@code view} renders at under the party's scale. At a reduced resolution and a party scale {@code g} of 3 or
+	 * What {@code view} renders at under the party's scale. At a reduced resolution and a party scale {@code g} of 4 or
 	 * more, the frame is {@code (g-1)/g} of the view with a GUI scale of {@code g-1}, which looks exactly {@code g} once
-	 * stretched; at 2 or less a smaller GUI scale can't look the same, so the view keeps its full size.
+	 * stretched. At 3 or less the view keeps its full size: at 2 a smaller GUI scale can't look the same, and at 3 the
+	 * 1.5× stretch of a 2/3 frame leaves hint text visibly soft (Task 8's visual QA).
 	 */
 	public static ViewScale forView(Rect view, int partyScale, boolean reducedResolution) {
-		if (reducedResolution && partyScale >= 3) {
+		if (reducedResolution && partyScale >= MIN_REDUCED_PARTY_SCALE) {
 			double r = (partyScale - 1) / (double) partyScale;
 			return new ViewScale(partyScale - 1, r, Math.max(1, (int) Math.round(view.width() * r)),
 					Math.max(1, (int) Math.round(view.height() * r)));

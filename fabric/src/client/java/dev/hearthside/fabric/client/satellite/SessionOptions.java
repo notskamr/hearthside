@@ -1,5 +1,6 @@
 package dev.hearthside.fabric.client.satellite;
 
+import dev.hearthside.core.config.FrameRatePacing;
 import dev.hearthside.core.config.SessionOverrides;
 import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.fabric.HearthsideMod;
@@ -107,10 +108,13 @@ public final class SessionOptions {
 
 	/**
 	 * A guest's game paces itself to the host's display ({@code refreshHz}), or to the session's lower frame-rate cap. For
-	 * the session only, like the rest. Each new viewport sets it again.
+	 * the session only, like the rest. Each new viewport sets it again; once the player has chosen their own Max
+	 * Framerate this session, it paces to that instead (never above the display's rate).
 	 */
 	public static void limitFramerate(Options options, int refreshHz) {
-		int limit = Math.clamp(fpsCap > 0 ? Math.min(refreshHz, fpsCap) : refreshHz, MIN_FPS, MAX_FPS_SETTING);
+		releaseIfChanged(MAX_FPS, options.framerateLimit().get());
+		int chosen = overrides.playersChoice(MAX_FPS) instanceof Integer fps ? fps : FrameRatePacing.NO_CHOICE;
+		int limit = Math.clamp(FrameRatePacing.limit(refreshHz, fpsCap, chosen), MIN_FPS, MAX_FPS_SETTING);
 		int before = framerateInEffect();
 		keepingPreset(options, () -> session(options.framerateLimit(), MAX_FPS, limit));
 		if (framerateInEffect() != before) {

@@ -66,6 +66,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
@@ -941,6 +943,8 @@ public final class E2eDriver {
 		onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
 		waitForProbe(2, hostLogLength(), Duration.ofSeconds(20), before);
 		check(!hostLogSince(mark).contains("exception"), "no exception in the host log");
+		// A generation the guest had already moved on from is gone, not an import error (Spec D final review F4).
+		check(!hostLogSince(mark).contains("could not import player"), "no superseded generation logged as an import error");
 		check(!satelliteLog().substring(satMark).contains("exception"), "no exception in the guest's log");
 	}
 
@@ -1079,6 +1083,7 @@ public final class E2eDriver {
 	 */
 	private void forcedPerformancePreset() throws Exception {
 		Path options = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/options.txt");
+		long stepMark = hostLogLength();
 		guestLeaves();
 		String before = Files.exists(options) ? Files.readString(options) : null;
 		// The guest's own settings, each unlike what Performance sets for the session.
@@ -1087,14 +1092,17 @@ public final class E2eDriver {
 		writeOption(options, "cutoutLeaves", "true");
 		writeOption(options, "biomeBlendRadius", "2");
 		writeOption(options, "entityDistanceScaling", "1.0");
+		// Custom graphics, as these are: a named preset (a fresh game folder's "fancy") would set its own values over
+		// them as the guest loads its options.
+		writeOption(options, "graphicsPreset", "\"custom\"");
 		Map<String, String> own = optionValues(options);
 		String presetBefore = System.getProperty("hearthside.e2e.preset");
 		System.setProperty("hearthside.e2e.preset", "performance");
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
 		long handle = onRender(() -> minecraft.getWindow().handle());
 		try {
-			// Views big enough for a GUI scale of 3, where Performance renders the guest at 2/3 (plan R3); a smaller
-			// screen clamps the window, and the frame check below then expects full resolution.
+			// Views big enough for a GUI scale of 3, where Performance still renders the guest at full resolution (reduced
+			// only from 4, after Task 8's visual QA); the frame check below expects what GuiScaleRule says either way.
 			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2560, 1440));
 			Thread.sleep(2000);
 			long mark = hostLogLength();
@@ -1151,6 +1159,9 @@ public final class E2eDriver {
 			}
 			guestRejoins();
 		}
+		// The last guest left as the window went back to its size (just above): compose never failed over it.
+		check(!hostLogSince(stepMark).contains("hearthside could not compose the canvas"),
+				"the canvas was composed throughout, the window resizing as the last guest left");
 	}
 
 	/** Every {@code key:value} line of an options.txt. */
@@ -1282,6 +1293,7 @@ public final class E2eDriver {
 			log("   V3: every frame is copied in this run (forced), so the copy's reason is FORCED, not a mismatch");
 			return;
 		}
+		long stepMark = hostLogLength();
 		System.setProperty("hearthside.e2e.fakeDeviceMismatch", "true");
 		try {
 			onRender(() -> {
@@ -1303,6 +1315,9 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.e2e.fakeDeviceMismatch");
 		}
+		// The guest left as C12's window went back to its size: compose never failed over it.
+		check(!hostLogSince(stepMark).contains("hearthside could not compose the canvas"),
+				"the canvas was composed throughout, the last guest leaving as the window resized");
 	}
 
 	/** V9: a guest whose machine has no Vulkan runtime copies its frames instead of crashing (final review M6). */
@@ -2139,13 +2154,15 @@ public final class E2eDriver {
 
 	/**
 	 * K1 (Spec D section 3.1), with the facts faked: OpenGL that can't share frames, Vulkan that can. Not with Iris; Not
-	 * now is remembered; Switch saves Vulkan and relaunches (the command is logged, not run); a relaunch that dies asks the
-	 * player to start Minecraft again; a probe without a Vulkan loader offers nothing and breaks nothing.
+	 * now is remembered; player 1's remembered controller answering it clicks nothing in the lobby with the A it still
+	 * holds; Switch saves Vulkan and relaunches (the command is logged, not run); a relaunch that dies asks the player to
+	 * start Minecraft again; a probe without a Vulkan loader offers nothing and breaks nothing.
 	 */
 	private void vulkanOffer() throws Exception {
 		Path gameDir = minecraft.gameDirectory.toPath();
 		SplitScreenConfig before = SplitScreenConfigFile.load(gameDir);
 		PreferredGraphicsApi backendBefore = onRender(() -> minecraft.options.preferredGraphicsBackend().get());
+		String rememberedBefore = profiles().loadFile().host().preferredControllerGuid();
 		List<String> hooks = List.of("hearthside.e2e.fakeGlCantImport", "hearthside.e2e.fakeVulkanShares",
 				"hearthside.e2e.fakeIris", "hearthside.e2e.dryRelaunch", "hearthside.e2e.noVulkanLoader");
 		PADS.plug(OFFER_PAD, OFFER_GUID, PadStyle.XBOX);
@@ -2181,6 +2198,33 @@ public final class E2eDriver {
 			check(SplitScreenConfigFile.load(gameDir).vulkanOffer() == VulkanOffer.DECLINED, "Not now is remembered");
 			leaveLobby();
 			check(pressCoop() instanceof LobbyScreen, "once answered, Co-op opens the lobby directly");
+			leaveLobby();
+
+			// (g) Co-op pressed with the mouse; player 1's remembered controller answers Not now with A. The lobby hands it
+			// to player 1 while that A is still held: it clicks nothing there (final review F3).
+			ProfileFile profilesNow = profiles().loadFile();
+			profiles().saveFile(new ProfileFile(profilesNow.profiles(), profilesNow.host().withController(OFFER_GUID)));
+			SplitScreenConfigFile.save(gameDir, before.withVulkanOffer(VulkanOffer.PENDING));
+			countLobbyClicks();
+			check(onOfferCard(pressCoop()), "the card, Co-op pressed with the mouse");
+			focusWithPad(OFFER_PAD, "Not now");
+			lobbyClicks.set(0);
+			PADS.set(OFFER_PAD, new InputFrame(0, InputFrame.buttons(PadButton.A), 0, 0, 0, 0, 0, 0));
+			try {
+				waitFor("player 1 has their remembered controller in the lobby", Duration.ofSeconds(5), () -> onRender(
+						() -> minecraft.gui.screen() instanceof LobbyScreen && Party.current() != null && Party.current().hostHasController()));
+				Thread.sleep(300);
+			} finally {
+				PADS.set(OFFER_PAD, InputFrame.NEUTRAL);
+			}
+			Thread.sleep(200);
+			check(lobbyClicks.get() == 0, "the A still held from Not now clicks nothing in the lobby (" + lobbyClicks.get() + " clicks)");
+			onRender(() -> {
+				if (Party.current() != null) {
+					Party.current().releaseController();
+				}
+				return null;
+			});
 			leaveLobby();
 
 			// (c) Switch and restart: Vulkan is saved and the relaunch command logged (a dry run starts nothing).
@@ -2246,7 +2290,12 @@ public final class E2eDriver {
 			hooks.forEach(System::clearProperty);
 			SplitScreenConfigFile.save(gameDir, before);
 			restoreBackend(backendBefore);
+			PADS.set(OFFER_PAD, InputFrame.NEUTRAL);
 			PADS.unplug(OFFER_PAD);
+			ProfileFile profilesAfter = profiles().loadFile();
+			if (!java.util.Objects.equals(profilesAfter.host().preferredControllerGuid(), rememberedBefore)) {
+				profiles().saveFile(new ProfileFile(profilesAfter.profiles(), profilesAfter.host().withController(rememberedBefore)));
+			}
 			onRender(() -> {
 				if (!(minecraft.gui.screen() instanceof TitleScreen)) {
 					minecraft.gui.setScreen(new TitleScreen());
@@ -2254,6 +2303,25 @@ public final class E2eDriver {
 				return null;
 			});
 		}
+	}
+
+	/** Mouse clicks (real or a controller's pointer) that reached a lobby screen, once {@link #countLobbyClicks} has run. */
+	private static final java.util.concurrent.atomic.AtomicInteger lobbyClicks = new java.util.concurrent.atomic.AtomicInteger();
+	private static boolean countingLobbyClicks;
+
+	/** From now on, every lobby screen counts the clicks it gets in {@link #lobbyClicks}. */
+	private void countLobbyClicks() throws Exception {
+		onRender(() -> {
+			if (!countingLobbyClicks) {
+				countingLobbyClicks = true;
+				ScreenEvents.AFTER_INIT.register((mc, screen, width, height) -> {
+					if (screen instanceof LobbyScreen) {
+						ScreenMouseEvents.beforeMouseClick(screen).register((s, event) -> lobbyClicks.incrementAndGet());
+					}
+				});
+			}
+			return null;
+		});
 	}
 
 	/** Presses the title screen's Co-op button and returns the screen it opened. */
