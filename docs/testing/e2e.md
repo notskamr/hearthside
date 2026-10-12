@@ -322,7 +322,7 @@ Composite cost, host CPU, p95, one guest: OpenGL 0.044 ms shared, 0.294 ms copie
 | Q1b | Under Balanced, a guest's own 12 survives a save while the server hears 8 | PASS |
 
 Screenshots: `docs/screenshots/laptops/` — the Vulkan offer and its restart card, hints beside toasts, bundle hints, two
-players at Performance on a 2560×1440 window, three players at Performance.
+players at Performance on a 2560×1440 window (full size at a party scale of 3), three players at Performance.
 
 Found while building this:
 - The desktop never reproduced the laptop's artifacts: the copy path's slot hand-over holds even slowed on both sides,
