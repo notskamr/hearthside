@@ -329,8 +329,10 @@ public final class WorldsScreen extends Screen implements PadScreen {
 
 		@Override
 		protected void extractContents(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
-			boolean lit = isHoveredOrFocused();
-			HearthDraw.frame(g, getX() - 2, getY() - 2, getWidth() + 4, getHeight() + 4, lit ? 0xFF9A4A : 0x6A4020);
+			// One selected card: the focused one; a card merely under the pointer gets a warmer frame, not the glow.
+			boolean lit = HearthDraw.selected(this);
+			HearthDraw.frame(g, getX() - 2, getY() - 2, getWidth() + 4, getHeight() + 4,
+					lit ? 0xFF9A4A : isHovered() ? 0xA86434 : 0x6A4020);
 			HearthDraw.parchment(g, getX(), getY(), getWidth(), getHeight());
 			if (summary == null) {
 				HearthDraw.inkCentred(g, font, Component.literal("+ Create a new world"), getX() + getWidth() / 2,
@@ -341,9 +343,10 @@ public final class WorldsScreen extends Screen implements PadScreen {
 			g.text(font, getMessage(), x, getY() + 5, HearthDraw.INK, false);
 			String mode = summary.isHardcore() ? "Hardcore" : summary.getGameMode().getShortDisplayName().getString();
 			String detail = mode + " · " + DATE.format(Instant.ofEpochMilli(summary.getLastPlayed()));
-			g.text(font, detail, getX() + getWidth() - 8 - font.width(detail), getY() + 5, 0xFF7A6A58, false);
+			g.text(font, detail, getX() + getWidth() - 8 - font.width(detail), getY() + 5, HearthDraw.MUTED, false);
 			if (!playedWith.isEmpty()) {
-				playedWithDrawn = 0xFFA8321E;
+				// Secondary, in the warm faded ink (red read as an error).
+				playedWithDrawn = HearthDraw.MUTED;
 				g.text(font, playedWith, x, getY() + 19, playedWithDrawn, false);
 			}
 		}

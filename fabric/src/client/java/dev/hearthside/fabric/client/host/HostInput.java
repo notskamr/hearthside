@@ -232,8 +232,10 @@ final class HostInput implements Runnable {
 				continue;
 			}
 			if ((pressed & start) != 0) {
-				// Menu on anyone's controller, player 1's included, goes on to choose a world.
+				// Menu on anyone's controller, player 1's included, goes on to choose a world, driven by them: its hint
+				// chips show their buttons from the start.
 				HearthSounds.play(HearthSounds.Ui.KNOCK);
+				lastDriver = player;
 				lobby.continueToWorlds();
 				continue;
 			}

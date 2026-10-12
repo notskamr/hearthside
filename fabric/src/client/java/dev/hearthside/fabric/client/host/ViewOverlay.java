@@ -68,7 +68,7 @@ final class ViewOverlay implements OverlayLayer {
 				int y = c.y() + 18;
 				new KeyboardWidget(card.keyboard(), setup.color()).render(g, font, c.x() + 3, y, c.width() - 6, style);
 				if (card.nameProblem() != null) {
-					ink(g, font, card.nameProblem(), centre, y + KeyboardWidget.height() + 3, c.width() - 6, ERROR_INK);
+					ink(g, font, card.nameProblem(), centre, y + KeyboardWidget.height(card.keyboard(), c.width() - 6) + 3, c.width() - 6, ERROR_INK);
 				}
 			}
 			case SKIN -> {

@@ -77,11 +77,15 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 
 		@Override
 		protected void extractContents(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
-			drawnSelected = isHoveredOrFocused();
+			// One selected row: the focused one (the pad's); a row merely under the pointer only glows.
+			drawnSelected = HearthDraw.selected(this);
 			drawnHovered = isHovered();
 			drawnGlyph = null;
-			var sprite = isHoveredOrFocused() ? HearthSprites.BUTTON_HIGHLIGHTED : HearthSprites.BUTTON;
+			var sprite = drawnSelected ? HearthSprites.BUTTON_HIGHLIGHTED : HearthSprites.BUTTON;
 			g.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, getX(), getY(), getWidth(), getHeight());
+			if (drawnHovered && !drawnSelected) {
+				HearthDraw.hoverGlow(g, getX(), getY(), getWidth(), getHeight());
+			}
 			int textY = getY() + (getHeight() - 8) / 2;
 			HearthDraw.label(g, font, getMessage(), getX() + 6, textY, HearthDraw.CREAM);
 			int right = getX() + getWidth() - 5;

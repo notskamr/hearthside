@@ -2,8 +2,11 @@ package dev.hearthside.fabric.client.ui;
 
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.PadStyle;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 
@@ -124,6 +127,61 @@ public final class HearthDraw {
 	public static int glyph(GuiGraphicsExtractor g, Control control, PadStyle style, int x, int y, int argb) {
 		int width = glyphWidth(control);
 		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.glyph(control, style), x, y, width, GLYPH_HEIGHT, argb);
+		switch (control) {
+			case DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT -> dpadArms(g, control, x, y, argb);
+			default -> { }
+		}
 		return width;
+	}
+
+	/** The D-pad's arms: the pressed one in the ember accent, the others dim. */
+	private static final int DPAD_LIT = 0xFFFFB35A, DPAD_DIM = 0xFF6A666E;
+
+	/**
+	 * The four D-pad glyphs differ only in which arm is pressed, which at their real size (and with the sprites' bevel
+	 * highlights on the other arms) was too little to tell apart. So the arms are repainted over the sprite, inside its
+	 * one-pixel rim: every arm dim, then the pressed one, tip to centre, in the accent. Same for every family.
+	 */
+	private static void dpadArms(GuiGraphicsExtractor g, Control control, int x, int y, int argb) {
+		int dim = tint(DPAD_DIM, argb), lit = tint(DPAD_LIT, argb);
+		g.fill(x + 4, y + 1, x + 7, y + 10, dim);
+		g.fill(x + 1, y + 4, x + 10, y + 7, dim);
+		switch (control) {
+			case DPAD_UP -> g.fill(x + 4, y + 1, x + 7, y + 5, lit);
+			case DPAD_DOWN -> g.fill(x + 4, y + 6, x + 7, y + 10, lit);
+			case DPAD_LEFT -> g.fill(x + 1, y + 4, x + 5, y + 7, lit);
+			default -> g.fill(x + 6, y + 4, x + 10, y + 7, lit);
+		}
+		dpadArmsDrawn++;
+	}
+
+	/** A colour multiplied by a tint (as a sprite blit tints it). */
+	private static int tint(int argb, int by) {
+		int a = (argb >>> 24) * (by >>> 24) / 255;
+		int r = (argb >> 16 & 0xFF) * (by >> 16 & 0xFF) / 255;
+		int gr = (argb >> 8 & 0xFF) * (by >> 8 & 0xFF) / 255;
+		int b = (argb & 0xFF) * (by & 0xFF) / 255;
+		return a << 24 | r << 16 | gr << 8 | b;
+	}
+
+	/**
+	 * Whether a widget draws as the selection: focused, or under the pointer while nothing has focus. Hearthside's
+	 * screens show one selection, so a controller's focus wins over where the mouse happens to rest; the row under the
+	 * pointer gets only {@link #hoverGlow}.
+	 */
+	public static boolean selected(AbstractWidget widget) {
+		if (widget.isFocused()) {
+			return true;
+		}
+		if (!widget.isHovered()) {
+			return false;
+		}
+		Screen screen = Minecraft.getInstance().gui.screen();
+		return screen == null || screen.getFocused() == null;
+	}
+
+	/** The fainter glow of a widget under the pointer that isn't the selection. */
+	public static void hoverGlow(GuiGraphicsExtractor g, int x, int y, int width, int height) {
+		g.fill(x + 1, y + 1, x + width - 1, y + height - 1, 0x40FFB35A);
 	}
 }
