@@ -36,6 +36,18 @@ loom {
 	}
 
 	runs {
+		// The dev client for playing by hand: -Pbackend=opengl|vulkan picks the graphics backend (guests follow it).
+		client {
+			def backend = project.findProperty('backend')
+			if (backend) {
+				programArgs '--graphicsBackend', e2eBackendName(backend, 'backend')
+				if (backend == 'vulkan') {
+					// Iris 1.11.7 is OpenGL-only and aborts the JVM on Vulkan; guests inherit this.
+					vmArg '-Dfabric.debug.disableModIds=iris'
+				}
+			}
+		}
+
 		// A second client that boots in satellite role, in its own run directory.
 		// Drives the walking-skeleton end-to-end check (see E2eDriver).
 		e2eClient {
