@@ -3,6 +3,7 @@ package dev.hearthside.fabric.client.satellite;
 import dev.hearthside.core.config.SessionOverrides;
 import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.mixin.FramerateLimitTrackerAccessor;
 import dev.hearthside.fabric.client.mixin.OptionInstanceAccessor;
 import java.util.List;
 import java.util.Objects;
@@ -66,7 +67,9 @@ public final class SessionOptions {
 			HearthsideMod.LOGGER.info("Hearthside capped the render distance at {} for this session (own setting {})",
 					options.renderDistance().get(), mine);
 		}
-		HearthsideMod.LOGGER.info("Hearthside session options light={} fpsCap={}", light, fpsCap);
+		// The frame-rate limit in effect, read back (0: no cap, the host's refresh rate).
+		HearthsideMod.LOGGER.info("Hearthside session options light={} fpsCap={}", light,
+				fpsCap > 0 ? framerateInEffect() : 0);
 		HearthsideMod.LOGGER.info("Hearthside guest heap max={} MB render distance={}",
 				Runtime.getRuntime().maxMemory() / (1024 * 1024), options.renderDistance().get());
 	}
@@ -75,7 +78,8 @@ public final class SessionOptions {
 	public static void applyForPlayer1(Options options, SessionTuning tuning) {
 		apply(options, tuning.renderDistanceCap(), tuning.lightGraphics(), tuning.fpsCap());
 		HearthsideMod.LOGGER.info("Hearthside player 1 takes the preset: render distance {} light={} fpsCap={}",
-				options.renderDistance().get(), tuning.lightGraphics(), tuning.fpsCap());
+				options.renderDistance().get(), tuning.lightGraphics(),
+				tuning.fpsCap() > 0 ? framerateInEffect() : 0);
 	}
 
 	private static void apply(Options options, int renderDistanceCap, boolean light, int frameRateCap) {
@@ -106,8 +110,12 @@ public final class SessionOptions {
 	 * the session only, like the rest. Each new viewport sets it again.
 	 */
 	public static void limitFramerate(Options options, int refreshHz) {
-		int limit = fpsCap > 0 ? Math.min(refreshHz, fpsCap) : refreshHz;
-		keepingPreset(options, () -> session(options.framerateLimit(), MAX_FPS, Math.clamp(limit, MIN_FPS, MAX_FPS_SETTING)));
+		int limit = Math.clamp(fpsCap > 0 ? Math.min(refreshHz, fpsCap) : refreshHz, MIN_FPS, MAX_FPS_SETTING);
+		int before = framerateInEffect();
+		keepingPreset(options, () -> session(options.framerateLimit(), MAX_FPS, limit));
+		if (framerateInEffect() != before) {
+			HearthsideMod.LOGGER.info("Hearthside frame-rate limit {}", framerateInEffect());
+		}
 	}
 
 	/**
@@ -127,12 +135,7 @@ public final class SessionOptions {
 			Object current = option.get();
 			Object own = ending.valueToSave(key, current);
 			if (!Objects.equals(own, current)) {
-				if (key.equals(GRAPHICS_PRESET)) {
-					// Straight into the field: set() would apply the whole preset over the player's own options.
-					((OptionInstanceAccessor) (Object) option).hearthside$setValue(own);
-				} else {
-					set(option, own);
-				}
+				put(option, key, own);
 			}
 		}
 		HearthsideMod.LOGGER.info("Hearthside player 1's own options are back");
@@ -182,8 +185,27 @@ public final class SessionOptions {
 		if (Objects.equals(current, value) && overrides.valueAfterSave(key) == null) {
 			return; // already the player's own value
 		}
-		option.set(value);
+		put(option, key, value);
 		overrides.apply(key, current, option.get());
+	}
+
+	/**
+	 * Sets an option as the player would, with two exceptions that go straight into the option's field. The graphics
+	 * preset: set() would apply the whole preset over the player's own options. The frame rate: its slider (vanilla's,
+	 * and Sodium's, which puts a value off its steps back to its default of 60) holds only tens, so set(45) would give 40
+	 * and a 144 Hz display 140. The option holds the rate rounded down to tens, and Minecraft's frame-rate limiter, all
+	 * the slider's own listener ever sets, the exact rate.
+	 */
+	private static void put(OptionInstance<?> option, String key, Object value) {
+		if (key.equals(MAX_FPS)) {
+			int rate = (Integer) value;
+			((OptionInstanceAccessor) (Object) option).hearthside$setValue(Math.max(MIN_FPS, rate / 10 * 10));
+			Minecraft.getInstance().getFramerateLimitTracker().setFramerateLimit(rate);
+		} else if (key.equals(GRAPHICS_PRESET)) {
+			((OptionInstanceAccessor) (Object) option).hearthside$setValue(value);
+		} else {
+			set(option, value);
+		}
 	}
 
 	/** Runs {@code change}; if it moved the graphics preset (to Custom), the player's own preset is what's saved. */
@@ -203,6 +225,11 @@ public final class SessionOptions {
 		if (session != null && !session.equals(current)) {
 			overrides.valueToSave(key, current);
 		}
+	}
+
+	/** The frame-rate limit Minecraft paces to (before throttling for a menu or an idle player), read back. */
+	private static int framerateInEffect() {
+		return ((FramerateLimitTrackerAccessor) Minecraft.getInstance().getFramerateLimitTracker()).hearthside$framerateLimit();
 	}
 
 	@SuppressWarnings("unchecked")

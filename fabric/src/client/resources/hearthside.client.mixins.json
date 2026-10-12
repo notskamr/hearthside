@@ -12,6 +12,7 @@
 		"DefaultPlayerSkinInvoker",
 		"E2eUnfocusedMixin",
 		"FrameHookMixin",
+		"FramerateLimitTrackerAccessor",
 		"GuestFullscreenOptionMixin",
 		"GuestFullscreenToggleMixin",
 		"GuestFullscreenWindowMixin",
