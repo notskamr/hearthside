@@ -112,7 +112,7 @@ public final class E2eDriver {
 			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"},
 			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
 			// The in-world session: the world opens with the host alone.
-			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
+			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
@@ -226,6 +226,7 @@ public final class E2eDriver {
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
 			step("C1 guest window is hidden", this::guestWindowHidden);
 			step("C2 guest frames reach the host's window", this::guestFramesComposited);
+			step("Q1 each guest's heap is the configured size and its memory is logged", this::guestMemoryConfigured);
 			step("V1 frames are shared zero-copy on this backend", this::zeroCopyOnThisBackend);
 			step("V6 the guest's window is hidden on its backend", this::guestWindowHiddenOnItsBackend);
 			step("O1 the overlay pass draws over every view", this::overlayDrawsOverViews);
@@ -442,6 +443,31 @@ public final class E2eDriver {
 		log("   " + last);
 		check(last != null && last.contains(expected) && last.endsWith("backend=" + backend.group(1)),
 				"player 2's frames are shared, not copied, on a " + backend.group(1) + " host");
+	}
+
+	/** Q1: the guest's heap is the configured 1536 MB, its render distance is capped at 8, and memory is logged (Task 8b). */
+	private void guestMemoryConfigured() throws Exception {
+		waitFor("the guest reported its heap", Duration.ofSeconds(30), () -> satelliteLog().contains("hearthside guest heap max="));
+		Matcher m = Pattern.compile("hearthside guest heap max=([0-9]+) mb render distance=([0-9]+)").matcher(satelliteLog());
+		check(m.find(), "the guest logged its heap and render distance");
+		long maxMb = Long.parseLong(m.group(1));
+		int renderDistance = Integer.parseInt(m.group(2));
+		check(maxMb <= 1536 * 105 / 100, "the guest's max heap " + maxMb + " MB is the configured 1536 MB");
+		check(renderDistance <= 8, "the guest's render distance " + renderDistance + " is capped at 8");
+		log("   memory host=" + workingSetMb(ProcessHandle.current().pid()) + " MB guest="
+				+ workingSetMb(satellites().getFirst().pid()) + " MB");
+	}
+
+	/** A process's resident memory in MB: PowerShell's working set on Windows, ps's RSS on macOS. */
+	private static long workingSetMb(long pid) throws Exception {
+		boolean windows = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
+		Process p = new ProcessBuilder(windows
+				? List.of("powershell", "-NoProfile", "-Command", "(Get-Process -Id " + pid + ").WorkingSet64")
+				: List.of("ps", "-o", "rss=", "-p", Long.toString(pid))).redirectErrorStream(true).start();
+		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+		p.waitFor();
+		long value = Long.parseLong(out.lines().reduce((a, b) -> b).orElse("0").trim());
+		return windows ? value / (1024 * 1024) : value / 1024;
 	}
 
 	/** V6: the guest's window is created hidden whichever backend its game started on (Spec C 3.4). */
