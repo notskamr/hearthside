@@ -7,12 +7,15 @@ import java.util.OptionalInt;
  * {@link SlotTable}. The producer writes only FREE slots (or reclaims the oldest READY one); the consumer takes the
  * newest READY slot and never has it overwritten while it holds it. Neither side ever waits for the other.
  *
- * <p>The consumer may hold up to two slots: the one it is drawing this frame and the previous one, released once the
- * GPU has finished with it. {@link #DEFAULT_SLOTS} leaves the producer a slot even then.
+ * <p>Each game keeps two frames in flight on its GPU, so each side may hold slots for three frames. The producer holds
+ * the slot it is drawing plus up to two whose fences haven't signalled (claimed, not yet published); the consumer holds
+ * this frame's copy plus up to two earlier copies whose fences haven't signalled (acquired, not yet released). When the
+ * producer claims its next slot it therefore holds at most two and the consumer at most three, and
+ * {@link #DEFAULT_SLOTS} still leaves it one.
  */
 public final class FrameSlots {
-	/** One being written, up to two held by the consumer, one spare. */
-	public static final int DEFAULT_SLOTS = 4;
+	/** Up to two in flight on the producer's side, up to three on the consumer's, and one to draw into. */
+	public static final int DEFAULT_SLOTS = 6;
 
 	private final SlotTable table;
 

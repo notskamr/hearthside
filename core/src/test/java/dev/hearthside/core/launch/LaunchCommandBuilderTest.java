@@ -30,16 +30,8 @@ class LaunchCommandBuilderTest {
 	}
 
 	@Test
-	void heapIsSixtyPercentOfHost() {
-		var cmd = LaunchCommandBuilder.build(host, sat).command();
-		assertThat(cmd).contains("-Xmx4915m").doesNotContain("-Xmx8G", "-Xms2G");
-	}
-
-	@Test
-	void heapHasFloor() {
-		var small = new HostJvm(host.javaExecutable(), host.jvmArgs(), host.classpath(), host.mainClass(),
-				host.gameArgs(), 1L << 30, host.gameDir());
-		assertThat(LaunchCommandBuilder.build(small, sat).command()).contains("-Xmx1024m");
+	void hostHeapFlagsAreDropped() {
+		assertThat(LaunchCommandBuilder.build(host, sat).command()).doesNotContain("-Xmx8G", "-Xms2G");
 	}
 
 	@Test

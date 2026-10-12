@@ -55,6 +55,23 @@ public final class VirtualSizing {
 		HearthsideMod.LOGGER.info("Hearthside virtual size cleared");
 	}
 
+	/**
+	 * Before Minecraft switches fullscreen on or off: puts the real window size in the screen-size fields, which it
+	 * records as the size to go back to. The virtual size comes back when the switch returns ({@link #reapply}).
+	 */
+	public static void realScreenSize(Window window) {
+		if (current == null) {
+			return;
+		}
+		WindowAccessor fields = (WindowAccessor) (Object) window;
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			IntBuffer w = stack.mallocInt(1), h = stack.mallocInt(1);
+			SDLVideo.SDL_GetWindowSize(window.handle(), w, h);
+			fields.hearthside$setScreenWidth(w.get(0));
+			fields.hearthside$setScreenHeight(h.get(0));
+		}
+	}
+
 	/** Called after Minecraft has written real sizes into the window (resize events); puts the virtual size back. */
 	public static void reapply(Window window) {
 		VirtualSize size = current;

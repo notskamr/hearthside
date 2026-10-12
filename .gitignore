@@ -7,3 +7,4 @@ out/
 .superpowers/
 run-satellite/
 run-e2e/
+.claude/worktrees/

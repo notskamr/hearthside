@@ -1,12 +1,15 @@
 package dev.hearthside.fabric.client.dev;
 
+import dev.hearthside.core.e2e.StepSelection;
 import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
+import dev.hearthside.core.input.RemapModel;
 import dev.hearthside.core.layout.ConsoleLayout;
+import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
 import dev.hearthside.core.profile.GuestProfile;
@@ -20,6 +23,7 @@ import dev.hearthside.core.session.CoopWorldsStore;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.systems.RenderSystem;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
@@ -43,17 +47,33 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.events.ContainerEventHandler;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.gui.screens.DeathScreen;
+import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.options.OptionsScreen;
+import net.minecraft.client.gui.screens.options.VideoSettingsScreen;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.Items;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.data.AtlasIds;
@@ -76,6 +96,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.sdl.SDLMouse;
 import org.lwjgl.sdl.SDLVideo;
 import net.minecraft.util.HttpUtil;
 import net.minecraft.world.level.GameType;
@@ -89,12 +110,53 @@ import net.minecraft.world.level.levelgen.presets.WorldPresets;
  * in the game folder. The final "host killed" step is performed from outside the game.
  */
 public final class E2eDriver {
+	/**
+	 * Every step in run order: its id, then the earlier steps whose effects its body relies on (the party's player
+	 * count, an open screen, a seated profile, a session). {@code -Dhearthside.e2e.only=<ids>} runs the named steps and
+	 * what they need, transitively; every other step is reported as SKIP. A step that works from its section's starting
+	 * state (the title screen; the world with the host alone) needs nothing.
+	 */
+	private static final String[][] NEEDS = {
+			{"X1"}, {"X1b"},
+			{"H1"},
+			// The lobby block (fake pads), from the title screen.
+			{"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
+			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"},
+			{"W10", "L5"}, {"W11", "L5"}, {"W9", "L5"}, {"L6", "W9"},
+			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"R2", "R1"}, {"L11", "R1"},
+			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"}, {"L12", "L3"},
+			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
+			// The in-world session: the world opens with the host alone.
+			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"Q1b", "Q1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
+			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
+			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
+			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
+			{"V10", "C7b"}, {"D5", "C7b"},
+			{"D6", "D5"},
+			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
+			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"}, {"Q2", "1"},
+			// The in-world pad block (fake pads).
+			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
+			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"S2", "B3", "P9"},
+			{"6"},
+			// The tiled session.
+			{"D9"}, {"7"},
+	};
+	private static final List<String> ORDER = Arrays.stream(NEEDS).map(row -> row[0]).toList();
+	private static final Map<String, List<String>> NEEDED = Arrays.stream(NEEDS)
+			.collect(Collectors.toMap(row -> row[0], row -> List.of(row).subList(1, row.length)));
+	/** Step 7 is done by the run script: it force-kills the host and checks the guest's game exits by itself. */
+	private static final String HOST_KILL = "7 force-killing the host ends its guests' games";
+
 	private static final String WORLD = "hearthside-e2e";
 	private static final String GUEST = "Guest2";
 
 	private final Minecraft minecraft;
 	private final Path report;
 	private Rect hostWindowBefore;
+	private StepSelection selection;
 
 	private E2eDriver(Minecraft minecraft) {
 		this.minecraft = minecraft;
@@ -112,6 +174,10 @@ public final class E2eDriver {
 	private void run() {
 		try {
 			Files.writeString(report, "Hearthside walking-skeleton E2E\n", StandardCharsets.UTF_8);
+			selection = StepSelection.parse(System.getProperty("hearthside.e2e.only"), ORDER, NEEDED);
+			if (!selection.everything()) {
+				log("   only " + ORDER.stream().filter(selection::runs).toList());
+			}
 			// A fresh game folder may show first-launch screens instead of the title; any settled screen will do.
 			waitFor("resources loaded", Duration.ofSeconds(180),
 					() -> onRender(() -> minecraft.gui.overlay() == null && minecraft.gui.screen() != null));
@@ -122,8 +188,12 @@ public final class E2eDriver {
 						heard.add(new Heard(System.nanoTime(), sound.getIdentifier().toString())));
 				return null;
 			});
+			step("X1 a shared image round-trips through this game's backend", this::sharedImageRoundTrips);
+			step("X1b an import whose real image settings differ from the guest's is refused", this::realCreateInfoMismatchRefused);
 			step("H1 every glyph and Hearthside sprite resolves", this::spritesResolve);
 
+			// The lobby and in-world pad blocks are only steps: with none of theirs selected, each reports SKIP and
+			// nothing else happens.
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
@@ -137,6 +207,8 @@ public final class E2eDriver {
 				step("W6 B on New World goes back one screen, not two", this::newWorldBackOnce);
 				step("W7 B on the name keyboard closes only the keyboard", this::keyboardBackOnce);
 				step("W8 with no worlds yet the picker shows one Create card", this::pickerWithNoWorlds);
+				step("W10 Cheats toggles with A, a click or left/right, and its row always says which", this::cheatsToggle);
+				step("W11 the world picker's \"Last played with …\" line is warm ink, not an alarm red", this::playedWithInk);
 				step("W9 back in the lobby with player 1's controller", this::ensureLobby);
 				step("L6 that controller is player 1's again next time the lobby opens", this::hostControllerRemembered);
 				step("B6 cancelling the lobby stops every guest's game", this::lobbyCancelStopsGuests);
@@ -147,7 +219,8 @@ public final class E2eDriver {
 				step("L9 Y on a ready card picks another profile; B keeps the current one", this::cardSwitchesProfile);
 				step("R1 X on a ready card → Controls: Jump rebound to Y, presets tried and back, saved to the profile and the guest",
 						this::controlsRemap);
-				step("M1 holding Y deletes an unused profile; a profile in use is refused; letting go early cancels",
+				step("R2 the Controls screen: one selected row, D-pad directions told apart", this::controlsSelectionAndDpad);
+				step("L11 holding Y deletes an unused profile; a profile in use is refused; letting go early cancels",
 						this::manageProfiles);
 				step("B8 in the lobby a seated controller moves the host's cursor, not its own game", this::lobbySharedCursor);
 				step("B10 a title screen while the party waits goes back to its lobby", this::orphanedTitleReturnsToLobby);
@@ -156,29 +229,48 @@ public final class E2eDriver {
 				step("L8 unplugging mid-keyboard keeps the card; replugging resumes it", this::cardSurvivesUnplug);
 				step("L10 two identical controllers never share a profile or a new name", this::twinsNeverClash);
 				step("L3 New runs quick setup: A on the suggested name, skin and colour saves the profile", this::quickSetupAAA);
+				step("L12 the typing card's keyboard shows every key it uses, and B closes only the keyboard", this::cardKeyboardLegend);
 				step("B5 Menu on a seated controller opens the world picker", this::lobbyToPicker);
 				step("W1 the world picker puts the last co-op world first, focused, with who played it", this::pickerFocusesLastCoopWorld);
 				step("S1 Hearthside's screens, cards and keyboards make their warm sounds", () -> screensMakeSounds(lobbySounds));
 				step("W2 A on it opens the world; the guests come in by name; the co-op record has them", this::pickerOpensWorld);
 			}
-			if (onRender(() -> minecraft.level == null)) {
-				openWorld();
+			if (selection.anyRuns(between("1", "6"))) {
+				if (onRender(() -> minecraft.level == null)) {
+					openWorld();
+				}
+				waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
+				hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			}
-			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
-			hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			step("1 guest joins", this::guestJoins);
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
 			step("C1 guest window is hidden", this::guestWindowHidden);
 			step("C2 guest frames reach the host's window", this::guestFramesComposited);
+			step("Q1 each guest's heap is the configured size and its memory is logged", this::guestMemoryConfigured);
+			step("Q1b a guest saving its options doesn't tell the server its own render distance", this::guestSaveKeepsTheCap);
+			step("V1 frames are shared zero-copy on this backend", this::zeroCopyOnThisBackend);
+			step("V6 the guest's window is hidden on its backend", this::guestWindowHiddenOnItsBackend);
 			step("O1 the overlay pass draws over every view", this::overlayDrawsOverViews);
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
+			step("V2 views are the right way up", this::viewsUpright);
+			step("V4 a resource reload while composited keeps every view composited", this::reloadKeepsViews);
+			step("V5 composite cost within budget", this::compositeCostWithinBudget);
+			step("V7 minimise, restore and fullscreen keep views composited", this::minimiseRestoreFullscreen);
+			step("V8 a broken view shader falls back to a plain blit", this::brokenViewShaderFallsBack);
 			step("C5 copy transport works", this::copyTransportWorks);
+			step("C5b two quick resizes on the copy transport keep the guest composited", this::quickResizesOnCopy);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
+			step("V3 a device mismatch copies frames and says why", this::deviceMismatchCopies);
+			step("V9 a game without Vulkan copies frames instead of crashing", this::noVulkanCopies);
+			step("Q3 a guest's own Sodium settings survive its next launch", this::guestSodiumSettingsSurvive);
+			step("Q4 a guest can't switch to fullscreen", this::guestRefusesFullscreen);
+			step("Q4b an untested Sodium version leaves Sodium's options alone instead of crashing guests", this::untestedSodiumLeftAlone);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
+			step("V10 with four players the guests drop almost no frames", this::fourPlayersDropAlmostNothing);
 			step("D5 a leaving view fades out, then the others glide", () -> sampleGaps(this::leavingFades));
 			step("D6 a guest who quits from their own game leaves the party", () -> sampleGaps(this::guestQuitsItself));
 			step("C7c back to two players, re-laid out without GL errors", this::backToTwo);
@@ -194,6 +286,8 @@ public final class E2eDriver {
 			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
 			step("D7 a guest whose game gives up is shown, then removed", this::gaveUpShownThenRemoved);
 			step("D8 a guest whose game dies while joining keeps their card on the plank wall", this::gaveUpWhileJoining);
+			// Last in the composited session: it opens the world twice more, leaving it as it was with player 1 alone.
+			step("Q2 a stacked two-player layout from config/hearthside.json", this::stackedLayoutFromConfig);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				long dropInSounds = System.nanoTime();
@@ -216,20 +310,42 @@ public final class E2eDriver {
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
+				step("P10 holding Drop throws the whole stack; a tap throws one", this::dropTapAndHold);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
 				step("P9 Player2 leaves", this::player2Leaves);
+				step("H3 player 1 on a controller gets a pointer on Minecraft's screens and can respawn", this::hostPointerOnScreens);
+				step("H4 controller hints on Minecraft's screens never cover anything and offer only what works", this::hintsStayClear);
+				step("H5 player 1 can switch between the controller pointer and the mouse at any time", this::pointerOrMouse);
+				step("H5b a mouse click goes where the arrow is, never where the controller's pointer rests", this::clickWhereTheArrowIs);
+				step("H6 unplugging player 1's controller with a screen open hides its pointer and hints", this::hostPadUnpluggedOnScreen);
 				step("S2 the join prompt, a drop-in and a leave make their warm sounds", () -> dropInMakesSounds(dropInSounds));
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
 
-			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
-				// The last session tiles real windows, as on a machine that can't composite (D9 and step 7 run in it).
-				System.setProperty("hearthside.e2e.forceTiled", "true");
+			if (selection.anyRuns(List.of("D9", "7"))) {
+				if (onRender(() -> minecraft.level != null)) {
+					// Step 6 closes the first world; a focused run that skipped it closes it here.
+					onRender(() -> {
+						minecraft.disconnectFromWorld(Component.literal("E2E"));
+						return null;
+					});
+					waitFor("back on a menu", Duration.ofSeconds(60),
+							() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+				}
+				if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+					// The last session tiles real windows, as on a machine that can't composite (D9 and step 7 run in it).
+					System.setProperty("hearthside.e2e.forceTiled", "true");
+				}
+				openWorld();
+				waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			}
-			openWorld();
-			waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("D9 with tiled windows, a drop-in joins as its controller's profile, with no card", this::tiledDropIn);
+			}
+			if (!selection.runs("7")) {
+				log("SKIP " + HOST_KILL);
+				log("DONE");
+				return;
 			}
 			onRender(() -> {
 				Party.current().join(GUEST);
@@ -275,6 +391,58 @@ public final class E2eDriver {
 
 	// ---- Compositor steps ----
 
+	/**
+	 * X1: memory exported by the export device and imported twice through this game's backend is one image: magenta
+	 * cleared through one import reads back through the other. An image whose description doesn't match this game's is
+	 * refused (Spec C section 3.5 and Review Focus 4).
+	 */
+	private void sharedImageRoundTrips() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> {
+			SharedImageCheck.start();
+			return null;
+		});
+		// The readback is asynchronous: the result is logged from its callback a frame or two later.
+		waitFor("shared image round trip", Duration.ofSeconds(15),
+				() -> hostLogSince(mark).contains("hearthside shared image round trip backend="));
+		String log = hostLogSince(mark);
+		check(Pattern.compile("hearthside shared image round trip backend=(opengl|vulkan) rgb=ff00ff").matcher(log).find(),
+				"magenta cleared through one import reads back through the other (got: "
+						+ log.lines().filter(l -> l.contains("round trip")).findFirst().orElse("nothing") + ")");
+		check(log.contains("hearthside shared image mismatch refused"),
+				"an image whose description doesn't match this game's is refused, not imported");
+		check(!log.contains("validation error"), "no Vulkan validation errors");
+		check(!log.contains("hearthside shared image check failed"), "the check ran to the end");
+	}
+
+	/** X1b: the import compares Minecraft's real image settings with the shared image's description (final review I1). */
+	private void realCreateInfoMismatchRefused() throws Exception {
+		boolean vulkan = hostLogSince(0).contains("hearthside graphics backend=vulkan")
+				|| onRender(() -> RenderSystem.getDevice().getDeviceInfo().backendName()).equals("Vulkan");
+		if (!vulkan) {
+			log("   OpenGL imports have no create info to compare; Vulkan only");
+			return;
+		}
+		long mark = hostLogLength();
+		System.setProperty("hearthside.e2e.perturbImportCreateInfo", "true");
+		try {
+			onRender(() -> {
+				SharedImageCheck.importOnce();
+				return null;
+			});
+			waitFor("the import's outcome", Duration.ofSeconds(10), () -> {
+				String log = hostLogSince(mark);
+				return log.contains("hearthside shared image mismatch refused") || log.contains("hearthside shared image imported");
+			});
+		} finally {
+			System.clearProperty("hearthside.e2e.perturbImportCreateInfo");
+		}
+		String log = hostLogSince(mark);
+		check(log.contains("hearthside shared image mismatch refused") && !log.contains("hearthside shared image imported"),
+				"an import whose real create info differs is refused, not imported");
+		check(!log.contains("validation error"), "no Vulkan validation errors");
+	}
+
 	private static final String PATTERN = "rgb=ff00ff";
 
 	private void guestWindowHidden() throws Exception {
@@ -291,6 +459,102 @@ public final class E2eDriver {
 				"the guest's view went live only once Minecraft's loading screen was gone");
 		check(satelliteLog().contains("hearthside skipped the chat-verification toast"),
 				"a guest arriving isn't greeted with Minecraft's chat-verification warning");
+	}
+
+	/** V1: on a GPU that can share, the guest's frames reach the host zero-copy, whatever the backend (Spec C 3.5). */
+	private void zeroCopyOnThisBackend() throws Exception {
+		String host = hostLogSince(0);
+		Matcher backend = Pattern.compile("hearthside graphics backend=(opengl|vulkan)").matcher(host);
+		check(backend.find(), "the host logged its graphics backend");
+		String expected = "frames gpu_shared";
+		Matcher frames = Pattern.compile("hearthside compositor: player 2 frames ([a-z_]+) [0-9]+x[0-9]+ backend=([a-z]+)").matcher(host);
+		String last = null;
+		while (frames.find()) {
+			last = frames.group(0);
+		}
+		log("   " + last);
+		check(last != null && last.contains(expected) && last.endsWith("backend=" + backend.group(1)),
+				"player 2's frames are shared, not copied, on a " + backend.group(1) + " host");
+	}
+
+	/** Q1: the guest's heap is the configured 1536 MB, its render distance is capped at 8, and memory is logged (Task 8b). */
+	private void guestMemoryConfigured() throws Exception {
+		waitFor("the guest reported its heap", Duration.ofSeconds(30), () -> satelliteLog().contains("hearthside guest heap max="));
+		Matcher m = Pattern.compile("hearthside guest heap max=([0-9]+) mb render distance=([0-9]+)").matcher(satelliteLog());
+		check(m.find(), "the guest logged its heap and render distance");
+		long maxMb = Long.parseLong(m.group(1));
+		int renderDistance = Integer.parseInt(m.group(2));
+		check(maxMb <= 1536 * 105 / 100, "the guest's max heap " + maxMb + " MB is the configured 1536 MB");
+		check(renderDistance <= 8, "the guest's render distance " + renderDistance + " is capped at 8");
+		log("   memory host=" + workingSetMb(ProcessHandle.current().pid()) + " MB guest="
+				+ workingSetMb(satellites().getFirst().pid()) + " MB");
+	}
+
+	/**
+	 * Q1b: a guest whose own render distance (12) is capped at 8 saves its options, as closing Video Settings does
+	 * (batch review I1). Its options.txt keeps 12, and the host's server never hears more than the cap: it goes on
+	 * loading and sending chunks for 8.
+	 */
+	private void guestSaveKeepsTheCap() throws Exception {
+		Path options = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/options.txt");
+		guestLeaves();
+		String before = Files.exists(options) ? Files.readString(options) : null;
+		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
+		try {
+			writeOption(options, "renderDistance", "12");
+			guestRejoins();
+			check(satelliteLog().contains("hearthside capped the render distance at 8 for this session (own setting 12)"),
+					"the guest's own 12 is capped at 8 this session");
+			waitFor("the guest saved its options", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest saved its options"));
+			// The save's own broadcast reaches the server within milliseconds; watch it for 5 s.
+			long until = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+			int requested = 0;
+			while (System.nanoTime() < until) {
+				IntegratedServer server = minecraft.getSingleplayerServer();
+				requested = server.submit(() -> server.getPlayerList().getPlayerByName(GUEST).requestedViewDistance()).join();
+				check(requested <= 8, "the server hears the guest's capped render distance, not " + requested);
+				Thread.sleep(100);
+			}
+			log("   server's requested view distance for " + GUEST + ": " + requested);
+			check(Files.readString(options).lines().anyMatch(l -> l.equals("renderDistance:12")),
+					"the guest's options.txt keeps its own 12");
+		} finally {
+			System.clearProperty("hearthside.e2e.guestSaveOptions");
+			if (before != null) {
+				Files.writeString(options, before);
+			}
+		}
+	}
+
+	/** Sets {@code key:value} in an options.txt (adding the line when it has none). */
+	private static void writeOption(Path options, String key, String value) throws IOException {
+		List<String> lines = Files.exists(options) ? new ArrayList<>(Files.readAllLines(options)) : new ArrayList<>();
+		lines.removeIf(l -> l.startsWith(key + ":"));
+		lines.add(key + ":" + value);
+		Files.createDirectories(options.getParent());
+		Files.write(options, lines);
+	}
+
+	/** A process's resident memory in MB: PowerShell's working set on Windows, ps's RSS on macOS. */
+	private static long workingSetMb(long pid) throws Exception {
+		boolean windows = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
+		Process p = new ProcessBuilder(windows
+				? List.of("powershell", "-NoProfile", "-Command", "(Get-Process -Id " + pid + ").WorkingSet64")
+				: List.of("ps", "-o", "rss=", "-p", Long.toString(pid))).redirectErrorStream(true).start();
+		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+		p.waitFor();
+		long value = Long.parseLong(out.lines().reduce((a, b) -> b).orElse("0").trim());
+		return windows ? value / (1024 * 1024) : value / 1024;
+	}
+
+	/** V6: the guest's window is created hidden whichever backend its game started on (Spec C 3.4). */
+	private void guestWindowHiddenOnItsBackend() throws Exception {
+		waitFor("satellite window flags line", Duration.ofSeconds(30),
+				() -> satelliteLog().contains("hearthside window flags hidden=true"));
+		Matcher m = Pattern.compile("using graphics backend (opengl|vulkan)").matcher(satelliteLog());
+		check(m.find(), "the guest's game logged its backend");
+		log("   guest backend " + m.group(1));
 	}
 
 	private void overlayDrawsOverViews() throws Exception {
@@ -321,11 +585,13 @@ public final class E2eDriver {
 	private void resizeRelaysOut() throws Exception {
 		long mark = hostLogLength();
 		onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), 1280, 720));
+		// Until the guest's frames at its new size arrive, its old ones are drawn stretched and softly blurred.
+		windowShot("resize-stale");
 		try {
 			int halfWidth = onRender(() -> {
 					var size = minecraft.getWindow().queryFramebufferSize();
 					return dev.hearthside.core.layout.SplitLayout.plan(2, new Rect(0, 0, size.width(), size.height()),
-							dev.hearthside.core.layout.LayoutSettings.DEFAULTS).players().get(1).width();
+							Party.current().layout()).players().get(1).width();
 			});
 			waitFor("guest re-sized to half the new window", Duration.ofSeconds(10),
 					() -> satelliteLog().contains("hearthside virtual size " + halfWidth + "x"));
@@ -336,6 +602,103 @@ public final class E2eDriver {
 		// The transport is decided once; a resize must not re-probe the GPU (each probe creates Vulkan instances).
 		int probes = count("hearthside gpu sharing probe");
 		check(probes <= 1, "the guest probed the GPU once, not " + probes + " times");
+	}
+
+	/** V2: the guest's magenta corner lands at the top-left of its view, and the bottom-left is the game (Spec C 4.4). */
+	private void viewsUpright() throws Exception {
+		long mark = hostLogLength();
+		waitForProbe(2, mark, Duration.ofSeconds(10));
+		Matcher m = Pattern.compile("hearthside compositor probe player=2 gen=[0-9]+ rgb=([0-9a-f]{6}) corner=([0-9a-f]{6})")
+				.matcher(hostLogSince(mark));
+		String last = null;
+		while (m.find()) {
+			last = "rgb=" + m.group(1) + " corner=" + m.group(2);
+		}
+		log("   probe " + last);
+	}
+
+	/** V4: a resource reload rebuilds Minecraft's pipelines; the views stay composited and ours is warmed again. */
+	private void reloadKeepsViews() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> minecraft.reloadResourcePacks()).get(60, TimeUnit.SECONDS);
+		check(hostLogSince(mark).contains("hearthside view pipeline warmed"), "the view pipeline was warmed again after the reload");
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+	}
+
+	/** V5: the host's CPU time to composite stays within Spec C's budget per guest (zero-copy 0.3 ms, copying 1 ms). */
+	private void compositeCostWithinBudget() throws Exception {
+		long mark = hostLogLength();
+		// The cost line is logged every 30 s; take the first one from here on.
+		waitFor("a compositor cost line", Duration.ofSeconds(45), () -> hostLogSince(mark).contains("hearthside compositor cost"));
+		Matcher m = Pattern.compile("hearthside compositor cost guests=([0-9]+) p50=([0-9.]+) ms p95=([0-9.]+) ms")
+				.matcher(hostLogSince(mark));
+		check(m.find(), "the cost line parses");
+		int guests = Math.max(1, Integer.parseInt(m.group(1)));
+		double p95 = Double.parseDouble(m.group(3));
+		Matcher transport = Pattern.compile("hearthside compositor: player 2 frames ([a-z_]+)").matcher(hostLogSince(0));
+		String last = "gpu_shared";
+		while (transport.find()) {
+			last = transport.group(1);
+		}
+		// Spec C's budget is for normal play; Vulkan's validation layer checks every call and roughly doubles the cost.
+		boolean validating = hostLogSince(0).contains("enabling vulkan validation layers");
+		double budget = ("copy".equals(last) ? 1.0 : 0.3) * guests * (validating ? 2 : 1);
+		log("   compositor cost guests=" + guests + " p95=" + p95 + " ms, budget " + budget + " ms (" + last
+				+ (validating ? ", validation on" : "") + ")");
+		check(p95 < budget, "p95 " + p95 + " ms is within the " + budget + " ms budget");
+	}
+
+	/** V7: minimising, restoring and going fullscreen and back keep every view composited (Review Focus 1). */
+	private void minimiseRestoreFullscreen() throws Exception {
+		long mark = hostLogLength();
+		long handle = onRender(() -> minecraft.getWindow().handle());
+		onRender(() -> SDLVideo.SDL_MinimizeWindow(handle));
+		Thread.sleep(2000);
+		onRender(() -> SDLVideo.SDL_RestoreWindow(handle));
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(10));
+		onRender(() -> {
+			toggleFullscreen();
+			return null;
+		});
+		try {
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+		} finally {
+			onRender(() -> {
+				toggleFullscreen();
+				return null;
+			});
+		}
+		waitFor("window back to its size", Duration.ofSeconds(10),
+				() -> onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) == hostWindowBefore.width());
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+		check(!hostLogSince(mark).contains("exception"), "no exception in the host log");
+	}
+
+	/** What Minecraft's fullscreen key does (26.3's {@code Window} has no toggle), without saving the setting. */
+	private void toggleFullscreen() {
+		minecraft.options.fullscreen().set(!minecraft.options.fullscreen().get());
+	}
+
+	/** V8: a resource pack with a broken view shader leaves every view drawn, and is only compiled once (Review Focus 3). */
+	private void brokenViewShaderFallsBack() throws Exception {
+		long mark = hostLogLength();
+		Collection<String> before = onRender(() -> List.copyOf(minecraft.getResourcePackRepository().getSelectedIds()));
+		BrokenViewPack.write(minecraft.gameDirectory.toPath());
+		try {
+			onRender(() -> BrokenViewPack.select(minecraft, true)).get(120, TimeUnit.SECONDS);
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+			Thread.sleep(3000); // a few hundred frames on the fallback
+			String log = hostLogSince(mark);
+			int warnings = log.split("hearthside view pipeline unavailable; drawing views without fades", -1).length - 1;
+			check(warnings == 1, "the fallback was logged once, not " + warnings + " times");
+			int compiles = log.split("hearthside view pipeline compiling", -1).length - 1;
+			check(compiles <= 2, "the broken shader was compiled once per reload, not every frame (" + compiles + " compiles)");
+		} finally {
+			onRender(() -> BrokenViewPack.restore(minecraft, before)).get(120, TimeUnit.SECONDS);
+		}
+		long restored = hostLogLength();
+		waitForProbe(2, restored, Duration.ofSeconds(15));
+		check(hostLogSince(mark).contains("hearthside view pipeline warmed"), "the view pipeline is back after the pack is removed");
 	}
 
 	private void copyTransportWorks() throws Exception {
@@ -372,6 +735,21 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.forceCopy");
 		}
+	}
+
+	/** C5b: two resizes in quick succession while copying frames: readbacks still in flight are dropped (Review Focus 2). */
+	private void quickResizesOnCopy() throws Exception {
+		check(satelliteLog().contains("hearthside frame slots ready transport=copy"), "the guest is copying frames (after C5)");
+		long mark = hostLogLength();
+		int satMark = satelliteLog().length();
+		int before = lastProbeGeneration(2);
+		long handle = onRender(() -> minecraft.getWindow().handle());
+		onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 1280, 720));
+		Thread.sleep(150);
+		onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(20), before);
+		check(!hostLogSince(mark).contains("exception"), "no exception in the host log");
+		check(!satelliteLog().substring(satMark).contains("exception"), "no exception in the guest's log");
 	}
 
 	/** Where the host log stood when gap sampling first started; G1 reads every gap line after it. */
@@ -444,6 +822,255 @@ public final class E2eDriver {
 			System.clearProperty("hearthside.e2e.failGpuImport");
 			onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), hostWindowBefore.width(), hostWindowBefore.height()));
 		}
+	}
+
+	/** V3: when a guest's GPU or driver differs from the host's, its frames are copied and the host says why (Spec C 3.7). */
+	private void deviceMismatchCopies() throws Exception {
+		System.setProperty("hearthside.e2e.fakeDeviceMismatch", "true");
+		try {
+			onRender(() -> {
+				Party.current().leave(GUEST);
+				return null;
+			});
+			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			long mark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("the host chose copying, with the reason", Duration.ofSeconds(60),
+					() -> hostLogSince(mark).contains("copies frames: device_mismatch"));
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+		} finally {
+			System.clearProperty("hearthside.e2e.fakeDeviceMismatch");
+		}
+	}
+
+	/** V9: a guest whose machine has no Vulkan runtime copies its frames instead of crashing (final review M6). */
+	private void noVulkanCopies() throws Exception {
+		System.setProperty("hearthside.e2e.noVulkanLoader", "true");
+		try {
+			onRender(() -> {
+				Party.current().leave(GUEST);
+				return null;
+			});
+			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			check(!satelliteLog().contains("unsatisfiedlinkerror") || satelliteLog().contains("copying frames instead"),
+					"the guest caught the missing Vulkan runtime and copies frames");
+		} finally {
+			System.clearProperty("hearthside.e2e.noVulkanLoader");
+		}
+	}
+
+	// ---- Config and guests (batch B) ----
+
+	/**
+	 * Q2: with {@code "twoPlayerLayout": "stacked"} in config/hearthside.json, player 1's view is the top half and
+	 * player 2's the bottom half, which the guest renders at. A session reads the file when it opens, so the world is
+	 * closed and opened again, and once more afterwards with the file as it was.
+	 */
+	private void stackedLayoutFromConfig() throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("config").resolve("hearthside.json");
+		byte[] before = Files.exists(file) ? Files.readAllBytes(file) : null;
+		try {
+			dev.hearthside.core.config.SplitScreenConfig config = dev.hearthside.core.config.SplitScreenConfig.DEFAULTS;
+			if (before != null) {
+				config = dev.hearthside.core.config.SplitScreenConfig.read(
+						new java.io.StringReader(new String(before, StandardCharsets.UTF_8)));
+			}
+			try (java.io.Writer out = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+				new dev.hearthside.core.config.SplitScreenConfig(config.guestMemoryMb(), config.guestRenderDistance(),
+						config.layout().withTwo(LayoutSettings.TwoPlayer.STACKED)).write(out);
+			}
+			reopenWorld();
+			check(onRender(() -> Party.current().layout().two()) == LayoutSettings.TwoPlayer.STACKED,
+					"the new session read the stacked layout");
+			joinMark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitInWorld(1);
+			List<Rect> plan = onRender(() -> {
+				var size = minecraft.getWindow().queryFramebufferSize();
+				return dev.hearthside.core.layout.SplitLayout.plan(2, new Rect(0, 0, size.width(), size.height()),
+						Party.current().layout()).players();
+			});
+			Rect top = plan.get(0), bottom = plan.get(1);
+			log("   stacked views " + top + " over " + bottom);
+			check(top.y() == 0 && bottom.y() >= top.height() && top.width() == bottom.width(), "the plan stacks the views");
+			waitFor("the views stacked in the window", Duration.ofSeconds(10), () -> onRender(() -> {
+				List<dev.hearthside.core.layout.ViewFrame> frames = Compositor.active().overlayViews();
+				return frames.size() == 2 && frames.stream().anyMatch(f -> f.seat() == 0 && f.rect().equals(top))
+						&& frames.stream().anyMatch(f -> f.seat() == 1 && f.rect().equals(bottom));
+			}));
+			waitFor("the guest rendering at the bottom half's size", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside virtual size " + bottom.width() + "x" + bottom.height()));
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			windowShot("stacked-two-players");
+		} finally {
+			if (before != null) {
+				Files.write(file, before);
+			} else {
+				Files.deleteIfExists(file);
+			}
+			reopenWorld();
+		}
+	}
+
+	/** Closes the world (its guests' games with it) and opens it again: a new party session, with player 1 alone. */
+	private void reopenWorld() throws Exception {
+		onRender(() -> {
+			minecraft.disconnectFromWorld(Component.literal("E2E"));
+			return null;
+		});
+		waitFor("guests' games closed", Duration.ofSeconds(30), () -> satellites().isEmpty());
+		waitFor("back on a menu", Duration.ofSeconds(60),
+				() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+		openWorld();
+		waitFor("host session", Duration.ofSeconds(180),
+				() -> Party.current() != null && onRender(() -> minecraft.level != null) && playerCount() == 1);
+	}
+
+	/**
+	 * Q3: a guest's own Sodium settings survive its next launch (user session, 2026-10-11): the host's config is
+	 * mirrored in before each launch, but not over a file the guest has changed. The host's copy is untouched.
+	 */
+	private void guestSodiumSettingsSurvive() throws Exception {
+		Path host = minecraft.gameDirectory.toPath().resolve("config").resolve("sodium-options.json");
+		Path guest = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/config/sodium-options.json");
+		guestLeaves();
+		check(Files.exists(host) && Files.exists(guest), "Sodium's settings are in the host's and the guest's config");
+		String hostBefore = Files.readString(host);
+		String guestBefore = Files.readString(guest);
+		String setting = "use_closest_point_entity_sort"; // a quality setting that changes nothing a check looks at
+		com.google.gson.JsonObject edited = com.google.gson.JsonParser.parseString(guestBefore).getAsJsonObject();
+		boolean mine = !edited.getAsJsonObject("quality").get(setting).getAsBoolean();
+		edited.getAsJsonObject("quality").addProperty(setting, mine);
+		Files.writeString(guest, new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson(edited));
+		try {
+			guestRejoins();
+			boolean after = com.google.gson.JsonParser.parseString(Files.readString(guest)).getAsJsonObject()
+					.getAsJsonObject("quality").get(setting).getAsBoolean();
+			log("   guest's " + setting + " " + mine + " before its launch, " + after + " after");
+			check(after == mine, "the guest's own Sodium setting survived its next launch");
+			check(Files.readString(host).equals(hostBefore), "the host's sodium-options.json is unchanged");
+		} finally {
+			// As it was: the guest's copy follows the host's again from its next launch.
+			Files.writeString(guest, guestBefore);
+		}
+	}
+
+	/**
+	 * Q4: a guest's game can't go fullscreen. Its game tries the option, the window and the toggle key once in the
+	 * world: each is refused and logged, its window stays hidden and windowed, player 1's window doesn't move, and the
+	 * guest's view still reaches the host. Its Video Settings (vanilla's, and Sodium's) show Fullscreen greyed out.
+	 */
+	private void guestRefusesFullscreen() throws Exception {
+		System.setProperty("hearthside.e2e.guestTryFullscreen", "true");
+		try {
+			guestLeaves();
+			guestRejoins();
+			waitFor("the guest tried fullscreen", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest fullscreen option="));
+			String log = satelliteLog();
+			String tried = log.substring(log.indexOf("hearthside e2e guest tries fullscreen"));
+			int refused = tried.split(java.util.regex.Pattern.quote("hearthside guest fullscreen refused"), -1).length - 1;
+			log("   " + tried.lines().filter(l -> l.contains("fullscreen")).map(String::strip).toList());
+			check(refused == 3, "each of the 3 attempts was refused and logged once (got " + refused + ")");
+			check(tried.contains("fullscreen option=false window fullscreen=false hidden=true"),
+					"the guest's option stays off and its window windowed and hidden");
+			Rect now = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
+			check(now.equals(hostWindowBefore), "player 1's window is where it was (" + now + ", was " + hostWindowBefore + ")");
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			waitFor("the guest's Video Settings", Duration.ofSeconds(20),
+					() -> satelliteLog().contains("hearthside guest video settings: fullscreen active=false"));
+			Thread.sleep(1500); // its frames reach the host
+			windowShot("guest-video-settings");
+			if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")) {
+				waitFor("the guest's Sodium Video Settings", Duration.ofSeconds(20),
+						() -> satelliteLog().contains("hearthside e2e guest shows sodium's video settings"));
+				check(satelliteLog().contains("hearthside guest video settings: sodium's fullscreen greyed out"),
+						"Sodium's Fullscreen is greyed out on the guest");
+				Thread.sleep(1500);
+				// Sodium draws its own widgets, which the hints can't see to keep clear of (they covered its Done).
+				check(satelliteLog().contains("hearthside hints skipped on a mod's screen"),
+						"controller hints stay off Sodium's screen");
+				windowShot("guest-sodium-video-settings");
+			}
+			waitFor("the guest back in its game", Duration.ofSeconds(20),
+					() -> satelliteLog().contains("hearthside e2e guest closed video settings"));
+		} finally {
+			System.clearProperty("hearthside.e2e.guestTryFullscreen");
+		}
+	}
+
+	/**
+	 * Q4b: on a Sodium version Hearthside wasn't tested with, a guest's game leaves Sodium's video options alone (greying
+	 * Fullscreen there relies on Sodium's internals, and Sodium turns a failed overlay into a crash). It still reaches the
+	 * world and still refuses fullscreen (batch review I3).
+	 */
+	private void untestedSodiumLeftAlone() throws Exception {
+		if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")) {
+			log("   no Sodium in this run");
+			return;
+		}
+		System.setProperty("hearthside.e2e.pretendSodiumVersion", "0.10.0");
+		System.setProperty("hearthside.e2e.guestTryFullscreen", "true");
+		try {
+			guestLeaves();
+			guestRejoins();
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			check(satelliteLog().contains("hearthside left sodium's video options alone: sodium 0.10.0 is untested"),
+					"the guest says it left Sodium's options alone on Sodium 0.10.0");
+			check(!satelliteLog().contains("hearthside guest video settings: sodium's fullscreen greyed out"),
+					"and didn't grey Sodium's Fullscreen");
+			waitFor("the guest tried fullscreen", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest fullscreen option="));
+			String log = satelliteLog();
+			String tried = log.substring(log.indexOf("hearthside e2e guest tries fullscreen"));
+			int refused = tried.split(Pattern.quote("hearthside guest fullscreen refused"), -1).length - 1;
+			check(refused == 3, "each of the 3 attempts was still refused (got " + refused + ")");
+			check(tried.contains("fullscreen option=false window fullscreen=false hidden=true"),
+					"the guest's option stays off and its window windowed and hidden");
+			waitFor("the guest back in its game", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest closed video settings"));
+		} finally {
+			System.clearProperty("hearthside.e2e.pretendSodiumVersion");
+			System.clearProperty("hearthside.e2e.guestTryFullscreen");
+		}
+	}
+
+	/** Guest2 leaves and their game exits. */
+	private void guestLeaves() throws Exception {
+		onRender(() -> {
+			Party.current().leave(GUEST);
+			return null;
+		});
+		waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+	}
+
+	/** Guest2 joins again (their game is launched afresh) and is in the world. */
+	private void guestRejoins() throws Exception {
+		joinMark = hostLogLength();
+		onRender(() -> {
+			Party.current().join(GUEST);
+			return null;
+		});
+		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+		waitInWorld(1);
 	}
 
 	/** In the world, player 1's mouse buttons always count, wherever the hidden OS cursor has drifted. */
@@ -523,6 +1150,24 @@ public final class E2eDriver {
 		waitInWorld(3);
 		Thread.sleep(1200);
 		windowShot("four-players");
+	}
+
+	/** V10: with four players each guest finds a free slot for nearly every frame (final review I2). */
+	private void fourPlayersDropAlmostNothing() throws Exception {
+		Thread.sleep(11_000); // two exporter reports
+		Pattern line = Pattern.compile("hearthside exporter fps=([0-9]+) dropped=([0-9]+)");
+		for (int seat = 1; seat <= 3; seat++) {
+			Path file = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-" + seat + "/logs/latest.log");
+			Matcher m = line.matcher(Files.readString(file).toLowerCase(Locale.ROOT));
+			long fps = 0, dropped = 0;
+			while (m.find()) {
+				fps = Long.parseLong(m.group(1));
+				dropped = Long.parseLong(m.group(2));
+			}
+			log("   guest " + seat + ": fps " + fps + ", dropped " + dropped + " in 5 s");
+			check(fps > 0, "guest " + seat + " reported its frame rate");
+			check(dropped * 100 <= fps * 5, "guest " + seat + " dropped at most 1% of its frames (" + dropped + ")");
+		}
 	}
 
 	/** D5: Guest4 leaves: their view fades out where it is, then the others glide into its space. */
@@ -693,13 +1338,16 @@ public final class E2eDriver {
 
 	/** Waits for the host to log the pattern for {@code player} from an import other than generation {@code notGeneration}. */
 	private int waitForProbe(int player, long fromOffset, Duration timeout, int notGeneration) throws Exception {
-		Pattern line = Pattern.compile("hearthside compositor probe player=" + player + " gen=([0-9]+) " + PATTERN);
+		// The guest paints only its frame's top-left corner magenta: magenta there and not at the bottom-left means the
+		// view is the right way up (Spec C section 4.4).
+		Pattern line = Pattern.compile(
+				"hearthside compositor probe player=" + player + " gen=([0-9]+) " + PATTERN + " corner=([0-9a-f]{6})");
 		int[] found = {-1};
 		waitFor("player " + player + "'s pattern in the host window" + (notGeneration < 0 ? "" : " from a new import"), timeout, () -> {
 			Matcher m = line.matcher(hostLogSince(fromOffset));
 			while (m.find()) {
 				int generation = Integer.parseInt(m.group(1));
-				if (generation != notGeneration) {
+				if (generation != notGeneration && !m.group(2).equals("ff00ff")) {
 					found[0] = generation;
 					return true;
 				}
@@ -747,7 +1395,12 @@ public final class E2eDriver {
 		String text = Files.readString(log).toLowerCase(Locale.ROOT);
 		check(text.contains("hearthside client starting as satellite"), "satellite role line");
 		check(text.contains("sodium"), "sodium loaded");
-		check(text.contains("iris"), "iris loaded");
+		// Iris 1.11.7 calls OpenGL directly and crashes Minecraft on Vulkan, so Vulkan runs disable it (Spec C, Task 4).
+		if (System.getProperty("fabric.debug.disableModIds", "").contains("iris")) {
+			log("   iris is off in this run (it can't run on Vulkan)");
+		} else {
+			check(text.contains("iris"), "iris loaded");
+		}
 	}
 
 	private void crashedSatelliteRestarts() throws Exception {
@@ -1300,6 +1953,120 @@ public final class E2eDriver {
 		}
 	}
 
+	/** Moves player 1's mouse to a point given in GUI coordinates, and optionally clicks there. Render thread. */
+	private void mouseAt(double guiX, double guiY, boolean click) {
+		var window = minecraft.getWindow();
+		double toScreen = (double) window.getScreenWidth() / window.getGuiScaledWidth();
+		long handle = window.handle();
+		minecraft.mouseHandler.onMove(handle, guiX * toScreen, guiY * toScreen, 0, 0);
+		if (click) {
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 1);
+			minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), 0);
+		}
+	}
+
+	private void cheatsToggle() throws Exception {
+		ensureLobby();
+		String levelId = null;
+		try {
+			NewWorldScreen screen = openNewWorld();
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 4, () -> screen.focusedRow().equals("cheats"));
+			check(onRender(screen::focusedRow).equals("cheats"), "the Cheats row is focused");
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ Off ›") && !onRender(screen::cheats),
+					"Cheats starts Off (" + onRender(screen::cheatsLabel) + ")");
+			press(HOST_PAD, PadButton.A);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ On ›") && onRender(screen::cheats),
+					"A turns Cheats on and the row says so (" + onRender(screen::cheatsLabel) + ")");
+			onRender(() -> {
+				var row = Screens.getWidgets(screen).stream().filter(w -> w.getMessage().getString().startsWith("Cheats"))
+						.findFirst().orElseThrow();
+				mouseAt(row.getX() + row.getWidth() / 2.0, row.getY() + row.getHeight() / 2.0, true);
+				return null;
+			});
+			Thread.sleep(300);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ Off ›") && !onRender(screen::cheats),
+					"a click turns it off and the row says so (" + onRender(screen::cheatsLabel) + ")");
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 4, () -> screen.focusedRow().equals("cheats"));
+			press(HOST_PAD, PadButton.DPAD_RIGHT);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ On ›") && onRender(screen::cheats), "right: On");
+			press(HOST_PAD, PadButton.DPAD_LEFT);
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ Off ›") && !onRender(screen::cheats), "left: Off");
+			press(HOST_PAD, PadButton.DPAD_RIGHT);
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 4, () -> screen.focusedRow().equals("mode"));
+			press(HOST_PAD, PadButton.DPAD_LEFT);
+			check(onRender(screen::mode) == NewWorldScreen.Mode.HARDCORE, "left on Mode from Survival is Hardcore");
+			check(onRender(screen::cheatsLabel).equals("Cheats:  Off") && !onRender(screen::cheatsActive),
+					"in Hardcore the row reads Off, greyed (" + onRender(screen::cheatsLabel) + ")");
+			press(HOST_PAD, PadButton.DPAD_RIGHT);
+			check(onRender(screen::mode) == NewWorldScreen.Mode.SURVIVAL, "right is Survival again");
+			check(onRender(screen::cheatsLabel).equals("Cheats:  ‹ On ›") && onRender(screen::cheatsActive),
+					"back in Survival the last value is back (" + onRender(screen::cheatsLabel) + ")");
+			screenshot("new-world-cheats");
+			pressUntil(HOST_PAD, PadButton.DPAD_DOWN, 6, () -> screen.focusedRow().equals("create"));
+			press(HOST_PAD, PadButton.A);
+			waitFor("the new world", Duration.ofSeconds(180), () -> onRender(() -> minecraft.level != null
+					&& minecraft.getSingleplayerServer() != null && minecraft.player != null));
+			levelId = onRender(() -> minecraft.getSingleplayerServer()
+					.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).toAbsolutePath().normalize()
+					.getFileName().toString());
+			check(onRender(() -> minecraft.getSingleplayerServer().getWorldData().isAllowCommands()),
+					"the world created with Cheats On allows commands");
+		} finally {
+			if (onRender(() -> minecraft.level != null)) {
+				onRender(() -> {
+					minecraft.disconnectFromWorld(Component.literal("E2E"));
+					return null;
+				});
+				waitFor("back on a menu", Duration.ofSeconds(60),
+						() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+			}
+			if (levelId != null) {
+				String id = levelId;
+				onRender(() -> {
+					try (var access = minecraft.getLevelSource().createAccess(id)) {
+						access.deleteLevel();
+					}
+					return null;
+				});
+				check(!onRender(() -> minecraft.getLevelSource().levelExists(id)), "the test world is deleted");
+			}
+			backToLobby();
+			if (!onRender(() -> Party.current() != null && minecraft.gui.screen() instanceof LobbyScreen)) {
+				openLobby();
+			}
+			waitFor("player 1's controller again", Duration.ofSeconds(5),
+					() -> onRender(() -> Party.current() != null && Party.current().hostHasController()));
+		}
+	}
+
+	private void playedWithInk() throws Exception {
+		ensureLobby();
+		check(onRender(() -> minecraft.getLevelSource().levelExists(WORLD)), "the E2E world exists (created by earlier runs)");
+		Path record = minecraft.gameDirectory.toPath().resolve("hearthside/coop-worlds.json");
+		byte[] before = Files.exists(record) ? Files.readAllBytes(record) : null;
+		try {
+			coopStore().played(WORLD, System.currentTimeMillis(), List.of("Ember", "Birch"));
+			WorldsScreen picker = openPicker();
+			check("Last played with Ember and Birch".equals(onRender(() -> picker.playedWithText(WORLD))),
+					"the E2E world's card says who played it");
+			Thread.sleep(300);
+			int colour = onRender(() -> picker.playedWithColour(WORLD));
+			int r = colour >> 16 & 0xFF, gr = colour >> 8 & 0xFF, b = colour & 0xFF;
+			check(!(r >= 0xC0 && gr <= 0x50 && b <= 0x50) && !(r >= 0xA0 && gr <= 0x40 && b <= 0x40),
+					"the line is not an alarm red (" + Integer.toHexString(colour) + ")");
+			check(colour == dev.hearthside.fabric.client.ui.HearthDraw.MUTED,
+					"it is Hearthside's warm ink for secondary text (" + Integer.toHexString(colour) + ")");
+			screenshot("worlds-played-with");
+		} finally {
+			backToLobby();
+			if (before == null) {
+				Files.deleteIfExists(record);
+			} else {
+				Files.write(record, before);
+			}
+		}
+	}
+
 	/** Presses a direction until the condition holds (at most {@code tries} times). */
 	private void pressUntil(int pad, PadButton button, int tries, Callable<Boolean> done) throws Exception {
 		for (int i = 0; i < tries && !onRender(done); i++) {
@@ -1534,6 +2301,52 @@ public final class E2eDriver {
 				&& onRender(() -> card(1) == null), "Birch is back on Bedrock and ready");
 	}
 
+	private void controlsSelectionAndDpad() throws Exception {
+		press(LOBBY_PAD, PadButton.X);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> minecraft.gui.screen() instanceof ControlsScreen c && c.seat() == 1), "the seat's controls open");
+		ControlsScreen screen = onRender(() -> (ControlsScreen) minecraft.gui.screen());
+		try {
+			press(LOBBY_PAD, PadButton.DPAD_DOWN);
+			press(LOBBY_PAD, PadButton.DPAD_UP);
+			check(onRender(screen::focusedAction) == Action.JUMP, "the pad focuses Jump");
+			// The pointer over another row (Drop, in the same column).
+			onRender(() -> {
+				double[] centre = screen.rowCentre(Action.DROP);
+				mouseAt(centre[0], centre[1], false);
+				return null;
+			});
+			Thread.sleep(400);
+			check(onRender(screen::hoveredAction) == Action.DROP, "the pointer is over Drop");
+			check(onRender(screen::selectedRowCount) == 1 && onRender(screen::selectedAction) == Action.JUMP,
+					"exactly one row draws as selected, the focused one (" + onRender(screen::selectedRowCount) + " drawn, "
+							+ onRender(screen::selectedAction) + ")");
+			screenshot("controls-selection");
+			List<String> dpad = new ArrayList<>();
+			for (Action action : List.of(Action.DROP, Action.PERSPECTIVE, Action.SWAP_OFFHAND, Action.CHAT)) {
+				dpad.add(onRender(() -> screen.drawnGlyph(action)));
+			}
+			log("   D-pad glyphs: " + dpad);
+			check(dpad.stream().distinct().count() == 4
+					&& dpad.stream().allMatch(id -> id != null && id.matches("hearthside:glyph/playstation/dpad_(up|down|left|right)")),
+					"the four D-pad bindings draw four different D-pad glyphs in the seat's family");
+			check(onRender(() -> dev.hearthside.fabric.client.ui.HearthDraw.dpadArmsDrawn) > 0,
+					"the pressed arm is painted in the accent at draw time");
+		} finally {
+			onRender(() -> {
+				mouseAt(0, 0, false);
+				return null;
+			});
+			if (onRender(() -> minecraft.gui.screen() == screen)) {
+				press(LOBBY_PAD, PadButton.B);
+			}
+			if (onRender(() -> card(1) != null)) {
+				press(LOBBY_PAD, PadButton.B);
+			}
+		}
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) == null), "back on the ready seat");
+	}
+
 	/** Holds a button down for a while, then lets go. */
 	private void hold(int pad, PadButton button, long millis) throws InterruptedException {
 		PADS.set(pad, new InputFrame(0, InputFrame.buttons(button), 0, 0, 0, 0, 0, 0));
@@ -1710,6 +2523,114 @@ public final class E2eDriver {
 		check(colour == PlayerColors.DEFAULTS[1], "the first free colour was pre-picked");
 		waitFor("the seat ready as " + suggestion, Duration.ofSeconds(120),
 				() -> onRender(() -> Party.current().seatView(1).status()).equals("Ready"));
+	}
+
+	/** The glyphs the shared screen's hint chips draw, after a moment. */
+	private java.util.Set<String> chipGlyphs() throws InterruptedException {
+		dev.hearthside.fabric.client.ui.HintChip.drawn.clear();
+		Thread.sleep(400);
+		return new java.util.TreeSet<>(dev.hearthside.fabric.client.ui.HintChip.drawn);
+	}
+
+	private static boolean allFamily(java.util.Set<String> glyphs, String family) {
+		return !glyphs.isEmpty() && glyphs.stream().allMatch(id -> id.startsWith("hearthside:glyph/" + family + "/"));
+	}
+
+	private void cardKeyboardLegend() throws Exception {
+		String made = onRender(() -> Party.current().seatView(1).name());
+		LobbyScreen lobby = onRender(() -> (LobbyScreen) minecraft.gui.screen());
+		List<Object> chips = onRender(() -> lobby.children().stream()
+				.filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance).map(c -> (Object) c).toList());
+		// Player2 types a new name on their card.
+		press(LOBBY_PAD, PadButton.Y);
+		check(onRender(() -> card(1) != null && card(1).changing()), "Y reopens Player2's card");
+		toNew(1, LOBBY_PAD);
+		press(LOBBY_PAD, PadButton.A);
+		check(onRender(() -> card(1).keyboard() != null), "New opens the name keyboard");
+		Thread.sleep(300);
+		List<String> legend = dev.hearthside.fabric.client.ui.KeyboardWidget.drawnLegend;
+		log("   legend: " + legend);
+		List<String> labels = legend.stream().map(entry -> entry.substring(entry.indexOf(' ') + 1)).toList();
+		check(labels.equals(List.of("Type", "Close", "_", "Del", "Aa", "Done")),
+				"the legend says A Type, B Close, Y _ (a name has no spaces), X Del, LB/RB Aa and Menu Done (" + labels + ")");
+		check(legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/a "))
+				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/b "))
+				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/left_bumper+hearthside:glyph/playstation/right_bumper "))
+				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/start ")),
+				"in the PlayStation pad's own glyphs (L1/R1 for the layers)");
+		screenshot("lobby-keyboard-legend");
+		// B closes only the keyboard: the card stays on its carousel, the lobby stays, its chips are the same.
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) != null && card(1).keyboard() == null && card(1).stage() == SeatCard.Stage.CAROUSEL),
+				"B closes the keyboard; the card stays");
+		check(onRender(() -> minecraft.gui.screen()) == lobby, "the lobby does not go back");
+		check(onRender(() -> lobby.children().stream().filter(dev.hearthside.fabric.client.ui.HintChip.class::isInstance)
+				.map(c -> (Object) c).toList()).equals(chips), "the lobby's chips are unchanged");
+		press(LOBBY_PAD, PadButton.B);
+		check(onRender(() -> card(1) == null && Party.current().seatView(1).name().equals(made)),
+				"B on the carousel keeps " + made);
+		// The shared screens' chips follow the controller driving them.
+		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			// Player 1 takes it (a run that skipped L6 still remembers it as theirs, and it is taken at once).
+			if (!onRender(() -> Party.current().hostHasController())) {
+				onRender(() -> {
+					Screens.getWidgets(lobby).stream()
+							.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("+ Controller"))
+							.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+					return null;
+				});
+				press(HOST_PAD, PadButton.A);
+			}
+			waitFor("player 1 has the Xbox pad", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+			// Player 1 nudges the pointer: the lobby's chips are theirs.
+			PADS.set(HOST_PAD, new InputFrame(0, 0, 0.6f, 0, 0, 0, 0, 0));
+			Thread.sleep(150);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			java.util.Set<String> lobbyGlyphs = chipGlyphs();
+			check(allFamily(lobbyGlyphs, "xbox"), "player 1's Xbox pad moved the pointer: the lobby's chips are Xbox " + lobbyGlyphs);
+			// Menu on Player2's PlayStation pad opens the picker: its chips are theirs at once.
+			press(LOBBY_PAD, PadButton.START);
+			waitFor("the world picker", Duration.ofSeconds(15),
+					() -> onRender(() -> minecraft.gui.screen() instanceof WorldsScreen worlds && worlds.loaded()));
+			java.util.Set<String> pickerGlyphs = chipGlyphs();
+			check(allFamily(pickerGlyphs, "playstation"), "Menu on the PlayStation pad: the picker's chips are PlayStation " + pickerGlyphs);
+			WorldsScreen picker = onRender(() -> (WorldsScreen) minecraft.gui.screen());
+			pressUntil(LOBBY_PAD, PadButton.DPAD_DOWN, 12, () -> "".equals(picker.focusedLevelId()));
+			press(LOBBY_PAD, PadButton.A);
+			check(onRender(() -> minecraft.gui.screen() instanceof NewWorldScreen), "Create opens New World");
+			java.util.Set<String> newWorldGlyphs = chipGlyphs();
+			check(allFamily(newWorldGlyphs, "playstation"), "New World driven by the PlayStation pad: PlayStation chips " + newWorldGlyphs);
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			newWorldGlyphs = chipGlyphs();
+			check(allFamily(newWorldGlyphs, "xbox"), "then driven by the Xbox pad: Xbox chips " + newWorldGlyphs);
+			// A world's name is free text (W3's keyboard): there Y types a space.
+			NewWorldScreen newWorld = onRender(() -> (NewWorldScreen) minecraft.gui.screen());
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> newWorld.focusedRow().equals("name"));
+			press(HOST_PAD, PadButton.A);
+			check(onRender(newWorld::typing), "A on the world's name opens the keyboard");
+			Thread.sleep(300);
+			List<String> worldLegend = dev.hearthside.fabric.client.ui.KeyboardWidget.drawnLegend;
+			log("   world-name legend: " + worldLegend);
+			List<String> worldLabels = worldLegend.stream().map(entry -> entry.substring(entry.indexOf(' ') + 1)).toList();
+			check(worldLabels.equals(List.of("Type", "Close", "Space", "Del", "Aa!", "Done")),
+					"the world-name legend says A Type, B Close, Y Space, X Del, LB/RB Aa! and Menu Done (" + worldLabels + ")");
+			press(HOST_PAD, PadButton.B);
+			check(!onRender(newWorld::typing), "B closes the world-name keyboard");
+		} finally {
+			backToLobby();
+			onRender(() -> {
+				if (Party.current() != null && Party.current().hostHasController()) {
+					Party.current().releaseController();
+				}
+				return null;
+			});
+			PADS.unplug(HOST_PAD);
+			Thread.sleep(300);
+		}
+		check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen && card(1) == null
+				&& Party.current().seatView(1).status().equals("Ready")), "back in the lobby with Player2 ready");
 	}
 
 	private void orphanedTitleReturnsToLobby() throws Exception {
@@ -2140,6 +3061,489 @@ public final class E2eDriver {
 		server("gamemode creative Player2");
 	}
 
+	private void dropTapAndHold() throws Exception {
+		aimAtTarget("kill @e[type=item]", "item replace entity Player2 weapon.mainhand with minecraft:cobblestone 16");
+		ServerPlayer guest = guest("Player2");
+		Callable<Integer> inHand = () -> minecraft.getSingleplayerServer()
+				.submit(() -> guest.getInventory().getSelectedItem().getCount()).join();
+		check(inHand.call() == 16, "Player2 holds 16 cobblestone");
+		hold(102, PadButton.DPAD_DOWN, 100);
+		waitFor("one thrown", Duration.ofSeconds(5), () -> inHand.call() == 15 && cobblestoneOnGround(guest) == 1);
+		hold(102, PadButton.DPAD_DOWN, 700);
+		waitFor("the rest thrown", Duration.ofSeconds(5), () -> inHand.call() == 0);
+		waitFor("16 cobblestone on the ground", Duration.ofSeconds(5), () -> cobblestoneOnGround(guest) == 16);
+
+		// Drop stack on a button of its own: one press throws the lot.
+		Party party = onRender(Party::current);
+		GuestProfile profile = onRender(() -> party.profileOf(1));
+		ControlScheme before = profile.controls();
+		check(before.controlFor(Action.DROP_STACK).isEmpty(), "Drop stack starts unbound");
+		int told = count("hearthside setcontrols");
+		check(onRender(() -> party.saveControls(profile.id(), before.withBinding(Action.DROP_STACK, Control.RIGHT_STICK))),
+				"Drop stack bound to the right stick");
+		try {
+			waitFor("the guest's game told", Duration.ofSeconds(10), () -> count("hearthside setcontrols") > told);
+			server("kill @e[type=item]", "item replace entity Player2 weapon.mainhand with minecraft:cobblestone 16");
+			Thread.sleep(300);
+			check(inHand.call() == 16, "Player2 holds 16 again");
+			press(102, PadButton.RIGHT_STICK);
+			waitFor("the stack thrown at once", Duration.ofSeconds(5), () -> inHand.call() == 0);
+			check(cobblestoneOnGround(guest) == 16, "all 16 on the ground");
+		} finally {
+			onRender(() -> party.saveControls(profile.id(), before));
+			server("kill @e[type=item]", "gamemode creative Player2");
+		}
+
+		// The controls screen lists it, beside Drop, with no button until a player gives it one.
+		ControlsScreen screen = onRender(() -> {
+			GuestProfile fresh = new GuestProfile(UUID.randomUUID(), "E2E", SkinRef.defaultSkin("alex"), null,
+					ControlScheme.BEDROCK);
+			ControlsScreen controls = new ControlsScreen(null, party, 1, fresh);
+			minecraft.gui.setScreen(controls);
+			return controls;
+		});
+		try {
+			var rows = onRender(screen::listedRows);
+			List<Action> actions = rows.stream().map(Map.Entry::getKey).toList();
+			check(actions.contains(Action.DROP_STACK), "the controls screen has a Drop stack row");
+			check(actions.indexOf(Action.DROP_STACK) == actions.indexOf(Action.DROP) + 1, "right after Drop");
+			check(onRender(() -> screen.model().scheme().controlFor(Action.DROP_STACK)).isEmpty(),
+					"unbound (—) by default");
+			int width = onRender(() -> screen.width), height = onRender(() -> screen.height);
+			for (int i = 0; i < rows.size(); i++) {
+				var a = rows.get(i).getValue();
+				check(a.left() >= 0 && a.right() <= width && a.bottom() <= height, RemapModel.label(actions.get(i)) + " row is on screen");
+				for (int j = i + 1; j < rows.size(); j++) {
+					check(!a.overlaps(rows.get(j).getValue()), "rows " + actions.get(i) + " and " + actions.get(j) + " don't overlap");
+				}
+			}
+			screenshot("controls-drop-stack");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
+	}
+
+	/** Cobblestone lying near a player, kept on the ground (nobody picks it up) so it can be counted. */
+	private int cobblestoneOnGround(ServerPlayer player) {
+		return minecraft.getSingleplayerServer().submit(() -> {
+			int total = 0;
+			for (ItemEntity item : player.level().getEntitiesOfClass(ItemEntity.class, player.getBoundingBox().inflate(12))) {
+				if (item.getItem().is(Items.COBBLESTONE)) {
+					item.setNeverPickUp();
+					total += item.getItem().getCount();
+				}
+			}
+			return total;
+		}).join();
+	}
+
+	// ---- Player 1 on a controller, in the world ----
+
+	/** Player 1 takes a controller the way their lobby card does: armed, then A on the free pad. */
+	private void claimHostPad() throws Exception {
+		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+		Thread.sleep(300);
+		onRender(() -> {
+			Party.current().useController();
+			return null;
+		});
+		press(HOST_PAD, PadButton.A);
+		waitFor("player 1 has the controller", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+		Thread.sleep(500); // the claiming A's jump lands
+	}
+
+	/** Player 1 gives the controller back (and it is forgotten), as before the step. */
+	private void releaseHostPad() throws Exception {
+		onRender(() -> {
+			if (minecraft.gui.screen() != null) {
+				minecraft.gui.setScreen(null);
+			}
+			Party.current().releaseController();
+			return null;
+		});
+		PADS.unplug(HOST_PAD);
+		Thread.sleep(300);
+	}
+
+	private void hostPointerOnScreens() throws Exception {
+		claimHostPad();
+		try {
+			check(!VirtualCursor.isDrawn(), "no pointer in play");
+			String name = onRender(() -> minecraft.player.getName().getString());
+			IntegratedServer server = minecraft.getSingleplayerServer();
+			server.submit(() -> {
+				ServerPlayer host = server.getPlayerList().getPlayerByName(name);
+				host.kill(host.level());
+			}).join();
+			waitFor("the death screen", Duration.ofSeconds(10), () -> onRender(() -> minecraft.gui.screen() instanceof DeathScreen));
+			Thread.sleep(300);
+			check(VirtualCursor.isDrawn(), "player 1's pointer is drawn on the death screen");
+			AbstractWidget respawn = onRender(() -> widgetLabelled("deathScreen.respawn"));
+			waitFor("Respawn active", Duration.ofSeconds(5), () -> onRender(() -> respawn.active));
+			steerPointerOnto(HOST_PAD, respawn);
+			screenshot("death-pointer");
+			press(HOST_PAD, PadButton.A);
+			waitFor("respawned, in play", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.player != null && minecraft.player.isAlive() && minecraft.gui.screen() == null));
+			Thread.sleep(200);
+			check(!VirtualCursor.isDrawn(), "the pointer is hidden again in play");
+
+			press(HOST_PAD, PadButton.START);
+			waitFor("the pause menu", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof PauseScreen));
+			Thread.sleep(200);
+			check(VirtualCursor.isDrawn(), "the pointer is drawn on the pause menu");
+			press(HOST_PAD, PadButton.B);
+			waitFor("pause menu closed", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+
+			press(HOST_PAD, PadButton.Y);
+			waitFor("the inventory", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() instanceof AbstractContainerScreen<?>));
+			Thread.sleep(200);
+			check(VirtualCursor.isDrawn(), "the pointer is drawn on the inventory");
+			press(HOST_PAD, PadButton.B);
+			waitFor("inventory closed", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+			Thread.sleep(200);
+			check(!VirtualCursor.isDrawn(), "and hidden in play");
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	private void pointerOrMouse() throws Exception {
+		claimHostPad();
+		try {
+			openPause();
+			check(VirtualCursor.isDrawn(), "the controller's pointer is drawn on the pause menu");
+			// Park the pointer on empty space, so a click that went to it would do nothing.
+			PADS.set(HOST_PAD, new InputFrame(0, 0, -1, 0, 0, 0, 0, 0));
+			Thread.sleep(800);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(150);
+			// The OS mouse moves over Back to Game (events as they arrive from the window), rests, then clicks.
+			double[] resume = onRender(() -> windowCentre(widgetLabelled("menu.returnToGame")));
+			osMove(resume[0] - 6, resume[1] - 2);
+			osMove(resume[0], resume[1]);
+			Thread.sleep(300);
+			check(!VirtualCursor.isDrawn(), "the mouse took over: the controller's pointer is hidden");
+			check(onRender(ButtonGuideRenderer::lastLayout).isEmpty(), "and no controller hints while the mouse drives");
+			osButtonOnly(true);
+			osButtonOnly(false);
+			waitFor("the mouse's click closed the menu", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+
+			openPause();
+			double[] mouse = onRender(() -> new double[] {minecraft.mouseHandler.xpos(), minecraft.mouseHandler.ypos()});
+			PADS.set(HOST_PAD, new InputFrame(0, 0, 0, 0.4f, 0, 0, 0, 0));
+			Thread.sleep(60);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(200);
+			check(VirtualCursor.isDrawn(), "the stick takes over again: the pointer is drawn");
+			double[] pointer = {VirtualCursor.x(), VirtualCursor.y()};
+			check(Math.abs(pointer[0] - mouse[0]) < 2 && pointer[1] >= mouse[1] && pointer[1] - mouse[1] < 60,
+					"it starts where the mouse left it (mouse " + Arrays.toString(mouse) + ", pointer " + Arrays.toString(pointer) + ")");
+			steerPointerOnto(HOST_PAD, onRender(() -> widgetLabelled("menu.returnToGame")));
+			press(HOST_PAD, PadButton.A);
+			waitFor("A closed the menu", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/**
+	 * H5b: a real click with no move before it lands where the OS arrow is, not where the controller's pointer rests
+	 * (batch review I2): the pointer parked on Options…, the arrow on empty space, a click opens nothing. The OS arrow is
+	 * hidden while the controller drives, and back once the mouse does.
+	 */
+	private void clickWhereTheArrowIs() throws Exception {
+		claimHostPad();
+		try {
+			openPause();
+			double[] empty = onRender(this::emptySpotOnScreen);
+			osMove(empty[0] + 8, empty[1]);
+			osMove(empty[0], empty[1]);
+			check(onRender(() -> minecraft.gui.screen() instanceof PauseScreen), "the mouse's moves clicked nothing");
+			steerPointerOnto(HOST_PAD, onRender(() -> widgetLabelled("menu.options")));
+			Thread.sleep(150);
+			check(VirtualCursor.isDrawn(), "the controller drives: its pointer is drawn on Options…");
+			boolean arrowShown = onRender(SDLMouse::SDL_CursorVisible);
+			log("   OS arrow shown while the controller drives: " + arrowShown);
+			// The real button, pressed and let go where the arrow rests (no move first).
+			osButtonOnly(true);
+			osButtonOnly(false);
+			Thread.sleep(300);
+			String open = onRender(() -> minecraft.gui.screen() == null ? "none" : minecraft.gui.screen().getClass().getSimpleName());
+			check(open.equals("PauseScreen"), "the click landed on empty space where the arrow is: the pause menu is still open (" + open + ")");
+			check(!arrowShown, "the OS arrow was hidden while the controller drove");
+			check(!VirtualCursor.isDrawn(), "the mouse drives now: the controller's pointer is hidden");
+			check(onRender(SDLMouse::SDL_CursorVisible), "and the OS arrow is shown");
+			double[] resume = onRender(() -> windowCentre(widgetLabelled("menu.returnToGame")));
+			osMove(resume[0] - 6, resume[1] - 2);
+			osMove(resume[0], resume[1]);
+			osButtonOnly(true);
+			osButtonOnly(false);
+			waitFor("the mouse's click on Back to Game closed the menu", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() == null));
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/**
+	 * H6: player 1's controller unplugged with the pause menu open (batch review M2): within two frames the pointer and
+	 * the controller hints are gone and the OS arrow is back, and the mouse drives the menu. Plugged back in, it is
+	 * player 1's again.
+	 */
+	private void hostPadUnpluggedOnScreen() throws Exception {
+		claimHostPad();
+		try {
+			openPause();
+			PADS.set(HOST_PAD, new InputFrame(0, 0, -1, 0, 0, 0, 0, 0));
+			Thread.sleep(400);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(300);
+			check(VirtualCursor.isDrawn(), "the controller's pointer is drawn on the pause menu");
+			check(!onRender(ButtonGuideRenderer::lastLayout).isEmpty(), "with its hints");
+			java.util.concurrent.CompletableFuture<Object[]> afterTwoFrames = new java.util.concurrent.CompletableFuture<>();
+			int[] frames = {0};
+			Runnable[] counter = new Runnable[1];
+			counter[0] = () -> {
+				// At the start of the third frame since the unplug: two whole frames have run.
+				if (++frames[0] == 3) {
+					afterTwoFrames.complete(new Object[] {VirtualCursor.isDrawn(), ButtonGuideRenderer.lastLayout(),
+							SDLMouse.SDL_CursorVisible(), minecraft.gui.screen() instanceof PauseScreen});
+					dev.hearthside.fabric.client.input.FrameHook.unregister(counter[0]);
+				}
+			};
+			onRender(() -> {
+				PADS.unplug(HOST_PAD);
+				dev.hearthside.fabric.client.input.FrameHook.register(counter[0]);
+				return null;
+			});
+			Object[] state = afterTwoFrames.get(5, TimeUnit.SECONDS);
+			log("   two frames after the unplug: pointer drawn=" + state[0] + " hints=" + state[1] + " OS arrow shown=" + state[2]);
+			check((Boolean) state[3], "the pause menu is still open");
+			check(!(Boolean) state[0], "the controller's pointer is hidden");
+			check(((List<?>) state[1]).isEmpty(), "no controller hints");
+			check((Boolean) state[2], "the OS arrow is shown");
+			double[] resume = onRender(() -> windowCentre(widgetLabelled("menu.returnToGame")));
+			osMove(resume[0] - 6, resume[1] - 2);
+			osMove(resume[0], resume[1]);
+			osButtonOnly(true);
+			osButtonOnly(false);
+			waitFor("the mouse's click on Back to Game closed the menu", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() == null));
+			PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+			waitFor("player 1's controller back", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/** A point on the open screen with no widget under it, in window coordinates: the left edge, half way down. */
+	private double[] emptySpotOnScreen() {
+		Screen screen = minecraft.gui.screen();
+		double gx = 6, gy = screen.height / 2.0;
+		check(Screens.getWidgets(screen).stream().noneMatch(w -> w.isMouseOver(gx, gy)), "the spot at " + gx + "," + gy + " is empty");
+		double toScreen = (double) minecraft.getWindow().getScreenWidth() / minecraft.getWindow().getGuiScaledWidth();
+		return new double[] {gx * toScreen, gy * toScreen};
+	}
+
+	private void openPause() throws Exception {
+		// Minecraft only pauses from play (a world that just opened may still show its loading screen).
+		waitFor("in play", Duration.ofSeconds(10), () -> onRender(() -> minecraft.gui.screen() == null));
+		String before = onRender(() -> {
+			Screen open = minecraft.gui.screen();
+			minecraft.pauseGame(false);
+			return open == null ? "none" : open.getClass().getSimpleName();
+		});
+		waitFor("the pause menu (over " + before + ")", Duration.ofSeconds(5),
+				() -> onRender(() -> minecraft.gui.screen() instanceof PauseScreen));
+		Thread.sleep(300);
+	}
+
+	/** A widget's centre in window coordinates, where OS mouse events are. Render thread. */
+	private double[] windowCentre(AbstractWidget widget) {
+		var window = minecraft.getWindow();
+		double toScreen = (double) window.getScreenWidth() / window.getGuiScaledWidth();
+		return new double[] {(widget.getX() + widget.getWidth() / 2.0) * toScreen, (widget.getY() + widget.getHeight() / 2.0) * toScreen};
+	}
+
+	/** An OS mouse move, as the window delivers it. */
+	private void osMove(double windowX, double windowY) throws Exception {
+		onRender(() -> {
+			minecraft.mouseHandler.onMove(minecraft.getWindow().handle(), windowX, windowY, 0, 0);
+			return null;
+		});
+		Thread.sleep(50);
+	}
+
+	/** An OS left-button press or release where the mouse rests. */
+	private void osButtonOnly(boolean press) throws Exception {
+		onRender(() -> {
+			minecraft.mouseHandler.onButton(minecraft.getWindow().handle(),
+					new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), press ? 1 : 0);
+			return null;
+		});
+		Thread.sleep(100);
+	}
+
+	/** The open screen's widget with this translated label. Render thread. */
+	private AbstractWidget widgetLabelled(String key) {
+		String label = Component.translatable(key).getString();
+		return Screens.getWidgets(minecraft.gui.screen()).stream().filter(w -> w.getMessage().getString().equals(label))
+				.findFirst().orElseThrow();
+	}
+
+	/** Steers the pointer onto a widget with a pad's left stick, slowing as it nears. */
+	private void steerPointerOnto(int pad, AbstractWidget target) throws Exception {
+		long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
+		try {
+			while (true) {
+				double[] off = onRender(() -> {
+					var window = minecraft.getWindow();
+					double toGui = (double) window.getGuiScaledWidth() / window.getScreenWidth();
+					return new double[] {target.getX() + target.getWidth() / 2.0 - VirtualCursor.x() * toGui,
+							target.getY() + target.getHeight() / 2.0 - VirtualCursor.y() * toGui};
+				});
+				if (Math.abs(off[0]) < target.getWidth() / 2.0 - 3 && Math.abs(off[1]) < target.getHeight() / 2.0 - 3) {
+					break;
+				}
+				check(System.nanoTime() < deadline, "the pointer reached " + target.getMessage().getString());
+				PADS.set(pad, new InputFrame(0, 0, stick(off[0]), stick(off[1]), 0, 0, 0, 0));
+				Thread.sleep(30);
+			}
+		} finally {
+			PADS.set(pad, InputFrame.NEUTRAL);
+		}
+		Thread.sleep(150);
+	}
+
+	/** Stick deflection toward a GUI-pixel offset: full far away, gentle (still past the dead zone) close in. */
+	private static float stick(double offset) {
+		if (Math.abs(offset) < 2) {
+			return 0;
+		}
+		return (float) (Math.signum(offset) * Math.clamp(Math.abs(offset) / 40, 0.3, 1));
+	}
+
+	private void hintsStayClear() throws Exception {
+		claimHostPad();
+		try {
+			PauseScreen pause = onRender(() -> {
+				minecraft.pauseGame(false);
+				return (PauseScreen) minecraft.gui.screen();
+			});
+			// Away from every button: nothing to select.
+			PADS.set(HOST_PAD, new InputFrame(0, 0, -1, 0, 0, 0, 0, 0));
+			Thread.sleep(800);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			List<String> labels = hintsClear("pause");
+			check(labels.contains("Back"), "the pause menu offers Back");
+			check(!labels.contains("Select"), "no Select with the pointer on empty space");
+			AbstractWidget resume = onRender(() -> widgetLabelled("menu.returnToGame"));
+			steerPointerOnto(HOST_PAD, resume);
+			check(hintsClear("pause, on Back to Game").contains("Select"), "Select with the pointer on a button");
+			screenshot("hints-pause");
+
+			onRender(() -> {
+				minecraft.gui.setScreen(new OptionsScreen(pause, minecraft.options));
+				return null;
+			});
+			hintsClear("options");
+			screenshot("hints-options");
+			onRender(() -> {
+				minecraft.gui.setScreen(new VideoSettingsScreen(pause, minecraft, minecraft.options));
+				return null;
+			});
+			hintsClear("video");
+			screenshot("hints-video");
+			onRender(() -> {
+				minecraft.gui.setScreen(new DeathScreen(Component.literal("E2E"), false, minecraft.player));
+				return null;
+			});
+			check(!hintsClear("death").contains("Back"), "no Back on the death screen (B does nothing there)");
+			AbstractWidget respawn = onRender(() -> widgetLabelled("deathScreen.respawn"));
+			waitFor("Respawn active", Duration.ofSeconds(5), () -> onRender(() -> respawn.active));
+			steerPointerOnto(HOST_PAD, respawn);
+			check(hintsClear("death, on Respawn").contains("Select"), "Select on the death screen's Respawn");
+			screenshot("hints-death");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			Thread.sleep(300); // back in play first: a button already down as a screen closes is held from it
+			press(HOST_PAD, PadButton.Y);
+			waitFor("the inventory", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() instanceof AbstractContainerScreen<?>));
+			check(!hintsClear("inventory").isEmpty(), "the inventory has its hints");
+			screenshot("hints-inventory");
+			onRender(() -> {
+				minecraft.gui.setScreen(new ChatScreen("", false));
+				return null;
+			});
+			check(hintsClear("chat").isEmpty(), "nothing drawn over chat");
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/**
+	 * After two frames on the open screen: no drawn hint covers a widget it shows (inside lists too) or a container's
+	 * panel. Logs and returns the hints' labels.
+	 */
+	private List<String> hintsClear(String name) throws Exception {
+		Thread.sleep(300);
+		return onRender(() -> {
+			Screen screen = minecraft.gui.screen();
+			List<ButtonGuideRenderer.Hint> hints = ButtonGuideRenderer.lastLayout();
+			List<Rect> shown = new ArrayList<>();
+			shownWidgets(screen.children(), new Rect(0, 0, screen.width, screen.height), shown);
+			shown.add(new Rect(screen.width / 2 - 91, screen.height - 22, 182, 22)); // the hotbar, under in-world screens
+			if (screen instanceof AbstractContainerScreen<?> container) {
+				ContainerScreenAccessor panel = (ContainerScreenAccessor) container;
+				shown.add(new Rect(panel.hearthside$leftPos(), panel.hearthside$topPos(), panel.hearthside$imageWidth(),
+						panel.hearthside$imageHeight()));
+			}
+			for (ButtonGuideRenderer.Hint hint : hints) {
+				check(new Rect(0, 0, screen.width, screen.height).contains(hint.rect()), name + ": " + hint + " is on screen");
+				for (Rect widget : shown) {
+					check(!hint.rect().intersects(widget), name + ": " + hint + " covers " + widget);
+				}
+			}
+			List<String> labels = hints.stream().map(ButtonGuideRenderer.Hint::label).toList();
+			log("   hints " + name + ": " + labels);
+			return labels;
+		});
+	}
+
+	/** The widgets a screen shows, inside lists and their entries too, clipped to what each list shows. */
+	private static void shownWidgets(List<? extends GuiEventListener> children, Rect clip, List<Rect> into) {
+		for (GuiEventListener child : children) {
+			if (!(child instanceof AbstractWidget widget)) {
+				if (child instanceof ContainerEventHandler entry) {
+					shownWidgets(entry.children(), clip, into);
+				}
+				continue;
+			}
+			if (!widget.visible) {
+				continue;
+			}
+			int x0 = Math.max(widget.getX(), clip.x()), y0 = Math.max(widget.getY(), clip.y());
+			int x1 = Math.min(widget.getRight(), clip.x() + clip.width());
+			int y1 = Math.min(widget.getBottom(), clip.y() + clip.height());
+			if (x1 <= x0 || y1 <= y0) {
+				continue;
+			}
+			Rect rect = new Rect(x0, y0, x1 - x0, y1 - y0);
+			into.add(rect);
+			if (widget instanceof ContainerEventHandler list) {
+				shownWidgets(list.children(), rect, into);
+			}
+		}
+	}
+
 	private BlockState blockAt(ServerPlayer player, BlockPos pos) {
 		return minecraft.getSingleplayerServer().submit(() -> player.level().getBlockState(pos)).join();
 	}
@@ -2227,7 +3631,21 @@ public final class E2eDriver {
 				.toList();
 	}
 
+	/** The step ids from {@code first} to {@code last} in run order, both included (a section of the run). */
+	private static List<String> between(String first, String last) {
+		return ORDER.subList(ORDER.indexOf(first), ORDER.indexOf(last) + 1);
+	}
+
+	/** Runs a step, or reports it as SKIP when the focused run doesn't need it. Its id is its name up to the first space. */
 	private void step(String name, ThrowingRunnable body) {
+		String id = name.substring(0, name.indexOf(' '));
+		if (!ORDER.contains(id)) {
+			throw new IllegalStateException("E2E step " + id + " is missing from NEEDS");
+		}
+		if (!selection.runs(id)) {
+			log("SKIP " + name);
+			return;
+		}
 		long start = System.nanoTime();
 		try {
 			body.run();

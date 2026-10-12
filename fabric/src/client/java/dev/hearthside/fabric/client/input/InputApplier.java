@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
 import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.DropGesture;
 import dev.hearthside.core.input.FreshInput;
 import dev.hearthside.core.input.GameplayIntent;
 import dev.hearthside.core.input.GamepadMapping;
@@ -11,6 +12,7 @@ import dev.hearthside.core.input.HeldSuppression;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.MenuAction;
 import dev.hearthside.core.input.MenuIntent;
+import dev.hearthside.core.input.PointerHandOff;
 import dev.hearthside.core.input.SlotGeometry;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
@@ -59,9 +61,31 @@ public final class InputApplier {
 	private boolean inMenu;
 	/** Key mappings this applier is currently holding down. */
 	private final Set<Action> holding = EnumSet.noneOf(Action.class);
+	/** Drop: a tap throws one, holding throws the rest of the stack. */
+	private final DropGesture drop = new DropGesture();
+	/** Player 1's screens are shared with the OS mouse: whichever was used last drives them. */
+	private boolean sharesWithMouse;
+	/**
+	 * The OS mouse drives the open screen ({@link RealMouse#handOff()}); the pointer waits (hidden) until the stick, D-pad
+	 * or A takes it back.
+	 */
+	private boolean mouseDriving;
 
 	public InputApplier(Minecraft minecraft) {
 		this.minecraft = minecraft;
+	}
+
+	/** Player 1's applier, in the world: the OS mouse may take over a screen from the pointer, and give it back. */
+	public void shareWithMouse(boolean share) {
+		sharesWithMouse = share;
+		if (!share) {
+			mouseDriving = false;
+		}
+	}
+
+	/** Whether the OS mouse, not this controller's pointer, drives the open screen. */
+	public boolean mouseDriving() {
+		return mouseDriving && inMenu;
 	}
 
 	/** Uses {@code newScheme} for bindings and look settings. Does not touch game options. */
@@ -103,6 +127,10 @@ public final class InputApplier {
 		try {
 			Screen screen = minecraft.gui.screen();
 			if (screen == null) {
+				if (sharesWithMouse && used(frame)) {
+					// Playing with the controller: a screen that opens now is the controller's (Esc after mouse look, the mouse's).
+					RealMouse.handOff().padUsed(now);
+				}
 				if (inMenu) {
 					HearthsideMod.LOGGER.info("Hearthside controller: world mode");
 					// Buttons still held from the menu (B to close, A on a widget) must not act in the world.
@@ -112,7 +140,7 @@ public final class InputApplier {
 				inMenu = false;
 				PadPlay.set(true);
 				InputFrame filtered = suppression.filter(frame);
-				applyGameplay(GamepadMapping.gameplay(scheme, previousGameplay, filtered, dt));
+				applyGameplay(GamepadMapping.gameplay(scheme, previousGameplay, filtered, dt), now);
 				previousGameplay = filtered;
 			} else {
 				if (!inMenu) {
@@ -120,10 +148,11 @@ public final class InputApplier {
 					inMenu = true;
 					PadPlay.set(false);
 					releaseHeld();
+					drop.step(false, now);
 					PadMovement.clear();
 					VirtualCursor.centre(minecraft.getWindow());
 				}
-				applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt));
+				applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt), now);
 			}
 		} finally {
 			// Even if applying failed, never replay the same button edge on the next frame.
@@ -135,13 +164,14 @@ public final class InputApplier {
 	public void release() {
 		PadPlay.set(false);
 		releaseHeld();
+		drop.step(false, System.nanoTime());
 		PadMovement.clear();
 		input.clear();
 		previous = InputFrame.NEUTRAL;
 		previousGameplay = InputFrame.NEUTRAL;
 	}
 
-	private void applyGameplay(GameplayIntent intent) {
+	private void applyGameplay(GameplayIntent intent, long now) {
 		LocalPlayer player = minecraft.player;
 		if (player == null || minecraft.level == null) {
 			return;
@@ -159,14 +189,24 @@ public final class InputApplier {
 		// Attack and use are held above and also clicked here, like a mouse button: vanilla starts
 		// an attack or a use from a click and only continues it from the held state.
 		Map<Action, KeyMapping> clickMappings = Map.of(
-				Action.ATTACK, o.keyAttack, Action.USE, o.keyUse, Action.INVENTORY, o.keyInventory, Action.DROP, o.keyDrop, Action.SWAP_OFFHAND, o.keySwapOffhand,
+				Action.ATTACK, o.keyAttack, Action.USE, o.keyUse, Action.INVENTORY, o.keyInventory, Action.SWAP_OFFHAND, o.keySwapOffhand,
 				Action.PERSPECTIVE, o.keyTogglePerspective, Action.PICK_BLOCK, o.keyPickItem, Action.CHAT, o.keyChat);
 		clickMappings.forEach((action, mapping) -> {
 			if (intent.pressed().contains(action)) {
-				KeyMappingAccessor accessor = (KeyMappingAccessor) mapping;
-				accessor.hearthside$setClickCount(accessor.hearthside$getClickCount() + 1);
+				click(mapping);
 			}
 		});
+		// One item through vanilla's Q (its spectator check and drop-spam throttle); the rest of the stack as Ctrl+Q does.
+		drop.step(intent.held().contains(Action.DROP), now).ifPresent(d -> {
+			if (d == DropGesture.Drop.ONE) {
+				click(o.keyDrop);
+			} else {
+				dropStack(player);
+			}
+		});
+		if (intent.pressed().contains(Action.DROP_STACK)) {
+			dropStack(player);
+		}
 
 		if (intent.pressed().contains(Action.CRAFTING)) {
 			// A split-screen window is often narrower than vanilla's 379 GUI px, where the recipe book
@@ -192,9 +232,44 @@ public final class InputApplier {
 		}
 	}
 
-	private void applyMenu(Screen screen, MenuIntent intent) {
+	/** Presses a key mapping once, as a key press would (vanilla consumes the click on its next tick). */
+	private static void click(KeyMapping mapping) {
+		KeyMappingAccessor accessor = (KeyMappingAccessor) mapping;
+		accessor.hearthside$setClickCount(accessor.hearthside$getClickCount() + 1);
+	}
+
+	/** Throws the selected stack (what's left of it), as Ctrl+Q does. */
+	private void dropStack(LocalPlayer player) {
+		if (!player.isSpectator() && minecraft.gameMode != null) {
+			minecraft.gameMode.dropItem(player, true);
+		}
+	}
+
+	private void applyMenu(Screen screen, MenuIntent intent, long now) {
 		Window window = minecraft.getWindow();
 		long handle = window.handle();
+		if (sharesWithMouse) {
+			// The screen is whichever player 1 used last: the mouse once it really moves or clicks (RealMouse), the
+			// controller once it points or clicks.
+			boolean points = intent.cursorDx() != 0 || intent.cursorDy() != 0 || intent.hopX() != 0 || intent.hopY() != 0
+					|| intent.down().contains(MenuAction.PICK_PLACE) || intent.down().contains(MenuAction.TAKE_HALF)
+					|| intent.down().contains(MenuAction.QUICK_MOVE);
+			PointerHandOff handOff = RealMouse.handOff();
+			if (points) {
+				if (handOff.owner() == PointerHandOff.Owner.MOUSE) {
+					// The controller takes over from where the mouse left off.
+					VirtualCursor.moveTo(minecraft.mouseHandler.xpos(), minecraft.mouseHandler.ypos(), window);
+				}
+				handOff.padUsed(now);
+			}
+			mouseDriving = handOff.owner() == PointerHandOff.Owner.MOUSE;
+		}
+		if (mouseDriving) {
+			// Nothing of the pointer's; a button let go still goes out, and the right stick still scrolls, B still closes.
+			releases(handle, intent);
+			scrollAndClose(screen, handle, intent);
+			return;
+		}
 		VirtualCursor.moveTo(VirtualCursor.x() + intent.cursorDx(), VirtualCursor.y() + intent.cursorDy(), window);
 
 		if (screen instanceof AbstractContainerScreen<?> container) {
@@ -219,12 +294,36 @@ public final class InputApplier {
 		button(handle, intent, MenuAction.PICK_PLACE, InputConstants.MOUSE_BUTTON_LEFT, 0);
 		button(handle, intent, MenuAction.TAKE_HALF, InputConstants.MOUSE_BUTTON_RIGHT, 0);
 		button(handle, intent, MenuAction.QUICK_MOVE, InputConstants.MOUSE_BUTTON_LEFT, InputConstants.MOD_SHIFT);
+		scrollAndClose(screen, handle, intent);
+	}
+
+	private void scrollAndClose(Screen screen, long handle, MenuIntent intent) {
 		if (intent.scroll() != 0) {
 			SyntheticMouse.run(() -> minecraft.mouseHandler.onScroll(handle, 0, intent.scroll()));
 		}
 		if (intent.down().contains(MenuAction.CLOSE) && minecraft.gui.screen() == screen && screen.shouldCloseOnEsc()) {
 			screen.onClose();
 		}
+	}
+
+	/** Lets go of any mouse button the controller pressed and has now released. */
+	private void releases(long handle, MenuIntent intent) {
+		release(handle, intent, MenuAction.PICK_PLACE, InputConstants.MOUSE_BUTTON_LEFT, 0);
+		release(handle, intent, MenuAction.TAKE_HALF, InputConstants.MOUSE_BUTTON_RIGHT, 0);
+		release(handle, intent, MenuAction.QUICK_MOVE, InputConstants.MOUSE_BUTTON_LEFT, InputConstants.MOD_SHIFT);
+	}
+
+	private void release(long handle, MenuIntent intent, MenuAction action, int button, int modifiers) {
+		if (intent.up().contains(action)) {
+			SyntheticMouse.run(() -> minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(button, modifiers), RELEASE));
+		}
+	}
+
+	/** Whether the controller is being used: a button, a trigger or a stick past the dead zone. */
+	private boolean used(InputFrame f) {
+		float zone = scheme.deadZone();
+		return f.buttons() != 0 || f.leftTrigger() > 0.3f || f.rightTrigger() > 0.3f
+				|| Math.hypot(f.leftX(), f.leftY()) > zone || Math.hypot(f.rightX(), f.rightY()) > zone;
 	}
 
 	private void button(long handle, MenuIntent intent, MenuAction action, int button, int modifiers) {

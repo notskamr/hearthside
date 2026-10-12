@@ -22,10 +22,18 @@ public final class HearthButton extends Button {
 		super(x, y, width, height, message, onPress, DEFAULT_NARRATION);
 	}
 
-	/** Hearthside's knock, not vanilla's click. */
+	private HearthSounds.Ui sound = HearthSounds.Ui.KNOCK;
+
+	/** Hearthside's knock, not vanilla's click (or the sound {@link #withSound} gave). */
 	@Override
 	public void playDownSound(SoundManager soundManager) {
-		HearthSounds.play(HearthSounds.Ui.KNOCK);
+		HearthSounds.play(sound);
+	}
+
+	/** Sounds like this when pressed: a row that cycles a value turns a page, as left and right on it do. */
+	public HearthButton withSound(HearthSounds.Ui sound) {
+		this.sound = sound;
+		return this;
 	}
 
 	/** Shows this control's glyph (in the family {@code style} gives) before the label. */
@@ -37,9 +45,14 @@ public final class HearthButton extends Button {
 
 	@Override
 	protected void extractContents(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+		// One selection on a screen: the focused button lights, one merely under the pointer only glows.
+		boolean selected = HearthDraw.selected(this);
 		var sprite = !isActive() ? HearthSprites.BUTTON_DISABLED
-				: isHoveredOrFocused() ? HearthSprites.BUTTON_HIGHLIGHTED : HearthSprites.BUTTON;
+				: selected ? HearthSprites.BUTTON_HIGHLIGHTED : HearthSprites.BUTTON;
 		g.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, getX(), getY(), getWidth(), getHeight());
+		if (isActive() && !selected && isHovered()) {
+			HearthDraw.hoverGlow(g, getX(), getY(), getWidth(), getHeight());
+		}
 		var font = Minecraft.getInstance().font;
 		int colour = isActive() ? HearthDraw.CREAM : 0xFF8A7A6A;
 		int textY = getY() + (getHeight() - 8) / 2;

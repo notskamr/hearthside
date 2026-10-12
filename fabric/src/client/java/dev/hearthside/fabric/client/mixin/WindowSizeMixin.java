@@ -10,8 +10,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /** Every place Minecraft writes the real window size into its size fields: put the virtual size back afterwards. */
 @Mixin(Window.class)
 abstract class WindowSizeMixin {
-	@Inject(method = {"onResize", "onFramebufferResize", "refreshFramebufferSize", "syncWindow"}, at = @At("RETURN"))
+	@Inject(method = {"onResize", "onFramebufferResize", "refreshFramebufferSize", "syncWindow", "setMode"}, at = @At("RETURN"))
 	private void hearthside$keepVirtualSize(CallbackInfo ci) {
 		VirtualSizing.reapply((Window) (Object) this);
+	}
+
+	/** Going fullscreen, Minecraft remembers the window's size to restore later: the real one, not the virtual one. */
+	@Inject(method = "setMode", at = @At("HEAD"))
+	private void hearthside$realSizeForFullscreen(CallbackInfo ci) {
+		VirtualSizing.realScreenSize((Window) (Object) this);
 	}
 }

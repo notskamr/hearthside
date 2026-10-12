@@ -8,13 +8,12 @@ import java.util.Set;
 /**
  * Builds a satellite's command line from the host's own launch.
  *
- * <p>The satellite runs the host's exact JVM, classpath and mods, with a smaller heap, without the
- * host's debugger or class-data archive, and with the host's account identity replaced by the
- * guest's. The launch secret travels in the environment, never on the command line.
+ * <p>The satellite runs the host's exact JVM, classpath and mods, with the configured heap and
+ * render-distance cap, without the host's debugger or class-data archive, and with the host's
+ * account identity replaced by the guest's. The launch secret travels in the environment, never on
+ * the command line.
  */
 public final class LaunchCommandBuilder {
-	public static final double HEAP_FRACTION = 0.6;
-	public static final long MIN_HEAP_MB = 1024;
 	public static final String SECRET_ENV = "HEARTHSIDE_LAUNCH_SECRET";
 
 	/** Fabric Loader 0.19.5 {@code SystemProperties.MODS_FOLDER}. */
@@ -27,7 +26,7 @@ public final class LaunchCommandBuilder {
 	private static final Set<String> DROPPED_GAME_OPTIONS = Set.of(
 			"--username", "--uuid", "--accessToken", "--xuid", "--clientId", "--userType", "--gameDir",
 			"--quickPlayPath", "--quickPlaySingleplayer", "--quickPlayMultiplayer", "--quickPlayRealms",
-			"--server", "--port");
+			"--server", "--port", "--graphicsBackend");
 
 	/**
 	 * The JVM reads extra options from these; a debugger configured through them would make every
@@ -47,9 +46,10 @@ public final class LaunchCommandBuilder {
 				cmd.add(arg);
 			}
 		}
-		long heapMb = Math.max(MIN_HEAP_MB, (long) (host.maxHeapBytes() * HEAP_FRACTION / (1024 * 1024)));
-		cmd.add("-Xmx" + heapMb + "m");
+		// A fixed heap, not a share of the host's: a launcher set to 8 GB would otherwise reserve ~5 GB per guest.
+		cmd.add("-Xmx" + sat.heapMb() + "m");
 		cmd.add("-Dhearthside.role=satellite");
+		cmd.add("-Dhearthside.renderDistanceCap=" + sat.renderDistanceCap());
 		cmd.add("-Dhearthside.controlPort=" + sat.controlPort());
 		cmd.add("-Dhearthside.player=" + sat.playerIndex());
 		switch (sat.presentation()) {
@@ -83,6 +83,9 @@ public final class LaunchCommandBuilder {
 		cmd.add(sat.guestName());
 		cmd.add("--accessToken");
 		cmd.add("0");
+		// The host's compositor imports the guest's frames, so the guest renders with the host's graphics API.
+		cmd.add("--graphicsBackend");
+		cmd.add(sat.graphicsBackend().argument());
 
 		// Minecraft writes logs/ and crash-reports/ relative to the working directory, as the launcher sets it.
 		// SDL reads hints from the environment: a guest window opening must not take focus from the players already playing.

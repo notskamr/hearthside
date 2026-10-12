@@ -5,7 +5,8 @@ import java.util.List;
 
 /**
  * The on-screen keyboard (Spec A section 5.4): a grid of keys a controller moves over. A types, X deletes, Y adds a
- * space, LB/RB switch layers, Menu confirms. In name mode only valid name characters are offered. Not thread-safe.
+ * space, LB/RB switch layers, Menu confirms. In name mode only valid name characters are offered (Y's space is "_").
+ * Not thread-safe.
  */
 public final class KeyboardModel {
 	public enum Mode { NAME, TEXT }
@@ -62,13 +63,11 @@ public final class KeyboardModel {
 		}
 	}
 
+	/** A space; names can't have spaces, so in a name it is "_" (as a name writes one). */
 	public void space() {
-		if (mode == Mode.NAME) {
-			return;
-		}
 		replaceSuggestion();
 		if (text.length() < max) {
-			text.append(' ');
+			text.append(mode == Mode.NAME ? '_' : ' ');
 		}
 	}
 

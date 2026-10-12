@@ -1,5 +1,9 @@
 package dev.hearthside.fabric.client.host;
 
+import com.mojang.renderpearl.api.pipeline.BlendFactor;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.ViewFrame;
 import dev.hearthside.fabric.client.compositor.Compositor;
@@ -19,6 +23,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.network.chat.Component;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.resources.Identifier;
 
 /**
  * What Hearthside draws over each player's view (Spec A sections 3.1(5), 6): a joining player's card until their game
@@ -27,8 +32,14 @@ import net.minecraft.client.renderer.RenderPipelines;
  * Render thread.
  */
 final class ViewOverlay implements OverlayLayer {
-	/** Divider colour, which a fading view fades from or to. */
-	private static final int DIVIDER = 0x120C08;
+	/**
+	 * Fades what the overlay already holds under it by the fill's alpha (colour and alpha alike, so it stays
+	 * premultiplied): a card fades as one picture, letting the canvas under it show through.
+	 */
+	private static final RenderPipeline FADE = RenderPipeline.builder(RenderPipelines.GUI_SNIPPET)
+			.withLocation(Identifier.fromNamespaceAndPath("hearthside", "pipeline/overlay_fade"))
+			.withColorTargetState(new ColorTargetState(new BlendFunction(BlendFactor.ZERO, BlendFactor.SRC_ALPHA)))
+			.build();
 	/** The frosted glass over a picture shown at the wrong size, about 35% opaque. */
 	private static final int FROST = 0x59FFFFFF;
 	private static final int ERROR_INK = 0xFFA8321E;
@@ -68,7 +79,7 @@ final class ViewOverlay implements OverlayLayer {
 				int y = c.y() + 18;
 				new KeyboardWidget(card.keyboard(), setup.color()).render(g, font, c.x() + 3, y, c.width() - 6, style);
 				if (card.nameProblem() != null) {
-					ink(g, font, card.nameProblem(), centre, y + KeyboardWidget.height() + 3, c.width() - 6, ERROR_INK);
+					ink(g, font, card.nameProblem(), centre, y + KeyboardWidget.height(card.keyboard(), c.width() - 6) + 3, c.width() - 6, ERROR_INK);
 				}
 			}
 			case SKIN -> {
@@ -161,13 +172,16 @@ final class ViewOverlay implements OverlayLayer {
 					CardPainter.joining(g, font, r, party.who(seat), party.cardStatus(seat, context.nanos()), cover,
 							context.nanos(), context.reduceMotion());
 				}
+				// The compositor fades a view's picture itself; with no picture yet, fade the card drawn there instead,
+				// over whatever is under it (a view still gliding out of this place, or the divider).
+				if (view.alpha() < 1f && !compositor.hasFrame(seat)) {
+					// Never 0: the GUI shader discards a fully transparent fill, which would leave the card unfaded.
+					int alpha = Math.max(1, Math.round(view.alpha() * 255));
+					g.fill(FADE, r.x(), r.y(), r.x() + r.width(), r.y() + r.height(), alpha << 24);
+				}
 			}
 			if (context.views().size() > 1) {
 				borderAndTag(g, font, view, context);
-			}
-			if (view.alpha() < 1f) {
-				int alpha = Math.round((1f - view.alpha()) * 255);
-				g.fill(r.x(), r.y(), r.x() + r.width(), r.y() + r.height(), alpha << 24 | DIVIDER);
 			}
 		}
 	}

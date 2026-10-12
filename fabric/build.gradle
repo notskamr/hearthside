@@ -16,6 +16,15 @@ base {
 	archivesName = 'hearthside'
 }
 
+/** A graphics backend named on the command line for the E2E run: opengl or vulkan. */
+static String e2eBackendName(Object value, String property) {
+	def name = value.toString()
+	if (!(name in ['opengl', 'vulkan'])) {
+		throw new GradleException("-P${property} must be opengl or vulkan, was ${name}")
+	}
+	return name
+}
+
 loom {
 	splitEnvironmentSourceSets()
 
@@ -27,6 +36,18 @@ loom {
 	}
 
 	runs {
+		// The dev client for playing by hand: -Pbackend=opengl|vulkan picks the graphics backend (guests follow it).
+		client {
+			def backend = project.findProperty('backend')
+			if (backend) {
+				programArgs '--graphicsBackend', e2eBackendName(backend, 'backend')
+				if (backend == 'vulkan') {
+					// Iris 1.11.7 is OpenGL-only and aborts the JVM on Vulkan; guests inherit this.
+					vmArg '-Dfabric.debug.disableModIds=iris'
+				}
+			}
+		}
+
 		// A second client that boots in satellite role, in its own run directory.
 		// Drives the walking-skeleton end-to-end check (see E2eDriver).
 		e2eClient {
@@ -42,6 +63,29 @@ loom {
 			// Guests paint a magenta corner into their exported frames; the host logs what it composited there.
 			environmentVariable 'HEARTHSIDE_E2E_PATTERN', '1'
 			runDir 'run-e2e'
+			// Switches (see docs/testing/e2e.md): -Pe2eOnly=<ids> runs those steps and what they need;
+			// -Pe2eBackend / -Pe2eGuestBackend=opengl|vulkan pick the host's / guests' graphics backend;
+			// -Pe2eValidation=true turns on Minecraft's Vulkan validation.
+			def only = project.findProperty('e2eOnly')
+			if (only) {
+				vmArg "-Dhearthside.e2e.only=${only}"
+			}
+			def backend = project.findProperty('e2eBackend')
+			if (backend) {
+				programArgs '--graphicsBackend', e2eBackendName(backend, 'e2eBackend')
+			}
+			def guestBackend = project.findProperty('e2eGuestBackend')
+			if (guestBackend) {
+				vmArg "-Dhearthside.e2e.guestBackend=${e2eBackendName(guestBackend, 'e2eGuestBackend')}"
+			}
+			if (backend == 'vulkan' || guestBackend == 'vulkan') {
+				// Iris 1.11.7 is OpenGL-only: it calls OpenGL while Minecraft starts and aborts the JVM on Vulkan. Guests
+				// inherit the host's -D options, so this reaches them too.
+				vmArg '-Dfabric.debug.disableModIds=iris'
+			}
+			if (project.findProperty('e2eValidation') == 'true') {
+				programArg '--vulkanValidation'
+			}
 		}
 
 		satelliteClient {
@@ -62,6 +106,8 @@ dependencies {
 	include project(':core')
 
 	// Compatibility targets, present only in dev runs.
+	// Sodium's config API greys out a guest's Fullscreen (SodiumGuestOptions, loaded only where Sodium is).
+	compileOnly "maven.modrinth:sodium:${sodium_version}"
 	runtimeOnly "maven.modrinth:sodium:${sodium_version}"
 	runtimeOnly "maven.modrinth:iris:${iris_version}"
 }
@@ -83,4 +129,52 @@ tasks.withType(JavaCompile).configureEach {
 java {
 	sourceCompatibility = JavaVersion.VERSION_25
 	targetCompatibility = JavaVersion.VERSION_25
+}
+
+/**
+ * Fails when client code imports OpenGL, Vulkan or Minecraft's backend internals outside the shared-image adapters
+ * (Spec C section 3.5): everything else goes through Minecraft's GPU API, so it runs on either backend.
+ */
+abstract class CheckBackendImports extends DefaultTask {
+	static final def FORBIDDEN = ~/^\s*import\s+(static\s+)?(org\.lwjgl\.opengl\.|org\.lwjgl\.vulkan\.|com\.mojang\.renderpearl\.backend\.)/
+
+	@InputFiles
+	@PathSensitive(PathSensitivity.RELATIVE)
+	abstract ConfigurableFileCollection getSources()
+
+	/** Where the listed paths start from. */
+	@Internal
+	abstract DirectoryProperty getBase()
+
+	@TaskAction
+	void check() {
+		def base = getBase().get().asFile.toPath()
+		def offenders = []
+		getSources().files.sort().each { file ->
+			file.readLines('UTF-8').eachWithIndex { line, i ->
+				if (line =~ FORBIDDEN) {
+					offenders << "${base.relativize(file.toPath()).toString().replace('\\', '/')}:${i + 1}: ${line.trim()}"
+				}
+			}
+		}
+		if (!offenders.isEmpty()) {
+			throw new GradleException("OpenGL, Vulkan or renderpearl backend imports outside compositor/backend/ and "
+					+ "mixin/backend/ (move that code into an adapter):\n" + offenders.join('\n'))
+		}
+	}
+}
+
+def checkBackendImports = tasks.register('checkBackendImports', CheckBackendImports) {
+	group = 'verification'
+	description = 'Checks that only the backend adapters import OpenGL, Vulkan or renderpearl backend classes.'
+	base = rootProject.layout.projectDirectory
+	sources.from(fileTree('src/client/java') {
+		include '**/*.java'
+		exclude 'dev/hearthside/fabric/client/compositor/backend/**'
+		exclude 'dev/hearthside/fabric/client/mixin/backend/**'
+	})
+}
+
+tasks.named('check') {
+	dependsOn checkBackendImports
 }

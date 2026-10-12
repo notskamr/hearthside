@@ -15,6 +15,54 @@ confirm the satellite pid exits.
 
 Dev runtime includes Sodium `mc26.3-0.9.2-fabric` and Iris `1.11.7+26.3-fabric`.
 
+**Tested Sodium range: 0.9.2 and later 0.9.x releases (not 0.10 or later).** On these, a guest's Sodium Video Settings show
+Fullscreen greyed out. On any other Sodium the guest's game leaves Sodium's options alone and logs
+`Hearthside left Sodium's video options alone: Sodium <version> is untested` (Q4b); fullscreen is refused either way.
+The range lives in `SodiumVersion.TESTED`.
+
+## Running
+
+`tools/e2e/run-e2e.sh <log name> [-P…]` runs the E2E from Git Bash on Windows or from a macOS shell:
+
+- It finds the repository from its own location. It uses `JAVA_HOME` if set, else sources `.superpowers/env.sh` if
+  present.
+- It passes its extra arguments to Gradle and writes Gradle's output to `.superpowers/e2e-logs/<log name>.log`.
+- It stops the run as soon as the report ends with `DONE`, `READY_FOR_HOST_KILL host=… satellite=…` or `ABORTED …`.
+- On `READY_FOR_HOST_KILL` it performs step 7: it force-kills the host and prints `STEP 7 PASS` once the guest's
+  game exits by itself (or `STEP 7 FAIL` after 15 s).
+- It then kills this run's leftover game and Gradle wrapper processes: java processes whose command line names, in this
+  checkout (`C:\…`, `C:/…` or `/c/…`), the E2E run directory `fabric/run-e2e/` (each guest), the `runE2eClient`
+  argument file under `fabric/build/loom-cache/argFiles/` (the host), or the wrapper jar with `:fabric:runE2eClient`.
+  A dev client from `fabric/run` in the same checkout, a Minecraft being played or another checkout's run is left alone
+  (`powershell` on Windows, `ps` and `kill` on macOS). It prints `PASS n  FAIL n  SKIP n` and any failures.
+
+Switches (Gradle properties, read by the `e2eClient` run in `fabric/build.gradle`):
+
+| Property | Effect |
+|---|---|
+| `-Pe2eOnly=<ids>` | `-Dhearthside.e2e.only=<ids>`: a focused run (below) |
+| `-Pe2eBackend=opengl\|vulkan` | the host's graphics backend (`--graphicsBackend <b>`); `vulkan` also disables Iris (`-Dfabric.debug.disableModIds=iris`, which guests inherit), which is OpenGL-only and aborts the JVM on Vulkan |
+| `-Pe2eGuestBackend=opengl\|vulkan` | the guests' graphics backend (`-Dhearthside.e2e.guestBackend=<b>`); `vulkan` disables Iris too, so step 2 only passes in OpenGL-only runs |
+| `-Pe2eValidation=true` | Minecraft's Vulkan validation (`--vulkanValidation`) |
+
+**Focused runs.** `-Pe2eOnly=C2` (comma-separated ids; an id is a step's name up to the first space) runs the named
+steps plus the earlier steps they need, transitively, and reports every other step as `SKIP`. `NEEDS`, at the top of
+`E2eDriver`, lists every step in run order with the earlier steps whose effects it relies on (the party's player
+count, an open screen, a seated profile, a session). An unknown id aborts the run, naming the known ones. The world
+opens only when a world step (1 to 6) runs, and the tiled session only when `D9` or `7` runs. A run without `7` ends
+with `DONE` instead of `READY_FOR_HOST_KILL`.
+
+```bash
+tools/e2e/run-e2e.sh t1-c2 -Pe2eOnly=C2       # PASS 1, PASS C2, every other step SKIP, then DONE
+tools/e2e/run-e2e.sh t1-tiled -Pe2eOnly=D9,7  # the tiled session: D9, then step 7
+tools/e2e/run-e2e.sh full                     # every step, then step 7
+```
+
+A step that works from its section's starting state (the title screen, or the world with the host alone) needs
+nothing. So a focused run that picks a step which changes the party for later steps (C7, C7b and D5 add players; 1
+adds Guest2) without the step that restores it (C7c, 5) hands the later steps a different party. The lobby's
+leftovers reach the world the same way unless `W2` runs. Every step id is unique.
+
 ## Results — 2026-10-11 (after final-review fixes), Windows 11, Ryzen 5 7600X, RX 9060 XT, 1920×1080
 
 | # | Check | Result |
@@ -91,7 +139,7 @@ failing on the code before its fix.
 | W1 | The picker puts the last co-op world first and focused, with "Last played with Ember and Birch" | PASS |
 | W2 | A on it opens the world; the guests come in by name; the co-op record has them | PASS (15 s) |
 | R1 | X on a ready card opens More (nothing in the lobby looks selected; the footer has only Back and Start); Controls is that seat's: A then Y makes Y Jump (Inventory takes A); RB to Southpaw (sticks swapped) and LB back to the edit; Menu saves to the profile, the seat and the guest's game; RB from Custom is Bedrock again | PASS (8 s) |
-| M1 | More → Profiles: holding Y on a profile in use is refused with a reason; a Y still held while moving to another card deletes nothing; letting go early keeps a profile; holding 1.5 s deletes it (and nothing else) | PASS (11 s) — the held-over Y FAILED before (it deleted the next card) |
+| L11 | More → Profiles: holding Y on a profile in use is refused with a reason; a Y still held while moving to another card deletes nothing; letting go early keeps a profile; holding 1.5 s deletes it (and nothing else) | PASS (11 s) — the held-over Y FAILED before (it deleted the next card) |
 
 Screenshots: `title`, `title-focus`, `worlds`, `new-world`, `controls`, `manage-profiles`, `lobby-ready`, `lobby-more`.
 
@@ -116,8 +164,14 @@ barrier platform at y = 249 so terrain never blocks it.
 | A1 | RT punches a pig in front of the guest (survival) | PASS — FAILED before the fix |
 | A2 | Holding RT mines dirt, with the guest window unfocused | PASS — FAILED before the fix |
 | A3 | LT places a block | PASS |
+| P10 | A 100 ms tap on Drop throws one of 16 cobblestone; holding 700 ms throws the rest (16 on the ground); Drop stack bound to RS throws all 16 in one press; the controls screen lists Drop stack after Drop, unbound, rows clear of each other | PASS — FAILED before the fix |
 | P8 | Satellite received the PlayStation pad style | PASS |
 | P9 | `Player2` leaves | PASS |
+| H3 | Player 1 on a controller: no pointer in play; killed, the death screen draws it; the stick steers it onto Respawn and A respawns; START's pause menu and Y's inventory draw it, B closes them | PASS — FAILED before the fix |
+| H4 | Player 1 on a controller: hints on pause, Options, Video, death and inventory cover no widget, panel or the hotbar; none over chat; no Back on the death screen; Select only with the pointer on something to click | PASS — FAILED before the fix |
+| H5 | Player 1 on a controller, pause menu: an OS mouse move over Back to Game hides the pointer (and the hints) and its click closes the menu; reopened, the stick brings the pointer back where the mouse left it and A on Back to Game closes it | PASS — FAILED before the fix |
+| H5b | Player 1 on a controller, pause menu, the OS arrow on empty space and the pointer steered onto Options…: the OS arrow is hidden while the controller drives; a real click with no move first opens nothing (it lands where the arrow is), the mouse then drives and the arrow is back; a click on Back to Game closes the menu | PASS — FAILED before the fix (Options opened) |
+| H6 | Player 1's controller unplugged on the pause menu: two frames later the pointer and the controller hints are gone and the OS arrow is shown; the mouse closes the menu; plugged back in, it is player 1's again | PASS — FAILED before the fix (pointer still drawn) |
 
 Every controller step runs with the guest window **unfocused**, as in real play: the `e2eClient` run sets
 `HEARTHSIDE_E2E_GUEST_UNFOCUSED=1`, which guests inherit and which makes their window report no focus (P1 checks it).
@@ -172,6 +226,76 @@ Found while building this:
 - The copy transport showed an empty texture: Minecraft leaves its last upload's `GL_UNPACK_ROW_LENGTH` set. Pixel
   transfers now set the pixel-store state first (through `GlStateManager`, so its cache stays right).
 - `SDL_WINDOW_NOT_FOCUSABLE` alone does not stop a window activating when first shown; guests also start hidden.
+
+## One window everywhere (Spec C) — 2026-10-12, same machine
+
+The compositor and the guests' frame export now go through Minecraft's GPU API, so the one window works on OpenGL, on
+Vulkan and in parties that mix them. Only `compositor/backend/` and `mixin/backend/` touch OpenGL or Vulkan
+(`./gradlew checkBackendImports`). Vulkan runs use Minecraft's `--vulkanValidation` with the Khronos layer
+(Vulkan SDK 1.4.363.0), and disable Iris, which calls OpenGL directly and can't start on Vulkan.
+
+| Run (head `d6e8149`) | Result |
+|---|---|
+| Full, OpenGL | 114/114 and step 7 (1014 ms) |
+| Full, Vulkan (host and guests), validation on | 114/114 and step 7 (1265 ms); 0 validation errors in the host's and every guest's log |
+| Compositor and drop-in steps, Vulkan host with OpenGL guests, validation on | 34/34 |
+| The same, OpenGL host with Vulkan guests, validation on | 34/34; 0 validation errors |
+
+Composite cost, host CPU, p95 (guests): OpenGL 0.035 ms (1), 0.233 ms (3); Vulkan with validation 0.190 ms (1),
+0.330 ms (3) — 0.14 ms (1) without validation. With four players no guest dropped a frame (V10: 136–198 fps).
+Memory (Q1, working set, two players): player 1's game 2.4–2.5 GB, a guest 1.3–1.6 GB with the default 1536 MB heap.
+
+| # | Check | Result |
+|---|---|---|
+| X1 | Memory the export device shares, imported twice through this game's backend, is one image: magenta cleared through one import reads back through the other; a mismatched description is refused (OpenGL and Vulkan) | PASS |
+| X1b | (Vulkan) an import whose real `VkImageCreateInfo` differs from the shared image's description is refused, not imported | PASS — FAILED before the fix (final review I1) |
+| V1 | The guest's frames are shared zero-copy on this backend (`frames GPU_SHARED … backend=vulkan` on the Vulkan run) | PASS |
+| V2 | Every view is the right way up: magenta just inside the guest view's top-left, not its bottom-left (every probe checks this now) | PASS |
+| V3 | A guest on another GPU or driver (simulated) copies its frames and the host says why (`copies frames: DEVICE_MISMATCH`) | PASS |
+| V4 | A resource reload while composited: our view pipeline is warmed again and every view stays composited | PASS |
+| V5 | Composite cost within budget: 0.3 ms p95 per guest zero-copy, 1 ms copying (doubled while Vulkan validation runs) | PASS |
+| V6 | The guest's window is created hidden on its backend (OpenGL and Vulkan) | PASS |
+| V7 | Minimise for 2 s, restore, fullscreen and back: views composited after each, no exception | PASS — FAILED first (leaving fullscreen shrank the window to player 1's view size) |
+| V8 | A resource pack whose `view.fsh` doesn't compile: views drawn by the plain-blit fallback, logged once, compiled once per reload (not per frame); back after the pack is removed | PASS — FAILED before the fix (final review M2) |
+| V9 | A guest whose game has no Vulkan runtime (simulated) copies its frames instead of crashing | PASS — FAILED before the fix (final review M6) |
+| V10 | With four players each guest drops at most 1% of its frames (`exporter fps=N dropped=M`) | PASS (0 dropped) |
+| C5b | Two host resizes 150 ms apart on the copy transport: a fresh frame from a new generation, no exception in either game | PASS |
+| Q1 | The guest's heap is the configured 1536 MB and its render distance is capped at 8; memory logged | PASS |
+| Q2 | `"twoPlayerLayout": "stacked"` in `config/hearthside.json`: player 1 on top, the guest below, rendering at the bottom half's size | PASS |
+| Q3 | A guest's own Sodium settings survive its next launch; the host's file is unchanged | PASS — FAILED before the fix |
+| Q4 | A guest can't switch to fullscreen (refused and logged; window stays hidden; Fullscreen greyed in vanilla's and Sodium's Video Settings); controller hints stay off Sodium's screen | PASS — FAILED before each fix |
+| W10 | Cheats toggles with A, a click or left/right and always says which (`‹ On ›`); greyed for Hardcore; a world created with it on allows commands | PASS — FAILED before the fix (the label lied) |
+| W11 | The world picker's "Last played with …" is warm ink, not an alarm red | PASS — FAILED before the fix |
+| R2 | Controls: only the focused row reads as selected; the four D-pad glyphs light their own arm | PASS — FAILED before the fix |
+| L12 | A typing card's keyboard lists every key it uses; B closes only the keyboard; shared screens' hint glyphs follow the controller driving them | PASS — FAILED before the fix |
+
+Screenshots: `docs/screenshots/one-window/` — on OpenGL two, three and four players, a leaving view, a joining card,
+reconnecting, the stacked layout, a stale view after a resize, Controls with Drop stack, the keyboard legend, Cheats,
+the world picker, player 1's pointer on the death screen and hints on pause, Video Settings and the creative
+inventory; the same party on Vulkan; four players in each mixed party.
+
+Found while building this:
+- Iris 1.11.7 calls OpenGL while Minecraft starts and aborts the JVM on Vulkan, so players can't run Iris on Vulkan.
+- Minecraft 26.3's OpenGL `copyTextureToTexture` mishandles non-zero offsets (Vulkan is right); `backend/TextureRegions`
+  uses `glCopyImageSubData` for those.
+- A render pass's render area only scissors on both backends; it never moves the viewport.
+- Vanilla never uses push constants, but the OpenGL backend binds them as a uniform-buffer range, and they work on both.
+- Render targets are stored bottom-up on both backends (Minecraft's screenshots always flip rows), so mixed parties
+  need no row flip.
+- Four frame slots weren't enough: each game keeps two frames in flight, so the guest can hold three unpublished slots
+  and the host three unreleased; six are.
+- A joining card faded in by painting the divider over itself, a brown flash over player 1's gliding view on every join
+  (G1). C12's window-size restore had been snapping C7's layout and hiding it; V3, run in between, exposed it.
+- Mods' screens can draw widgets the hint placement can't see (Sodium's Done was covered), so controller hints show on
+  Minecraft's own screens only.
+
+## Guests' settings (batch review fixes) — 2026-10-11, same machine
+
+| # | Check | Result |
+|---|---|---|
+| Q1b | A guest whose own render distance (12) is capped at 8 saves its options once in the world (`hearthside.e2e.guestSaveOptions`): for 5 s the host's server never hears more than 8, and its options.txt keeps 12 | PASS — FAILED before the fix (the server heard 12) |
+| Q4b | With `hearthside.e2e.pretendSodiumVersion=0.10.0` the guest leaves Sodium's options alone and says so, reaches the world, shows Sodium's Video Settings and still refuses all 3 ways into fullscreen | PASS — FAILED before the fix |
+| L12 | (changed) The name keyboard's legend says `Y _`; a world name's keyboard (W3's) says `Y Space` | PASS — FAILED before the fix |
 
 ## Seamless drop-in (Plan 5c1) — 2026-10-11, same machine
 

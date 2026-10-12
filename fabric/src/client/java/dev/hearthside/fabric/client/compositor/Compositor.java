@@ -1,108 +1,80 @@
 package dev.hearthside.fabric.client.compositor;
 
-import static org.lwjgl.opengl.GL45C.*;
-
-import com.mojang.renderpearl.backend.opengl.GlStateManager;
-import dev.hearthside.core.compositor.FrameSlots;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import dev.hearthside.core.compositor.CopyReason;
+import dev.hearthside.core.compositor.ImageDescription;
 import dev.hearthside.core.compositor.SegmentSlotTable;
+import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
+import dev.hearthside.core.compositor.TransportChoice;
+import dev.hearthside.core.compositor.ViewQuad;
 import dev.hearthside.core.compositor.ViewportMath;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.ViewFrame;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.compositor.backend.ImportFailed;
+import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.OptionalInt;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.function.IntConsumer;
 import net.minecraft.client.Minecraft;
-import org.lwjgl.BufferUtils;
+import org.joml.Vector4f;
 import org.lwjgl.sdl.SDLVideo;
 import org.lwjgl.system.MemoryStack;
 
 /**
- * Host side of the compositor: draws player 1's own frame and every guest's newest shared frame into their views of
- * the one window, in place of Minecraft's single blit to the window. Views glide (their rects come from a
+ * Host side of the compositor (Spec C section 3.3): draws player 1's own frame and every guest's newest frame into
+ * their views on the {@link Canvas}, which Minecraft then presents in place of player 1's frame. It works through
+ * Minecraft's GPU API only, so it runs on OpenGL and Vulkan alike. Views glide (their rects come from a
  * {@link ViewSource} each frame); a guest's frames at a new size replace the old ones only once one has arrived, and a
  * frame waiting for its new size is drawn softly blurred, so no view ever shows a gap. Render thread only.
  */
 public final class Compositor {
-	private static final float[] DIVIDER = {0x12 / 255f, 0x0c / 255f, 0x08 / 255f, 1f};
-	private static final long PROBE_INTERVAL_NANOS = 1_000_000_000L;
+	private static final Vector4f DIVIDER = new Vector4f(0x12 / 255f, 0x0c / 255f, 0x08 / 255f, 1f);
 	private static Compositor active;
 
-	/** One guest's imported frame slots. */
-	private static final class Import {
-		final int generation;
-		final SegmentSlotTable table;
-		final FrameSlots slots;
-		final FrameTransport transport;
-		/** Slots this host still holds, each released once the fence of the last frame that drew it signals. */
-		final ArrayDeque<long[]> releases = new ArrayDeque<>(); // {slot, fence}
-		int held = -1;
-		long lastFrame;
-		long lastFence;
-
-		Import(int generation, SegmentSlotTable table, FrameTransport transport) {
-			this.generation = generation;
-			this.table = table;
-			this.slots = new FrameSlots(table);
-			this.transport = transport;
-		}
-
-		void close() {
-			for (long[] r : releases) {
-				glDeleteSync(r[1]);
-			}
-			releases.clear();
-			if (lastFence != 0) {
-				glDeleteSync(lastFence);
-				lastFence = 0;
-			}
-			transport.close();
-			table.close();
-		}
-	}
+	/** One view to draw this frame. */
+	private record Draw(int seat, GpuTextureView source, Rect rect, float alpha, boolean stale, boolean rowsTopDown) {}
 
 	private final Minecraft minecraft;
 	private final Runnable onWindowResized;
-	private final java.util.function.IntConsumer onImportFailed;
+	private final IntConsumer onImportFailed;
 	private ViewSource views;
-	/** A guest's frames at a new size (or from a restarted game), drawn from the first frame they publish. */
-	private final Map<Integer, Import> incoming = new HashMap<>();
+	private final Map<Integer, GuestImport> imports = new HashMap<>();
+	/** A guest's frames at a new size (or from a restarted game), drawn from the first frame that reaches the host. */
+	private final Map<Integer, GuestImport> incoming = new HashMap<>();
+	/** Imports replaced by a newer generation, closed once the GPU has finished copying from their slots. */
+	private final ArrayDeque<GuestImport> retired = new ArrayDeque<>();
 	/** Seats whose game crashed: their last picture stays (under their card) until their restarted game is in the world. */
 	private final Set<Integer> holding = new HashSet<>();
-	/** Views as drawn this frame: computed once, shared by the overlay pass (which runs first) and present. */
+	/** Views as drawn this frame: computed once, shared by the overlay pass (which runs first) and compose. */
 	private List<ViewFrame> frames = List.of();
 	private boolean framesFresh;
 	private final Map<Integer, Rect> drawn = new HashMap<>();
 	private final Set<Integer> framed = new HashSet<>(), stale = new HashSet<>();
-	private int blurFbo, blurTexture, blurWidth, blurHeight;
-	private final Map<Integer, Import> imports = new HashMap<>();
-	/** Imports replaced by a newer generation, closed once the GPU has finished drawing from them. */
-	private final ArrayDeque<Import> retired = new ArrayDeque<>();
-	private final boolean probe = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
-	private final ByteBuffer probePixel = BufferUtils.createByteBuffer(4);
+	private final Canvas canvas = new Canvas("hearthside canvas");
+	/** The fallback's per-seat scratch pictures, for views drawn at another size than their frame's. */
+	private final Map<Integer, Canvas> scratch = new HashMap<>();
+	private final CanvasReadback readback = new CanvasReadback();
 	private Rect hostViewport;
-	private final OverlayBlitter overlayBlitter = new OverlayBlitter();
 	private double screenPerFb = 1.0;
 	private int layoutWidth, layoutHeight;
-	private int readFbo;
-	private long lastProbe;
-	// Composition cost, logged as percentiles every 30 s.
-	private final long[] costs = new long[4096];
-	private int costCount;
-	private long costWindowStart = System.nanoTime();
+	private boolean composeFailed;
 
-	private Compositor(Minecraft minecraft, Runnable onWindowResized, java.util.function.IntConsumer onImportFailed) {
+	private Compositor(Minecraft minecraft, Runnable onWindowResized, IntConsumer onImportFailed) {
 		this.minecraft = minecraft;
 		this.onWindowResized = onWindowResized;
 		this.onImportFailed = onImportFailed;
@@ -113,10 +85,26 @@ public final class Compositor {
 	}
 
 	/**
+	 * Whether this game can composite: a 1×1 canvas can be created and the pipelines warmed (Spec C section 5). Called
+	 * when the party session opens, before any guest starts. A view pipeline that fails to build leaves views on the
+	 * fallback rather than refusing; anything else failing means tiled windows for the session.
+	 */
+	public static boolean canComposite() {
+		try (Canvas probe = new Canvas("hearthside canvas check")) {
+			probe.ensure(1, 1);
+			ViewPipeline.warmUp();
+			return true;
+		} catch (RuntimeException | LinkageError e) {
+			HearthsideMod.LOGGER.error("Hearthside can't composite here; tiled windows for this session", e);
+			return false;
+		}
+	}
+
+	/**
 	 * Starts (or updates) compositing: {@code views} says where each player's view is drawn, in the window's
 	 * framebuffer pixels for a {@code windowWidth}×{@code windowHeight} framebuffer.
 	 */
-	public static Compositor activate(Minecraft minecraft, Runnable onWindowResized, java.util.function.IntConsumer onImportFailed,
+	public static Compositor activate(Minecraft minecraft, Runnable onWindowResized, IntConsumer onImportFailed,
 			ViewSource views, int windowWidth, int windowHeight) {
 		if (active == null) {
 			active = new Compositor(minecraft, onWindowResized, onImportFailed);
@@ -144,20 +132,16 @@ public final class Compositor {
 		}
 		active = null;
 		VirtualSizing.clear(minecraft);
-		c.imports.values().forEach(Import::close);
+		// Minecraft destroys each texture once the GPU has finished with it.
+		c.imports.values().forEach(GuestImport::close);
 		c.imports.clear();
-		c.incoming.values().forEach(Import::close);
+		c.incoming.values().forEach(GuestImport::close);
 		c.incoming.clear();
-		c.retired.forEach(Import::close);
+		c.retired.forEach(GuestImport::close);
 		c.retired.clear();
-		c.overlayBlitter.close();
-		if (c.readFbo != 0) {
-			glDeleteFramebuffers(c.readFbo);
-		}
-		if (c.blurFbo != 0) {
-			glDeleteFramebuffers(c.blurFbo);
-			glDeleteTextures(c.blurTexture);
-		}
+		c.scratch.values().forEach(Canvas::close);
+		c.scratch.clear();
+		c.canvas.close();
 	}
 
 	/** Window coordinates per framebuffer pixel (1.0 normally, 0.5 on a 2x display). */
@@ -217,12 +201,15 @@ public final class Compositor {
 		return screenPerFb;
 	}
 
-	/** A guest (re)allocated its frame slots; import them. */
+	/**
+	 * A guest (re)allocated its frame slots; import them. GPU-shared slots are imported only when the guest's GPU and
+	 * driver are this game's (Spec C section 3.7, step 3); otherwise the guest is told to copy, and the host says why.
+	 */
 	public void onGuestSlots(int playerIndex, ControlMessage.FrameSlotsReady ready) {
-		Import previous = imports.get(playerIndex);
-		Import waiting = incoming.get(playerIndex);
-		if ((previous != null && previous.generation == ready.generation())
-				|| (waiting != null && waiting.generation == ready.generation())) {
+		GuestImport previous = imports.get(playerIndex);
+		GuestImport waiting = incoming.get(playerIndex);
+		if ((previous != null && previous.generation() == ready.generation())
+				|| (waiting != null && waiting.generation() == ready.generation())) {
 			return;
 		}
 		SegmentSlotTable table;
@@ -232,16 +219,20 @@ public final class Compositor {
 			HearthsideMod.LOGGER.error("Could not open player {}'s frame slots at {}", playerIndex + 1, ready.controlFile(), e);
 			return;
 		}
-		FrameTransport transport;
-		try {
-			if (ready.transport() == Transport.GPU_SHARED && Boolean.getBoolean("hearthside.e2e.failGpuImport")) {
-				throw new IllegalStateException("E2E: simulated GPU import failure");
+		if (ready.transport() == Transport.GPU_SHARED) {
+			Optional<CopyReason> copy = table.description().flatMap(description -> TransportChoice
+					.decide(guestFacts(description), SharedImages.forThisGame().facts(), false).reason());
+			if (copy.isPresent()) {
+				HearthsideMod.LOGGER.info("Hearthside player {} copies frames: {}", playerIndex + 1, copy.get());
+				table.close();
+				onImportFailed.accept(playerIndex);
+				return;
 			}
-			transport = ready.transport() == Transport.GPU_SHARED
-					? GpuSharedTransport.importByName(ready.controlFile(), table, ready.width(), ready.height())
-					: CopyTransport.host(CopyTransport.pixelFileFor(Path.of(ready.controlFile())), ready.width(), ready.height(),
-							table.slots());
-		} catch (RuntimeException e) {
+		}
+		GuestImport fresh;
+		try {
+			fresh = GuestImport.open(ready, table, SharedImages.forThisGame());
+		} catch (ImportFailed | RuntimeException e) {
 			HearthsideMod.LOGGER.error("Could not import player {}'s frames", playerIndex + 1, e);
 			table.close();
 			if (ready.transport() == Transport.GPU_SHARED) {
@@ -250,172 +241,162 @@ public final class Compositor {
 			}
 			return;
 		}
-		Import fresh = new Import(ready.generation(), table, transport);
 		if (previous == null) {
 			imports.put(playerIndex, fresh);
 		} else {
 			// The old frames stay up (stretched, blurred) until the new ones arrive: never a gap.
-			Import older = incoming.put(playerIndex, fresh);
+			GuestImport older = incoming.put(playerIndex, fresh);
 			if (older != null) {
 				retired.add(older);
 			}
 		}
-		HearthsideMod.LOGGER.info("Hearthside compositor: player {} frames {} {}x{}", playerIndex + 1,
-				ready.transport(), ready.width(), ready.height());
+		HearthsideMod.LOGGER.info("Hearthside compositor: player {} frames {} {}x{} backend={}", playerIndex + 1,
+				ready.transport(), ready.width(), ready.height(),
+				com.mojang.blaze3d.systems.RenderSystem.getDevice().getDeviceInfo().backendName().toLowerCase(java.util.Locale.ROOT));
 	}
 
-	/** Draws every view into the window's back buffer. Called in place of Minecraft's blit; the swap follows. */
-	public void present(int hostTexture, int hostWidth, int hostHeight, int swapWidth, int swapHeight) {
+	/**
+	 * What a guest that exported GPU slots can do, from its slot table: it is on Windows and can share memory, or its
+	 * own decision would not have exported them. A nil UUID (the guest's backend couldn't report one) is unknown, and
+	 * never matches this game's.
+	 */
+	private static SharingFacts guestFacts(ImageDescription description) {
+		UUID device = description.deviceUuid();
+		if (Boolean.getBoolean("hearthside.e2e.fakeDeviceMismatch")) {
+			// E2E: a guest on another GPU.
+			device = UUID.randomUUID();
+		}
+		return new SharingFacts(true, true, known(device), known(description.driverUuid()));
+	}
+
+	private static UUID known(UUID uuid) {
+		return SharedImages.UNKNOWN.equals(uuid) ? null : uuid;
+	}
+
+	/**
+	 * Draws every view into the canvas and returns it for Minecraft to present, in place of player 1's frame
+	 * ({@code hostView}). Called at Minecraft's one blit to the window, with that window surface's size. Returns
+	 * {@code hostView} unchanged when there is nothing to draw into (a minimised window).
+	 */
+	public GpuTextureView compose(GpuTextureView hostView, CommandEncoder encoder, int surfaceWidth, int surfaceHeight) {
 		long start = System.nanoTime();
-		if (swapWidth != layoutWidth || swapHeight != layoutHeight) {
-			layoutWidth = swapWidth;
-			layoutHeight = swapHeight;
+		if (!canvas.ensure(surfaceWidth, surfaceHeight)) {
+			return hostView;
+		}
+		if (surfaceWidth != layoutWidth || surfaceHeight != layoutHeight) {
+			layoutWidth = surfaceWidth;
+			layoutHeight = surfaceHeight;
 			minecraft.execute(onWindowResized);
 		}
-		if (readFbo == 0) {
-			readFbo = glCreateFramebuffers();
-		}
-		GlStateManager._disableScissorTest();
-		GlStateManager._colorMask(15);
-		glClearNamedFramebufferfv(0, GL_COLOR, 0, DIVIDER);
-
-		if (!framesFresh) {
-			frames = views.frames(System.nanoTime());
-		}
-		framesFresh = false;
-		drawn.clear();
-		framed.clear();
-		stale.clear();
-		for (ViewFrame view : frames) {
-			Rect rect = view.rect();
-			drawn.put(view.seat(), rect);
-			if (view.seat() == 0) {
-				hostViewport = rect;
-				blit(hostTexture, hostWidth, hostHeight, rect, swapHeight);
-				framed.add(0);
-				continue;
+		try {
+			releaseFinished();
+			if (!framesFresh) {
+				frames = views.frames(System.nanoTime());
 			}
-			Import imp = current(view.seat());
-			if (imp == null || imp.held < 0) {
-				continue; // the overlay shows the hearth there
-			}
-			Rect target = views.target(view.seat()).orElse(rect);
-			int width = imp.transport.width(), height = imp.transport.height();
-			int texture = imp.transport.glTexture(imp.held);
-			if (width != target.width() || height != target.height()) {
-				blur(texture, width, height, rect, swapHeight);
-				stale.add(view.seat());
-			} else {
-				blit(texture, width, height, rect, swapHeight);
-			}
-			framed.add(view.seat());
-		}
-		int overlay = OverlayPass.textureId();
-		if (overlay != 0) {
-			// Hearthside's GUI over every view: cards, toasts, name tags, the party panel.
-			overlayBlitter.draw(overlay, swapWidth, swapHeight);
-		}
-		Path capture = e2eCapture;
-		if (capture != null) {
-			e2eCapture = null;
-			capture(capture, swapWidth, swapHeight);
-		}
-		List<Import> live = new java.util.ArrayList<>(imports.values());
-		live.addAll(incoming.values());
-		for (Import imp : live) {
-			for (long[] r : imp.releases) {
-				if (r[1] == 0) {
-					// Signals once the GPU has finished every draw so far, including this frame's last use of the slot.
-					r[1] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+			framesFresh = false;
+			drawn.clear();
+			framed.clear();
+			stale.clear();
+			List<Draw> draws = new ArrayList<>();
+			List<CanvasReadback.GuestView> guests = new ArrayList<>();
+			for (ViewFrame view : frames) {
+				Rect rect = view.rect();
+				drawn.put(view.seat(), rect);
+				if (view.seat() == 0) {
+					hostViewport = rect;
+					draws.add(new Draw(0, hostView, rect, view.alpha(), false, false));
+					framed.add(0);
+					continue;
 				}
+				GuestImport imp = current(view.seat(), encoder);
+				if (imp == null || !imp.hasFrame()) {
+					continue; // the overlay shows the hearth there
+				}
+				Rect target = views.target(view.seat()).orElse(rect);
+				boolean waiting = imp.width() != target.width() || imp.height() != target.height();
+				if (waiting) {
+					stale.add(view.seat());
+				}
+				draws.add(new Draw(view.seat(), imp.hostTexture(), rect, view.alpha(), waiting, imp.rowsTopDown()));
+				framed.add(view.seat());
+				guests.add(new CanvasReadback.GuestView(view.seat() + 1, imp.generation(), rect));
 			}
-			releaseFinished(imp);
+			draw(encoder, draws, OverlayPass.texture());
+			retireGone();
+			readback.afterCompose(encoder, canvas, guests, frames);
+		} catch (RuntimeException e) {
+			// Never take the game down for a frame: show player 1's own view instead, and say why once.
+			if (!composeFailed) {
+				composeFailed = true;
+				HearthsideMod.LOGGER.error("Hearthside could not compose the canvas; showing player 1's view", e);
+			}
+			return hostView;
 		}
-		retireGone();
-		closeRetired();
-		if (probe) {
-			probeGuests(swapHeight);
-		}
-		if (e2eGapSampling) {
-			sampleGaps(swapHeight);
-		}
-		recordCost(System.nanoTime() - start);
+		readback.recordCost(System.nanoTime() - start, Math.max(0, drawn.size() - 1));
+		return canvas.view();
 	}
 
-	private static void acquire(Import imp) {
-		OptionalInt newer = imp.slots.acquireNewest(imp.lastFrame);
-		if (newer.isPresent()) {
-			if (imp.held >= 0) {
-				imp.releases.add(new long[] {imp.held, 0}); // fence filled in after this frame's draws
+	/** The compose pass (§3.3): the divider, every view in order, then Hearthside's overlay over them all. */
+	private void draw(CommandEncoder encoder, List<Draw> draws, Optional<GpuTextureView> overlay) {
+		int width = canvas.width(), height = canvas.height();
+		boolean overlaySameSize = overlay.isPresent() && overlay.get().getWidth(0) == width && overlay.get().getHeight(0) == height;
+		if (!ViewPipeline.usingFallback()) {
+			try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside canvas", canvas.view(), Optional.of(DIVIDER))) {
+				for (Draw d : draws) {
+					ViewQuad.of(d.rect(), width, height, d.source().getWidth(0), d.source().getHeight(0), d.rowsTopDown(),
+							d.alpha(), d.stale()).ifPresent(quad -> ViewPipeline.draw(pass, d.source(), quad));
+				}
+				overlay.ifPresent(texture -> ViewPipeline.drawOverlay(pass, texture, overlaySameSize));
 			}
-			imp.held = newer.getAsInt();
-			imp.lastFrame = imp.table.frame(imp.held);
-			imp.transport.beforeRead(imp.held);
+			return;
+		}
+		// Without our pipeline: no fades or blur, each view scaled if need be and copied into place.
+		encoder.clearColorTexture(canvas.texture(), DIVIDER);
+		for (Draw d : draws) {
+			ViewPipeline.drawPlaced(encoder, canvas, d.source(), d.rect(),
+					scratch.computeIfAbsent(d.seat(), seat -> new Canvas("hearthside fallback view " + seat)));
+		}
+		if (overlay.isPresent()) {
+			try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside overlay", canvas.view(), Optional.empty())) {
+				ViewPipeline.drawOverlay(pass, overlay.get(), overlaySameSize);
+			}
 		}
 	}
 
 	/** A guest's frames to draw: its newer import once that has a frame, else the one it had. */
-	private Import current(int seat) {
-		Import imp = imports.get(seat);
-		if (imp != null) {
-			acquire(imp);
+	private GuestImport current(int seat, CommandEncoder encoder) {
+		// A crashed game's last picture stays, and its restarted game's frames wait, until it is let go.
+		boolean held = holding.contains(seat);
+		GuestImport imp = imports.get(seat);
+		if (imp != null && !held) {
+			imp.pull(encoder);
 		}
-		Import next = incoming.get(seat);
-		if (next != null) {
-			acquire(next);
-			// A restarted game's frames wait (its title and loading screens) while the last picture is held.
-			if ((next.held >= 0 && !holding.contains(seat)) || imp == null) {
-				incoming.remove(seat);
-				if (imp != null) {
-					retired.add(imp);
-				}
-				imports.put(seat, next);
-				imp = next;
+		GuestImport next = incoming.get(seat);
+		if (next != null && !held) {
+			next.pull(encoder);
+		}
+		if (next != null && ((next.hasFrame() && !held) || imp == null)) {
+			incoming.remove(seat);
+			if (imp != null) {
+				retired.add(imp);
 			}
+			imports.put(seat, next);
+			imp = next;
 		}
 		return imp;
 	}
 
-	/** A soft blur for a picture waiting for its new size: down to an eighth, then back up, both filtered. */
-	private void blur(int texture, int width, int height, Rect target, int swapHeight) {
-		int w = Math.max(1, width / 8), h = Math.max(1, height / 8);
-		if (blurFbo == 0 || w != blurWidth || h != blurHeight) {
-			if (blurFbo == 0) {
-				blurFbo = glCreateFramebuffers();
-			} else {
-				glDeleteTextures(blurTexture);
+	/** Gives back every slot whose copy has finished; closes replaced imports once nothing is copied from them. */
+	private void releaseFinished() {
+		imports.values().forEach(GuestImport::releaseFinished);
+		incoming.values().forEach(GuestImport::releaseFinished);
+		retired.removeIf(imp -> {
+			if (!imp.idle()) {
+				return false;
 			}
-			blurTexture = glCreateTextures(GL_TEXTURE_2D);
-			glTextureStorage2D(blurTexture, 1, GL_RGBA8, w, h);
-			glNamedFramebufferTexture(blurFbo, GL_COLOR_ATTACHMENT0, blurTexture, 0);
-			blurWidth = w;
-			blurHeight = h;
-		}
-		glNamedFramebufferTexture(readFbo, GL_COLOR_ATTACHMENT0, texture, 0);
-		glBlitNamedFramebuffer(readFbo, blurFbo, 0, 0, width, height, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-		Rect gl = ViewportMath.glFlip(target, swapHeight);
-		glBlitNamedFramebuffer(blurFbo, 0, 0, 0, w, h, gl.x(), gl.y(), gl.x() + gl.width(), gl.y() + gl.height(),
-				GL_COLOR_BUFFER_BIT, GL_LINEAR);
-	}
-
-	private void blit(int texture, int width, int height, Rect target, int swapHeight) {
-		Rect gl = ViewportMath.glFlip(target, swapHeight);
-		glNamedFramebufferTexture(readFbo, GL_COLOR_ATTACHMENT0, texture, 0);
-		glBlitNamedFramebuffer(readFbo, 0, 0, 0, width, height, gl.x(), gl.y(), gl.x() + gl.width(), gl.y() + gl.height(),
-				GL_COLOR_BUFFER_BIT, width == gl.width() && height == gl.height() ? GL_NEAREST : GL_LINEAR);
-	}
-
-	private static void releaseFinished(Import imp) {
-		while (!imp.releases.isEmpty()) {
-			long[] next = imp.releases.peekFirst();
-			int status = glClientWaitSync(next[1], 0, 0);
-			if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) {
-				return;
-			}
-			imp.releases.removeFirst();
-			glDeleteSync(next[1]);
-			imp.slots.release((int) next[0]);
-		}
+			imp.close();
+			return true;
+		});
 	}
 
 	/** A seat with no view any more (gone, or faded out after leaving) lets go of its game's frames. */
@@ -431,32 +412,12 @@ public final class Compositor {
 				retired.add(incoming.remove(gone));
 			}
 		}
+		for (Integer gone : List.copyOf(scratch.keySet())) {
+			if (!seats.contains(gone)) {
+				scratch.remove(gone).close();
+			}
+		}
 		holding.retainAll(seats);
-	}
-
-	private void closeRetired() {
-		// Safe straight away: GL defers freeing a deleted texture or memory object until the GPU has stopped using it,
-		// and an imported memory object keeps the shared allocation alive for as long as it exists.
-		while (!retired.isEmpty()) {
-			retired.removeFirst().close();
-		}
-	}
-
-	private void recordCost(long nanos) {
-		if (costCount < costs.length) {
-			costs[costCount++] = nanos;
-		}
-		long now = System.nanoTime();
-		if (now - costWindowStart < 30_000_000_000L || costCount == 0) {
-			return;
-		}
-		long[] sorted = java.util.Arrays.copyOf(costs, costCount);
-		java.util.Arrays.sort(sorted);
-		HearthsideMod.LOGGER.info("Hearthside compositor cost guests={} p50={} ms p95={} ms frames={}", Math.max(0, drawn.size() - 1),
-				String.format("%.3f", sorted[sorted.length / 2] / 1e6), String.format("%.3f", sorted[(int) (sorted.length * 0.95)] / 1e6),
-				costCount);
-		costCount = 0;
-		costWindowStart = now;
 	}
 
 	/** E2E: where to save the next composited window as a PNG (what the players see), or null. */
@@ -467,85 +428,4 @@ public final class Compositor {
 
 	/** E2E: a window point (pixels from the top-left) whose composited colour is logged too, or null. */
 	public static volatile int[] e2eProbePoint;
-
-	private final Map<Integer, Long> lastGapLog = new HashMap<>();
-
-	/** E2E: saves the window's back buffer as drawn so far this frame (every view and the overlay). */
-	private static void capture(Path file, int width, int height) {
-		ByteBuffer pixels = org.lwjgl.system.MemoryUtil.memAlloc(width * height * 4);
-		try {
-			int previousRead = glGetInteger(GL_READ_FRAMEBUFFER_BINDING);
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-			glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
-			var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
-			for (int y = 0; y < height; y++) {
-				for (int x = 0; x < width; x++) {
-					int i = ((height - 1 - y) * width + x) * 4; // GL rows run bottom-up
-					image.setRGB(x, y, (pixels.get(i) & 0xFF) << 16 | (pixels.get(i + 1) & 0xFF) << 8 | pixels.get(i + 2) & 0xFF);
-				}
-			}
-			java.nio.file.Files.createDirectories(file.toAbsolutePath().getParent());
-			javax.imageio.ImageIO.write(image, "png", file.toFile());
-		} catch (IOException e) {
-			HearthsideMod.LOGGER.warn("Could not save the window capture {}", file, e);
-		} finally {
-			org.lwjgl.system.MemoryUtil.memFree(pixels);
-		}
-	}
-
-	/**
-	 * E2E: reads the centre of every settled view this frame; the bare divider colour there is a gap (logged at most
-	 * 4×/s). A view fading in or out shows the divider through it on purpose: its alpha is logged instead.
-	 */
-	private void sampleGaps(int swapHeight) {
-		int previousRead = glGetInteger(GL_READ_FRAMEBUFFER_BINDING);
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-		long now = System.nanoTime();
-		for (ViewFrame view : frames) {
-			int seat = view.seat();
-			Rect rect = view.rect();
-			if (view.alpha() < 1f) {
-				HearthsideMod.LOGGER.info("Hearthside compositor fade seat={} alpha={}", seat, String.format(Locale.ROOT, "%.2f", view.alpha()));
-				continue;
-			}
-			glReadPixels(rect.x() + rect.width() / 2, swapHeight - (rect.y() + rect.height() / 2) - 1, 1, 1, GL_RGBA,
-					GL_UNSIGNED_BYTE, probePixel);
-			boolean bare = (probePixel.get(0) & 0xFF) == 0x12 && (probePixel.get(1) & 0xFF) == 0x0c
-					&& (probePixel.get(2) & 0xFF) == 0x08;
-			if (bare && now - lastGapLog.getOrDefault(seat, 0L) > 250_000_000L) {
-				lastGapLog.put(seat, now);
-				HearthsideMod.LOGGER.info("Hearthside compositor gap player={}", seat + 1);
-			}
-		}
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
-	}
-
-	/** E2E: logs the composited colour just inside each guest viewport's top-left corner, once a second. */
-	private void probeGuests(int swapHeight) {
-		long now = System.nanoTime();
-		if (now - lastProbe < PROBE_INTERVAL_NANOS) {
-			return;
-		}
-		lastProbe = now;
-		int previousRead = glGetInteger(GL_READ_FRAMEBUFFER_BINDING);
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-		for (Map.Entry<Integer, Rect> guest : drawn.entrySet()) {
-			Import imp = imports.get(guest.getKey());
-			if (guest.getKey() == 0 || imp == null) {
-				continue;
-			}
-			Rect fitted = guest.getValue();
-			glReadPixels(fitted.x() + 4, swapHeight - (fitted.y() + 4) - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probePixel);
-			HearthsideMod.LOGGER.info("Hearthside compositor probe player={} gen={} rgb={}", guest.getKey() + 1, imp.generation,
-					String.format("%02x%02x%02x", probePixel.get(0) & 0xFF, probePixel.get(1) & 0xFF, probePixel.get(2) & 0xFF));
-		}
-		int[] point = e2eProbePoint;
-		if (point != null) {
-			glReadPixels(point[0], swapHeight - point[1] - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probePixel);
-			HearthsideMod.LOGGER.info("Hearthside overlay probe rgb={}", String.format("%02x%02x%02x", probePixel.get(0) & 0xFF,
-					probePixel.get(1) & 0xFF, probePixel.get(2) & 0xFF));
-		}
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
-	}
 }

@@ -4,6 +4,7 @@ import dev.hearthside.core.auth.GuestTokenAuthority;
 import dev.hearthside.core.channel.ControlConnection;
 import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
+import dev.hearthside.core.config.SplitScreenConfig;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.ControlSchemeJson;
@@ -11,11 +12,14 @@ import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.GamepadSource;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
+import dev.hearthside.core.launch.GraphicsBackend;
 import dev.hearthside.core.launch.HostJvm;
+import dev.hearthside.core.launch.LaunchCommand;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.launch.SatelliteLaunch;
 import dev.hearthside.core.launch.UnsupportedLauncherException;
 import dev.hearthside.core.layout.ConsoleLayout;
+import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
 import dev.hearthside.core.process.JdkProcessLauncher;
@@ -41,12 +45,16 @@ import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
+import dev.hearthside.fabric.client.satellite.SodiumVersion;
+import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
+import dev.hearthside.core.compositor.TransportDecision;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.compositor.OverlayPass;
-import dev.hearthside.fabric.client.compositor.GlInterop;
 import dev.hearthside.fabric.client.compositor.Presentation;
+import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
+import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -71,6 +79,7 @@ import java.util.concurrent.TimeUnit;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.toasts.SystemToast;
@@ -105,7 +114,7 @@ public final class Party {
 	private boolean pauseOnLostFocusBefore;
 	private Rect workArea;
 	/** Where every player's view is drawn in the one window while compositing (fresh for each split-screen run). */
-	private Views views = new Views();
+	private Views views;
 	/** What each guest's view shows: their card while they join, then their game (fresh for each split-screen run). */
 	private ViewPhases phases = new ViewPhases();
 	/** Guests whose views are fading out: who they were (and their card, if they were still picking), drawn as they were. */
@@ -133,6 +142,10 @@ public final class Party {
 	private volatile boolean hostClaimArmed;
 	/** GPU sharing or copying, as this machine's probe decided at session start. */
 	private volatile Transport hostTransport = Transport.COPY;
+	/** The graphics API guests render with: this game's own, so its compositor can take their frames (decided at session start). */
+	private volatile GraphicsBackend guestBackend = GraphicsBackend.OPENGL;
+	/** Each guest's heap and render-distance cap, from {@code config/hearthside.json} as it was when this session opened. */
+	private final SplitScreenConfig config;
 
 	private static final class Slot {
 		final int index;
@@ -157,6 +170,10 @@ public final class Party {
 		this.minecraft = minecraft;
 		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
+		this.config = SplitScreenConfigFile.load(gameDir);
+		HearthsideMod.LOGGER.info("Hearthside split-screen config guestMemoryMb={} guestRenderDistance={} layout={}",
+				config.guestMemoryMb(), config.guestRenderDistance(), config.layout());
+		this.views = new Views(config.layout());
 		this.mapSampler = new MapSampler(minecraft.getUser().getName());
 		this.controlServer = ControlServer.start(this::verifyHello);
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
@@ -165,17 +182,36 @@ public final class Party {
 		HearthsideMod.LOGGER.info("Hearthside session open: control channel on {}", controlServer.port());
 	}
 
-	/** Composite into this window when the GL context supports it; otherwise tile real windows. Render thread. */
+	/** Composite into this window when this game can; otherwise tile real windows. Render thread. */
 	private void choosePresentation() {
+		GraphicsBackend own = "Vulkan".equals(RenderSystem.getDevice().getDeviceInfo().backendName())
+				? GraphicsBackend.VULKAN : GraphicsBackend.OPENGL;
+		HearthsideMod.LOGGER.info("Hearthside graphics backend={}", own.argument());
+		guestBackend = own;
+		// E2E: guests on a given backend, whatever the host's.
+		String override = System.getProperty("hearthside.e2e.guestBackend");
+		if (override != null) {
+			for (GraphicsBackend b : GraphicsBackend.values()) {
+				if (b.argument().equalsIgnoreCase(override)) {
+					guestBackend = b;
+				}
+			}
+			HearthsideMod.LOGGER.info("Hearthside guests' backend override \"{}\": guests use {}", override, guestBackend.argument());
+		}
 		try {
-			// E2E: tiled windows, as on a GL without the compositor's extensions or on Vulkan.
-			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Presentation.glSupportsCompositing();
+			// E2E: tiled windows, as where the canvas can't be created.
+			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Compositor.canComposite();
 			if (composite) {
-				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5).
-				hostTransport = TransportChoice.choose(GlInterop.probe(false));
+				// Decided once per session here, where the window is: a host that can't import launches every guest
+				// copying (Spec C section 3.7, step 1). Each guest's slots are checked against it as they arrive.
+				SharingFacts facts = SharedImages.forThisGame().facts();
+				TransportDecision decision = TransportChoice.decide(facts, Presentation.forceCopy());
+				HearthsideMod.LOGGER.info("Hearthside GPU sharing on this host: {} -> {}", facts, decision);
+				hostTransport = decision.transport();
 			}
 		} catch (RuntimeException | LinkageError e) {
-			composite = false; // no GL context (for example Minecraft's Vulkan backend)
+			HearthsideMod.LOGGER.error("Hearthside could not set up compositing; tiled windows for this session", e);
+			composite = false;
 		}
 		HearthsideMod.LOGGER.info("Hearthside split-screen presentation: {}", composite ? "one window" : "tiled windows");
 	}
@@ -387,6 +423,11 @@ public final class Party {
 		return slots.size();
 	}
 
+	/** How this session shares the screen, from {@code config/hearthside.json} as it was when the session opened. */
+	public LayoutSettings layout() {
+		return config.layout();
+	}
+
 	public static Party current() {
 		return current;
 	}
@@ -401,6 +442,13 @@ public final class Party {
 			throw new IllegalArgumentException(name + " is already playing");
 		}
 		return startGuest(loadOrCreateProfile(name));
+	}
+
+	/** The command with one more environment variable for the guest's game (E2E hooks: satellites get no -Dhearthside.*). */
+	private static LaunchCommand withEnvironment(LaunchCommand command, String name, String value) {
+		Map<String, String> environment = new HashMap<>(command.environment());
+		environment.put(name, value);
+		return new LaunchCommand(command.command(), environment, command.removedEnvironment(), command.workingDirectory());
 	}
 
 	/** Starts a guest's game in the lowest free slot, as {@code profile}; returns their player index. Render thread. */
@@ -420,9 +468,28 @@ public final class Party {
 			slot.secret = newSecret();
 			try {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
-				return LaunchCommandBuilder.build(host,
+				LaunchCommand command = LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
-						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation()));
+						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
+								guestBackend, config.guestMemoryMb(), config.guestRenderDistance()));
+				if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader")) {
+					// E2E: the guest behaves as if its machine had no Vulkan runtime.
+					command = withEnvironment(command, ExportDevice.NO_VULKAN_LOADER_ENV, "1");
+				}
+				if (Boolean.getBoolean("hearthside.e2e.guestTryFullscreen")) {
+					// E2E: once in the world, the guest tries every way into fullscreen (Q4).
+					command = withEnvironment(command, dev.hearthside.fabric.client.dev.GuestFullscreenAttempt.ENV, "1");
+				}
+				if (Boolean.getBoolean("hearthside.e2e.guestSaveOptions")) {
+					// E2E: once in the world, the guest saves its options, as closing Video Settings does (Q1b).
+					command = withEnvironment(command, dev.hearthside.fabric.client.dev.GuestSavesOptions.ENV, "1");
+				}
+				String sodium = System.getProperty("hearthside.e2e.pretendSodiumVersion");
+				if (sodium != null) {
+					// E2E: the guest takes its Sodium for this version (Q4b).
+					command = withEnvironment(command, SodiumVersion.PRETEND_ENV, sodium);
+				}
+				return command;
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
@@ -1561,7 +1628,7 @@ public final class Party {
 			return;
 		}
 		splitScreen = false;
-		views = new Views();
+		views = new Views(config.layout());
 		phases = new ViewPhases();
 		leaving.clear();
 		relayoutAfterFade = false;
@@ -1624,7 +1691,10 @@ public final class Party {
 		if (workArea == null) {
 			workArea = WindowPlacer.primaryWorkArea();
 		}
-		List<Rect> rects = new ConsoleLayout(TwoPlayerSplit.VERTICAL).layout(1 + guests.size(), workArea);
+		// Real windows: two players side by side or stacked as configured; three always a wide top (no panel to draw).
+		TwoPlayerSplit two = config.layout().two() == LayoutSettings.TwoPlayer.STACKED
+				? TwoPlayerSplit.HORIZONTAL : TwoPlayerSplit.VERTICAL;
+		List<Rect> rects = new ConsoleLayout(two).layout(1 + guests.size(), workArea);
 		WindowPlacer.place(minecraft.getWindow(), rects.get(0));
 		for (int i = 0; i < guests.size(); i++) {
 			ControlConnection connection = guests.get(i).connection;
