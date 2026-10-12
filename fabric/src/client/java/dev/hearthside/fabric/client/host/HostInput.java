@@ -463,7 +463,10 @@ final class HostInput implements Runnable {
 		}
 	}
 
-	/** In the lobby, player 1's remembered controller is theirs again as soon as it is connected. */
+	/**
+	 * In the lobby, player 1's remembered controller is theirs again as soon as it is connected. A button it still holds
+	 * (the A that answered the Vulkan offer) doesn't also press anything in the lobby.
+	 */
 	private void autoClaimHost(List<PadSnapshot> pads) {
 		String guid = session.hostControllerGuid();
 		// Only as the lobby opens: later, an idle controller of that model is far more likely a guest's.
@@ -474,6 +477,7 @@ final class HostInput implements Runnable {
 			if (guid.equals(pad.guid()) && router.playerFor(pad.instanceId()).isEmpty()
 					&& !guestPads.contains(pad.instanceId())) {
 				claimForHost(pad.instanceId());
+				heldFromCard.put(0, pad.frame().buttons());
 				return;
 			}
 		}

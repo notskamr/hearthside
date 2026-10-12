@@ -555,7 +555,8 @@ public final class Party {
 	volatile Integer pendingHostPad;
 	/**
 	 * A controller still holding the button that answered a card before the lobby (the Vulkan offer's Not now): that
-	 * press is not a join. It isn't player 1's either, unless it also pressed Co-op.
+	 * press is not a join. It is player 1's only if it also pressed Co-op or is their remembered controller, and then
+	 * the button it still holds presses nothing in the lobby either.
 	 */
 	volatile Integer answeringPad;
 
