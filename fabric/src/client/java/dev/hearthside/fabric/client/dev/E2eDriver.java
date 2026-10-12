@@ -556,6 +556,7 @@ public final class E2eDriver {
 		String before = Files.exists(options) ? Files.readString(options) : null;
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
 		// Balanced's cap of 8, whatever Auto chose for this machine: the step is about a cap holding through a save.
+		String presetBefore = System.getProperty("hearthside.e2e.preset");
 		System.setProperty("hearthside.e2e.preset", "balanced");
 		try {
 			writeOption(options, "renderDistance", "12");
@@ -578,7 +579,11 @@ public final class E2eDriver {
 					"the guest's options.txt keeps its own 12");
 		} finally {
 			System.clearProperty("hearthside.e2e.guestSaveOptions");
-			System.clearProperty("hearthside.e2e.preset");
+			if (presetBefore == null) {
+				System.clearProperty("hearthside.e2e.preset");
+			} else {
+				System.setProperty("hearthside.e2e.preset", presetBefore);
+			}
 			if (before != null) {
 				Files.writeString(options, before);
 			}
@@ -1083,6 +1088,7 @@ public final class E2eDriver {
 		writeOption(options, "biomeBlendRadius", "2");
 		writeOption(options, "entityDistanceScaling", "1.0");
 		Map<String, String> own = optionValues(options);
+		String presetBefore = System.getProperty("hearthside.e2e.preset");
 		System.setProperty("hearthside.e2e.preset", "performance");
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
 		long handle = onRender(() -> minecraft.getWindow().handle());
@@ -1122,7 +1128,7 @@ public final class E2eDriver {
 			check(simulation <= 6, "the server simulates at most 6 chunks (" + simulation + ")");
 			check(hostLogSince(mark).contains("hearthside simulation distance 6 (preset)") || simulation < 6,
 					"the preset's simulation distance is logged");
-			screenshot("preset-performance");
+			windowShot("preset-performance");
 
 			waitFor("the guest saved its options", Duration.ofSeconds(30),
 					() -> satelliteLog().contains("hearthside e2e guest saved its options"));
@@ -1132,7 +1138,11 @@ public final class E2eDriver {
 						key + " is still the guest's own " + own.get(key) + " in options.txt (saved " + after.get(key) + ")");
 			}
 		} finally {
-			System.clearProperty("hearthside.e2e.preset");
+			if (presetBefore == null) {
+				System.clearProperty("hearthside.e2e.preset");
+			} else {
+				System.setProperty("hearthside.e2e.preset", presetBefore);
+			}
 			System.clearProperty("hearthside.e2e.guestSaveOptions");
 			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
 			guestLeaves();

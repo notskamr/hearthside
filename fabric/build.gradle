@@ -87,6 +87,11 @@ loom {
 				// Every guest copies its frames, as on a PC whose OpenGL can't share them (Intel); guests get it too.
 				vmArg '-Dhearthside.forceCopy=true'
 			}
+			def preset = project.findProperty('e2ePreset')
+			if (preset) {
+				// Every party uses this preset (quality, balanced or performance), e.g. for screenshots at Performance.
+				vmArg "-Dhearthside.e2e.preset=${preset}"
+			}
 			if (project.findProperty('e2eValidation') == 'true') {
 				programArg '--vulkanValidation'
 			}
