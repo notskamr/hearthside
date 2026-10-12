@@ -218,8 +218,12 @@ public final class Compositor {
 	/**
 	 * A guest (re)allocated its frame slots; import them. GPU-shared slots are imported only when the guest's GPU and
 	 * driver are this game's (Spec C section 3.7, step 3); otherwise the guest is told to copy, and the host says why.
+	 * {@code announced} is the generation the guest announced last, which may already be a later one: the guest keeps
+	 * only its current and previous generations, so one it has moved on from may be gone before it is imported (a burst
+	 * of resizes), and that is no error.
 	 */
-	public void onGuestSlots(int playerIndex, ControlMessage.FrameSlotsReady ready) {
+	public void onGuestSlots(int playerIndex, ControlMessage.FrameSlotsReady ready, int announced) {
+		boolean superseded = announced != ready.generation();
 		GuestImport previous = imports.get(playerIndex);
 		GuestImport waiting = incoming.get(playerIndex);
 		if ((previous != null && previous.generation() == ready.generation())
@@ -230,7 +234,11 @@ public final class Compositor {
 		try {
 			table = SegmentSlotTable.open(Path.of(ready.controlFile()));
 		} catch (IOException e) {
-			HearthsideMod.LOGGER.error("Could not open player {}'s frame slots at {}", playerIndex + 1, ready.controlFile(), e);
+			if (superseded) {
+				movedOn(playerIndex, ready);
+			} else {
+				HearthsideMod.LOGGER.error("Could not open player {}'s frame slots at {}", playerIndex + 1, ready.controlFile(), e);
+			}
 			return;
 		}
 		if (ready.transport() == Transport.GPU_SHARED) {
@@ -247,8 +255,13 @@ public final class Compositor {
 		try {
 			fresh = GuestImport.open(ready, table, SharedImages.forThisGame());
 		} catch (ImportFailed | RuntimeException e) {
-			HearthsideMod.LOGGER.error("Could not import player {}'s frames", playerIndex + 1, e);
 			table.close();
+			if (superseded) {
+				// Its newer generation is on its way, and is what counts (a failure there is an error, and falls back).
+				movedOn(playerIndex, ready);
+				return;
+			}
+			HearthsideMod.LOGGER.error("Could not import player {}'s frames", playerIndex + 1, e);
 			if (ready.transport() == Transport.GPU_SHARED) {
 				// Spec B section 4: fall back to copying rather than leave this player frozen on their last frame.
 				onImportFailed.accept(playerIndex);
@@ -267,6 +280,12 @@ public final class Compositor {
 		HearthsideMod.LOGGER.info("Hearthside compositor: player {} frames {} {}x{} backend={}", playerIndex + 1,
 				ready.transport(), ready.width(), ready.height(),
 				com.mojang.blaze3d.systems.RenderSystem.getDevice().getDeviceInfo().backendName().toLowerCase(java.util.Locale.ROOT));
+	}
+
+	/** A generation the guest had already moved on from couldn't be imported: one line, no trace (Spec D final review). */
+	private static void movedOn(int playerIndex, ControlMessage.FrameSlotsReady ready) {
+		HearthsideMod.LOGGER.info("Hearthside player {}'s frames moved on before generation {} could be imported",
+				playerIndex + 1, ready.generation());
 	}
 
 	/**

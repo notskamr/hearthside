@@ -932,6 +932,8 @@ public final class E2eDriver {
 		onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
 		waitForProbe(2, hostLogLength(), Duration.ofSeconds(20), before);
 		check(!hostLogSince(mark).contains("exception"), "no exception in the host log");
+		// A generation the guest had already moved on from is gone, not an import error (Spec D final review F4).
+		check(!hostLogSince(mark).contains("could not import player"), "no superseded generation logged as an import error");
 		check(!satelliteLog().substring(satMark).contains("exception"), "no exception in the guest's log");
 	}
 

@@ -174,6 +174,8 @@ public final class Party {
 		volatile String secret;
 		volatile SatelliteSupervisor supervisor;
 		volatile ControlConnection connection;
+		/** The frame-slot generation this guest's game announced last, as it arrived (ahead of the import it queues). */
+		volatile int announcedGeneration;
 
 		Slot(int index, GuestProfile profile) {
 			this.index = index;
@@ -1768,10 +1770,11 @@ public final class Party {
 								}
 							});
 						} else if (message instanceof ControlMessage.FrameSlotsReady ready) {
+							slot.announcedGeneration = ready.generation();
 							minecraft.execute(() -> {
 								Compositor compositor = Compositor.active();
 								if (compositor != null && slots.get(slot.index) == slot) {
-									compositor.onGuestSlots(slot.index, ready);
+									compositor.onGuestSlots(slot.index, ready, slot.announcedGeneration);
 								}
 							});
 						}
