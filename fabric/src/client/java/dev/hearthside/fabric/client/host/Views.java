@@ -16,12 +16,15 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * The party's views in the one window (Spec A section 6): Spec A's layouts for the players in the world, player 1
- * top-left and the others in the order they joined, gliding whenever someone arrives or the window changes. A leaving
- * view fades out where it is first; the party then re-lays out without it. Render thread.
+ * The party's views in the one window (Spec A section 6): Spec A's layouts for the players in the world, as the host's
+ * {@code config/hearthside.json} arranges them, player 1 top-left and the others in the order they joined, gliding
+ * whenever someone arrives or the window changes. A leaving view fades out where it is first; the party then re-lays
+ * out without it. Render thread.
  */
 final class Views implements ViewSource {
 	private final ViewMotion motion = new ViewMotion();
+	/** Side by side or stacked, the three-player arrangement and the party panel. */
+	private final LayoutSettings settings;
 	/** Guests' seats in the order they joined (a rejoin goes to the end, so nobody else's view moves for it). */
 	private final List<Integer> order = new ArrayList<>();
 	private Rect window;
@@ -30,6 +33,10 @@ final class Views implements ViewSource {
 	private long changedAt, panelSince, panelGoneAt;
 	/** Where the panel was before it went (it fades out there), or null. */
 	private Rect lastPanel;
+
+	Views(LayoutSettings settings) {
+		this.settings = settings;
+	}
 
 	/** The guests now in the world and the window's size: views glide to the new layout (or jump, if the window changed). */
 	void update(Collection<Integer> guests, Rect newWindow, long now, boolean reduceMotion) {
@@ -41,7 +48,7 @@ final class Views implements ViewSource {
 		List<Integer> seats = new ArrayList<>();
 		seats.add(0);
 		seats.addAll(order);
-		LayoutPlan plan = SplitLayout.plan(seats.size(), newWindow, LayoutSettings.DEFAULTS);
+		LayoutPlan plan = SplitLayout.plan(seats.size(), newWindow, settings);
 		Map<Integer, Rect> targets = new LinkedHashMap<>();
 		for (int i = 0; i < seats.size(); i++) {
 			targets.put(seats.get(i), plan.players().get(i));

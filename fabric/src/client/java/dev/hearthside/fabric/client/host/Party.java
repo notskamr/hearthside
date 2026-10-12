@@ -19,6 +19,7 @@ import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.launch.SatelliteLaunch;
 import dev.hearthside.core.launch.UnsupportedLauncherException;
 import dev.hearthside.core.layout.ConsoleLayout;
+import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
 import dev.hearthside.core.process.JdkProcessLauncher;
@@ -112,7 +113,7 @@ public final class Party {
 	private boolean pauseOnLostFocusBefore;
 	private Rect workArea;
 	/** Where every player's view is drawn in the one window while compositing (fresh for each split-screen run). */
-	private Views views = new Views();
+	private Views views;
 	/** What each guest's view shows: their card while they join, then their game (fresh for each split-screen run). */
 	private ViewPhases phases = new ViewPhases();
 	/** Guests whose views are fading out: who they were (and their card, if they were still picking), drawn as they were. */
@@ -169,8 +170,9 @@ public final class Party {
 		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
 		this.config = SplitScreenConfigFile.load(gameDir);
-		HearthsideMod.LOGGER.info("Hearthside split-screen config guestMemoryMb={} guestRenderDistance={}",
-				config.guestMemoryMb(), config.guestRenderDistance());
+		HearthsideMod.LOGGER.info("Hearthside split-screen config guestMemoryMb={} guestRenderDistance={} layout={}",
+				config.guestMemoryMb(), config.guestRenderDistance(), config.layout());
+		this.views = new Views(config.layout());
 		this.mapSampler = new MapSampler(minecraft.getUser().getName());
 		this.controlServer = ControlServer.start(this::verifyHello);
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
@@ -420,6 +422,11 @@ public final class Party {
 		return slots.size();
 	}
 
+	/** How this session shares the screen, from {@code config/hearthside.json} as it was when the session opened. */
+	public LayoutSettings layout() {
+		return config.layout();
+	}
+
 	public static Party current() {
 		return current;
 	}
@@ -461,6 +468,13 @@ public final class Party {
 					// E2E: the guest behaves as if its machine had no Vulkan runtime (satellites get no -Dhearthside.*).
 					Map<String, String> environment = new HashMap<>(command.environment());
 					environment.put(ExportDevice.NO_VULKAN_LOADER_ENV, "1");
+					command = new LaunchCommand(command.command(), environment, command.removedEnvironment(),
+							command.workingDirectory());
+				}
+				if (Boolean.getBoolean("hearthside.e2e.guestTryFullscreen")) {
+					// E2E: once in the world, the guest tries every way into fullscreen (Q4).
+					Map<String, String> environment = new HashMap<>(command.environment());
+					environment.put(dev.hearthside.fabric.client.dev.GuestFullscreenAttempt.ENV, "1");
 					command = new LaunchCommand(command.command(), environment, command.removedEnvironment(),
 							command.workingDirectory());
 				}
@@ -1603,7 +1617,7 @@ public final class Party {
 			return;
 		}
 		splitScreen = false;
-		views = new Views();
+		views = new Views(config.layout());
 		phases = new ViewPhases();
 		leaving.clear();
 		relayoutAfterFade = false;
@@ -1666,7 +1680,10 @@ public final class Party {
 		if (workArea == null) {
 			workArea = WindowPlacer.primaryWorkArea();
 		}
-		List<Rect> rects = new ConsoleLayout(TwoPlayerSplit.VERTICAL).layout(1 + guests.size(), workArea);
+		// Real windows: two players side by side or stacked as configured; three always a wide top (no panel to draw).
+		TwoPlayerSplit two = config.layout().two() == LayoutSettings.TwoPlayer.STACKED
+				? TwoPlayerSplit.HORIZONTAL : TwoPlayerSplit.VERTICAL;
+		List<Rect> rects = new ConsoleLayout(two).layout(1 + guests.size(), workArea);
 		WindowPlacer.place(minecraft.getWindow(), rects.get(0));
 		for (int i = 0; i < guests.size(); i++) {
 			ControlConnection connection = guests.get(i).connection;
