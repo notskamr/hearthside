@@ -46,6 +46,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -73,7 +74,11 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.gui.screens.options.VideoSettingsScreen;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.BundleContents;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.data.AtlasIds;
@@ -82,6 +87,10 @@ import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.gui.components.toasts.SystemToast;
+import net.minecraft.client.gui.components.toasts.Toast;
+import net.minecraft.client.gui.components.toasts.ToastManager;
+import net.minecraft.client.gui.components.toasts.TutorialToast;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
@@ -129,6 +138,7 @@ public final class E2eDriver {
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"Q1b", "Q1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
+			{"F1", "1"}, {"F3", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
 			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
@@ -139,7 +149,7 @@ public final class E2eDriver {
 			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
 			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
-			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"S2", "B3", "P9"},
+			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
 			{"D9"}, {"7"},
@@ -260,6 +270,8 @@ public final class E2eDriver {
 			step("V8 a broken view shader falls back to a plain blit", this::brokenViewShaderFallsBack);
 			step("C5 copy transport works", this::copyTransportWorks);
 			step("C5b two quick resizes on the copy transport keep the guest composited", this::quickResizesOnCopy);
+			step("F1 copied frames are never torn, even when copying is slow", this::copiedFramesAreWhole);
+			step("F3 no uncleared memory or see-through pixels in a guest's view, on either transport", this::noGarbageOrSeeThrough);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
 			step("V3 a device mismatch copies frames and says why", this::deviceMismatchCopies);
@@ -318,6 +330,7 @@ public final class E2eDriver {
 				step("H5 player 1 can switch between the controller pointer and the mouse at any time", this::pointerOrMouse);
 				step("H5b a mouse click goes where the arrow is, never where the controller's pointer rests", this::clickWhereTheArrowIs);
 				step("H6 unplugging player 1's controller with a screen open hides its pointer and hints", this::hostPadUnpluggedOnScreen);
+				step("H7 toasts never cover hints, no keyboard tutorial on a controller, one hint row, bundle hints", this::hintsAndToasts);
 				step("S2 the join prompt, a drop-in and a leave make their warm sounds", () -> dropInMakesSounds(dropInSounds));
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
@@ -750,6 +763,102 @@ public final class E2eDriver {
 		waitForProbe(2, hostLogLength(), Duration.ofSeconds(20), before);
 		check(!hostLogSince(mark).contains("exception"), "no exception in the host log");
 		check(!satelliteLog().substring(satMark).contains("exception"), "no exception in the guest's log");
+	}
+
+	/**
+	 * F1 (Spec D section 3.2): the guest paints whole frames in two alternating colours while copying is slowed on both
+	 * sides, standing in for a slow integrated GPU. The host judges every steady frame at 13 points: one frame showing
+	 * both colours is torn, any other colour is garbage.
+	 */
+	private void copiedFramesAreWhole() throws Exception {
+		withGuestHooks(Map.of("hearthside.forceCopy", "true", "hearthside.e2e.solidFrames", "255",
+				"hearthside.e2e.slowCopyMs", "4", "hearthside.e2e.tearCheck", "true"), () -> {
+			long mark = rejoinGuest();
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			String[] counts = waitForTearCheck(2, mark, 600, Duration.ofSeconds(120));
+			log("   tear check (copy, slowed 4 ms): frames=" + counts[0] + " mixed=" + counts[1] + " bad=" + counts[2]
+					+ " first=" + counts[3]);
+			check(counts[1].equals("0"), "no torn frame (mixed=" + counts[1] + ")");
+			check(counts[2].equals("0"), "only the guest's colours (bad=" + counts[2] + ", first=" + counts[3] + ")");
+		});
+	}
+
+	/**
+	 * F3 (Spec D sections 3.2 and R10): every texture Hearthside creates starts full of garbage, as Intel's drivers leave
+	 * it, and the guest's frames are half transparent. The host must still show exactly the guest's colours, edge to
+	 * edge, on the copy transport and on the shared one.
+	 */
+	private void noGarbageOrSeeThrough() throws Exception {
+		for (boolean copy : new boolean[] {true, false}) {
+			Map<String, String> hooks = new java.util.HashMap<>(Map.of("hearthside.e2e.poisonTextures", "true",
+					"hearthside.e2e.solidFrames", "128", "hearthside.e2e.tearCheck", "true"));
+			if (copy) {
+				hooks.put("hearthside.forceCopy", "true");
+			}
+			withGuestHooks(hooks, () -> {
+				long mark = rejoinGuest();
+				waitFor("the guest's frame slots", Duration.ofSeconds(30),
+						() -> satelliteLog().contains("hearthside frame slots ready transport="));
+				if (!copy && !satelliteLog().contains("transport=gpu_shared")) {
+					log("   F3: this backend copies frames; the copy run covers it");
+					return;
+				}
+				String[] counts = waitForTearCheck(2, mark, 300, Duration.ofSeconds(90));
+				log("   tear check (" + (copy ? "copy" : "shared") + ", poisoned, half alpha): frames=" + counts[0]
+						+ " mixed=" + counts[1] + " bad=" + counts[2] + " first=" + counts[3]);
+				check(counts[1].equals("0"), "no torn frame (mixed=" + counts[1] + ")");
+				check(counts[2].equals("0"), "no garbage or see-through pixel (bad=" + counts[2] + ", first=" + counts[3] + ")");
+			});
+		}
+	}
+
+	/**
+	 * Runs {@code body} with host properties set (Party passes its {@code hearthside.e2e.*} hooks on to the guest games it
+	 * launches), then clears them and brings Guest2 back without them.
+	 */
+	private void withGuestHooks(Map<String, String> hooks, ThrowingRunnable body) throws Exception {
+		hooks.forEach(System::setProperty);
+		try {
+			body.run();
+		} finally {
+			hooks.keySet().forEach(System::clearProperty);
+			rejoinGuest();
+		}
+	}
+
+	/** Guest2 leaves and joins again, so its game starts with the properties now set. Returns the host log's length before the join. */
+	private long rejoinGuest() throws Exception {
+		onRender(() -> {
+			Party.current().leave(GUEST);
+			return null;
+		});
+		waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+		long mark = hostLogLength();
+		onRender(() -> {
+			Party.current().join(GUEST);
+			return null;
+		});
+		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+		return mark;
+	}
+
+	/**
+	 * The tear check's counts for {@code player} (frames, mixed, bad, first bad colour) once the host has judged at least
+	 * {@code frames} steady frames since {@code mark}.
+	 */
+	private String[] waitForTearCheck(int player, long mark, int frames, Duration timeout) throws Exception {
+		Pattern line = Pattern.compile(
+				"hearthside tear check player=" + player + " frames=([0-9]+) mixed=([0-9]+) bad=([0-9]+) first=(\\S+)");
+		String[][] last = {null};
+		waitFor(frames + " judged frames of player " + player, timeout, () -> {
+			Matcher m = line.matcher(hostLogSince(mark));
+			while (m.find()) {
+				last[0] = new String[] {m.group(1), m.group(2), m.group(3), m.group(4)};
+			}
+			return last[0] != null && Integer.parseInt(last[0][0]) >= frames;
+		});
+		return last[0];
 	}
 
 	/** Where the host log stood when gap sampling first started; G1 reads every gap line after it. */
@@ -3398,19 +3507,25 @@ public final class E2eDriver {
 
 	/** Steers the pointer onto a widget with a pad's left stick, slowing as it nears. */
 	private void steerPointerOnto(int pad, AbstractWidget target) throws Exception {
+		steerPointerOnto(pad, new Rect(target.getX(), target.getY(), target.getWidth(), target.getHeight()),
+				target.getMessage().getString());
+	}
+
+	/** Steers {@code pad}'s pointer into {@code target} (GUI pixels), well inside it. */
+	private void steerPointerOnto(int pad, Rect target, String name) throws Exception {
 		long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
 		try {
 			while (true) {
 				double[] off = onRender(() -> {
 					var window = minecraft.getWindow();
 					double toGui = (double) window.getGuiScaledWidth() / window.getScreenWidth();
-					return new double[] {target.getX() + target.getWidth() / 2.0 - VirtualCursor.x() * toGui,
-							target.getY() + target.getHeight() / 2.0 - VirtualCursor.y() * toGui};
+					return new double[] {target.x() + target.width() / 2.0 - VirtualCursor.x() * toGui,
+							target.y() + target.height() / 2.0 - VirtualCursor.y() * toGui};
 				});
-				if (Math.abs(off[0]) < target.getWidth() / 2.0 - 3 && Math.abs(off[1]) < target.getHeight() / 2.0 - 3) {
+				if (Math.abs(off[0]) < Math.max(1, target.width() / 2.0 - 3) && Math.abs(off[1]) < Math.max(1, target.height() / 2.0 - 3)) {
 					break;
 				}
-				check(System.nanoTime() < deadline, "the pointer reached " + target.getMessage().getString());
+				check(System.nanoTime() < deadline, "the pointer reached " + name);
 				PADS.set(pad, new InputFrame(0, 0, stick(off[0]), stick(off[1]), 0, 0, 0, 0));
 				Thread.sleep(30);
 			}
@@ -3487,6 +3602,148 @@ public final class E2eDriver {
 		} finally {
 			releaseHostPad();
 		}
+	}
+
+	/**
+	 * H7 (Spec D section 3.5, plan R8): player 1 on a controller in the survival inventory. Minecraft's toasts never
+	 * cover the hints, which move clear and stay drawn; a keyboard tutorial toast never appears; the screen draws one
+	 * hint row; and a bundle offers Choose and Take out, with the right stick choosing.
+	 */
+	private void hintsAndToasts() throws Exception {
+		String name = onRender(() -> minecraft.player.getName().getString());
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		server.submit(() -> {
+			var source = server.createCommandSourceStack().withSuppressedOutput();
+			server.getCommands().performPrefixedCommand(source, "gamemode survival " + name);
+			ItemStack bundle = new ItemStack(Items.BUNDLE);
+			BundleContents.Mutable contents = new BundleContents.Mutable();
+			contents.tryInsert(new ItemStack(Items.DIRT, 4));
+			contents.tryInsert(new ItemStack(Items.STONE, 4));
+			bundle.set(DataComponents.BUNDLE_CONTENTS, contents.toImmutable());
+			server.getPlayerList().getPlayerByName(name).getInventory().setItem(0, bundle);
+		}).join();
+		claimHostPad();
+		long mark = hostLogLength();
+		try {
+			press(HOST_PAD, PadButton.Y);
+			waitFor("the survival inventory", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() instanceof InventoryScreen));
+			Thread.sleep(300);
+
+			// Two toasts in the top-right column, then three seconds of frames: the hints move clear and stay drawn.
+			onRender(() -> {
+				var toasts = minecraft.gui.toastManager();
+				SystemToast.add(toasts, SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal("E2E toast"),
+						Component.literal("A toast long enough to reach well into the screen"));
+				SystemToast.add(toasts, SystemToast.SystemToastId.LOW_DISK_SPACE, Component.literal("E2E second toast"),
+						Component.literal("Stacked under the first"));
+				return null;
+			});
+			int sawToasts = 0;
+			long until = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+			while (System.nanoTime() < until) {
+				int shown = onRender(() -> {
+					List<Rect> toasts = toastRects();
+					List<ButtonGuideRenderer.Hint> hints = ButtonGuideRenderer.lastLayout();
+					check(!hints.isEmpty(), "hints are still drawn while toasts show");
+					for (ButtonGuideRenderer.Hint hint : hints) {
+						for (Rect toast : toasts) {
+							check(!hint.rect().intersects(toast), hint + " is covered by a toast at " + toast);
+						}
+					}
+					return toasts.size();
+				});
+				sawToasts = Math.max(sawToasts, shown);
+				Thread.sleep(50);
+			}
+			check(sawToasts > 0, "the toasts were on screen");
+			screenshot("hints-toasts");
+
+			// A keyboard tutorial toast never reaches a controller player.
+			onRender(() -> {
+				minecraft.gui.toastManager().addToast(new TutorialToast(minecraft.font, TutorialToast.Icons.MOVEMENT_KEYS,
+						Component.literal("E2E tutorial"), null, false));
+				return null;
+			});
+			Thread.sleep(1000);
+			check(!onRender(this::hasTutorialToast), "no tutorial toast for player 1 on a controller");
+
+			// The bundle: the pointer over it offers Choose and Take out, and the right stick chooses.
+			Rect bundleSlot = onRender(() -> {
+				InventoryScreen screen = (InventoryScreen) minecraft.gui.screen();
+				ContainerScreenAccessor panel = (ContainerScreenAccessor) screen;
+				Slot slot = screen.getMenu().slots.stream()
+						.filter(s -> s.container == minecraft.player.getInventory() && s.getContainerSlot() == 0)
+						.findFirst().orElseThrow();
+				return new Rect(panel.hearthside$leftPos() + slot.x, panel.hearthside$topPos() + slot.y, 16, 16);
+			});
+			steerPointerOnto(HOST_PAD, bundleSlot, "the bundle");
+			Thread.sleep(300);
+			List<String> labels = onRender(() -> ButtonGuideRenderer.lastLayout().stream().map(ButtonGuideRenderer.Hint::label).toList());
+			log("   hints over the bundle: " + labels);
+			check(labels.contains("Choose") && labels.contains("Take out"), "Choose and Take out over a bundle (got " + labels + ")");
+			screenshot("hints-bundle");
+			int before = onRender(this::selectedBundleItem);
+			PADS.set(HOST_PAD, new InputFrame(0, 0, 0, 0, 0, -1, 0, 0));
+			Thread.sleep(400);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(200);
+			int after = onRender(this::selectedBundleItem);
+			check(after != before, "the right stick chose an item in the bundle (" + before + " to " + after + ")");
+
+			// One hint row on the inventory, on every frame.
+			String since = hostLogSince(mark);
+			check(since.contains("hearthside hint rows=1 screen=inventoryscreen"), "the inventory's hint row was counted");
+			check(!since.contains("hearthside hint rows=2"), "never two hint rows");
+		} finally {
+			releaseHostPad();
+			server.submit(() -> {
+				var source = server.createCommandSourceStack().withSuppressedOutput();
+				server.getCommands().performPrefixedCommand(source, "item replace entity " + name + " container.0 with minecraft:air");
+				server.getCommands().performPrefixedCommand(source, "gamemode creative " + name);
+			}).join();
+		}
+	}
+
+	/** Where each visible toast sits once fully slid in, in GUI pixels, placed the way the toast manager places it. */
+	private List<Rect> toastRects() throws ReflectiveOperationException {
+		int guiWidth = minecraft.getWindow().getGuiScaledWidth();
+		List<Rect> rects = new ArrayList<>();
+		for (Object instance : (List<?>) field(minecraft.gui.toastManager(), "visibleToasts")) {
+			Toast toast = (Toast) field(instance, "toast");
+			int slot = (int) field(instance, "firstSlotIndex");
+			rects.add(new Rect((int) toast.xPos(guiWidth, 1f), (int) toast.yPos(slot), toast.width(), toast.height()));
+		}
+		return rects;
+	}
+
+	/** Whether a tutorial toast is on screen or waiting for room. */
+	private boolean hasTutorialToast() throws ReflectiveOperationException {
+		ToastManager manager = minecraft.gui.toastManager();
+		for (Object instance : (List<?>) field(manager, "visibleToasts")) {
+			if (field(instance, "toast") instanceof TutorialToast) {
+				return true;
+			}
+		}
+		for (Object toast : (Collection<?>) field(manager, "queued")) {
+			if (toast instanceof TutorialToast) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** The selected item of the bundle in player 1's first hotbar slot, as their game sees it. */
+	private int selectedBundleItem() {
+		BundleContents contents = minecraft.player.getInventory().getItem(0).get(DataComponents.BUNDLE_CONTENTS);
+		return contents == null ? Integer.MIN_VALUE : contents.getSelectedItemIndex();
+	}
+
+	/** A private field of one of Minecraft's objects, by its (unobfuscated) name. */
+	private static Object field(Object owner, String name) throws ReflectiveOperationException {
+		Field field = owner.getClass().getDeclaredField(name);
+		field.setAccessible(true);
+		return field.get(owner);
 	}
 
 	/**
