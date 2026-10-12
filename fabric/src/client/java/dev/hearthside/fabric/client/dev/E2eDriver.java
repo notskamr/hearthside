@@ -8,6 +8,7 @@ import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.ConsoleLayout;
+import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
 import dev.hearthside.core.profile.GuestProfile;
@@ -114,11 +115,12 @@ public final class E2eDriver {
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
-			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
+			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"},
+			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
-			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"},
+			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"}, {"Q2", "1"},
 			// The in-world pad block (fake pads).
 			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
@@ -243,6 +245,8 @@ public final class E2eDriver {
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
 			step("V3 a device mismatch copies frames and says why", this::deviceMismatchCopies);
 			step("V9 a game without Vulkan copies frames instead of crashing", this::noVulkanCopies);
+			step("Q3 a guest's own Sodium settings survive its next launch", this::guestSodiumSettingsSurvive);
+			step("Q4 a guest can't switch to fullscreen", this::guestRefusesFullscreen);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
@@ -262,6 +266,8 @@ public final class E2eDriver {
 			step("C10 with the last guest gone the host renders full-window again", () -> fullWindowAgain(beforeLastLeave));
 			step("D7 a guest whose game gives up is shown, then removed", this::gaveUpShownThenRemoved);
 			step("D8 a guest whose game dies while joining keeps their card on the plank wall", this::gaveUpWhileJoining);
+			// Last in the composited session: it opens the world twice more, leaving it as it was with player 1 alone.
+			step("Q2 a stacked two-player layout from config/hearthside.json", this::stackedLayoutFromConfig);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				long dropInSounds = System.nanoTime();
@@ -513,7 +519,7 @@ public final class E2eDriver {
 			int halfWidth = onRender(() -> {
 					var size = minecraft.getWindow().queryFramebufferSize();
 					return dev.hearthside.core.layout.SplitLayout.plan(2, new Rect(0, 0, size.width(), size.height()),
-							dev.hearthside.core.layout.LayoutSettings.DEFAULTS).players().get(1).width();
+							Party.current().layout()).players().get(1).width();
 			});
 			waitFor("guest re-sized to half the new window", Duration.ofSeconds(10),
 					() -> satelliteLog().contains("hearthside virtual size " + halfWidth + "x"));
@@ -793,6 +799,167 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.e2e.noVulkanLoader");
 		}
+	}
+
+	// ---- Config and guests (batch B) ----
+
+	/**
+	 * Q2: with {@code "twoPlayerLayout": "stacked"} in config/hearthside.json, player 1's view is the top half and
+	 * player 2's the bottom half, which the guest renders at. A session reads the file when it opens, so the world is
+	 * closed and opened again, and once more afterwards with the file as it was.
+	 */
+	private void stackedLayoutFromConfig() throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("config").resolve("hearthside.json");
+		byte[] before = Files.exists(file) ? Files.readAllBytes(file) : null;
+		try {
+			dev.hearthside.core.config.SplitScreenConfig config = dev.hearthside.core.config.SplitScreenConfig.DEFAULTS;
+			if (before != null) {
+				config = dev.hearthside.core.config.SplitScreenConfig.read(
+						new java.io.StringReader(new String(before, StandardCharsets.UTF_8)));
+			}
+			try (java.io.Writer out = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+				new dev.hearthside.core.config.SplitScreenConfig(config.guestMemoryMb(), config.guestRenderDistance(),
+						config.layout().withTwo(LayoutSettings.TwoPlayer.STACKED)).write(out);
+			}
+			reopenWorld();
+			check(onRender(() -> Party.current().layout().two()) == LayoutSettings.TwoPlayer.STACKED,
+					"the new session read the stacked layout");
+			joinMark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitInWorld(1);
+			List<Rect> plan = onRender(() -> {
+				var size = minecraft.getWindow().queryFramebufferSize();
+				return dev.hearthside.core.layout.SplitLayout.plan(2, new Rect(0, 0, size.width(), size.height()),
+						Party.current().layout()).players();
+			});
+			Rect top = plan.get(0), bottom = plan.get(1);
+			log("   stacked views " + top + " over " + bottom);
+			check(top.y() == 0 && bottom.y() >= top.height() && top.width() == bottom.width(), "the plan stacks the views");
+			waitFor("the views stacked in the window", Duration.ofSeconds(10), () -> onRender(() -> {
+				List<dev.hearthside.core.layout.ViewFrame> frames = Compositor.active().overlayViews();
+				return frames.size() == 2 && frames.stream().anyMatch(f -> f.seat() == 0 && f.rect().equals(top))
+						&& frames.stream().anyMatch(f -> f.seat() == 1 && f.rect().equals(bottom));
+			}));
+			waitFor("the guest rendering at the bottom half's size", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside virtual size " + bottom.width() + "x" + bottom.height()));
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			windowShot("stacked-two-players");
+		} finally {
+			if (before != null) {
+				Files.write(file, before);
+			} else {
+				Files.deleteIfExists(file);
+			}
+			reopenWorld();
+		}
+	}
+
+	/** Closes the world (its guests' games with it) and opens it again: a new party session, with player 1 alone. */
+	private void reopenWorld() throws Exception {
+		onRender(() -> {
+			minecraft.disconnectFromWorld(Component.literal("E2E"));
+			return null;
+		});
+		waitFor("guests' games closed", Duration.ofSeconds(30), () -> satellites().isEmpty());
+		waitFor("back on a menu", Duration.ofSeconds(60),
+				() -> onRender(() -> minecraft.level == null && minecraft.getSingleplayerServer() == null));
+		openWorld();
+		waitFor("host session", Duration.ofSeconds(180),
+				() -> Party.current() != null && onRender(() -> minecraft.level != null) && playerCount() == 1);
+	}
+
+	/**
+	 * Q3: a guest's own Sodium settings survive its next launch (user session, 2026-10-11): the host's config is
+	 * mirrored in before each launch, but not over a file the guest has changed. The host's copy is untouched.
+	 */
+	private void guestSodiumSettingsSurvive() throws Exception {
+		Path host = minecraft.gameDirectory.toPath().resolve("config").resolve("sodium-options.json");
+		Path guest = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/config/sodium-options.json");
+		guestLeaves();
+		check(Files.exists(host) && Files.exists(guest), "Sodium's settings are in the host's and the guest's config");
+		String hostBefore = Files.readString(host);
+		String guestBefore = Files.readString(guest);
+		String setting = "use_closest_point_entity_sort"; // a quality setting that changes nothing a check looks at
+		com.google.gson.JsonObject edited = com.google.gson.JsonParser.parseString(guestBefore).getAsJsonObject();
+		boolean mine = !edited.getAsJsonObject("quality").get(setting).getAsBoolean();
+		edited.getAsJsonObject("quality").addProperty(setting, mine);
+		Files.writeString(guest, new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson(edited));
+		try {
+			guestRejoins();
+			boolean after = com.google.gson.JsonParser.parseString(Files.readString(guest)).getAsJsonObject()
+					.getAsJsonObject("quality").get(setting).getAsBoolean();
+			log("   guest's " + setting + " " + mine + " before its launch, " + after + " after");
+			check(after == mine, "the guest's own Sodium setting survived its next launch");
+			check(Files.readString(host).equals(hostBefore), "the host's sodium-options.json is unchanged");
+		} finally {
+			// As it was: the guest's copy follows the host's again from its next launch.
+			Files.writeString(guest, guestBefore);
+		}
+	}
+
+	/**
+	 * Q4: a guest's game can't go fullscreen. Its game tries the option, the window and the toggle key once in the
+	 * world: each is refused and logged, its window stays hidden and windowed, player 1's window doesn't move, and the
+	 * guest's view still reaches the host. Its Video Settings (vanilla's, and Sodium's) show Fullscreen greyed out.
+	 */
+	private void guestRefusesFullscreen() throws Exception {
+		System.setProperty("hearthside.e2e.guestTryFullscreen", "true");
+		try {
+			guestLeaves();
+			guestRejoins();
+			waitFor("the guest tried fullscreen", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest fullscreen option="));
+			String log = satelliteLog();
+			String tried = log.substring(log.indexOf("hearthside e2e guest tries fullscreen"));
+			int refused = tried.split(java.util.regex.Pattern.quote("hearthside guest fullscreen refused"), -1).length - 1;
+			log("   " + tried.lines().filter(l -> l.contains("fullscreen")).map(String::strip).toList());
+			check(refused == 3, "each of the 3 attempts was refused and logged once (got " + refused + ")");
+			check(tried.contains("fullscreen option=false window fullscreen=false hidden=true"),
+					"the guest's option stays off and its window windowed and hidden");
+			Rect now = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
+			check(now.equals(hostWindowBefore), "player 1's window is where it was (" + now + ", was " + hostWindowBefore + ")");
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			waitFor("the guest's Video Settings", Duration.ofSeconds(20),
+					() -> satelliteLog().contains("hearthside guest video settings: fullscreen active=false"));
+			Thread.sleep(1500); // its frames reach the host
+			windowShot("guest-video-settings");
+			if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")) {
+				waitFor("the guest's Sodium Video Settings", Duration.ofSeconds(20),
+						() -> satelliteLog().contains("hearthside e2e guest shows sodium's video settings"));
+				check(satelliteLog().contains("hearthside guest video settings: sodium's fullscreen greyed out"),
+						"Sodium's Fullscreen is greyed out on the guest");
+				Thread.sleep(1500);
+				windowShot("guest-sodium-video-settings");
+			}
+			waitFor("the guest back in its game", Duration.ofSeconds(20),
+					() -> satelliteLog().contains("hearthside e2e guest closed video settings"));
+		} finally {
+			System.clearProperty("hearthside.e2e.guestTryFullscreen");
+		}
+	}
+
+	/** Guest2 leaves and their game exits. */
+	private void guestLeaves() throws Exception {
+		onRender(() -> {
+			Party.current().leave(GUEST);
+			return null;
+		});
+		waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+	}
+
+	/** Guest2 joins again (their game is launched afresh) and is in the world. */
+	private void guestRejoins() throws Exception {
+		joinMark = hostLogLength();
+		onRender(() -> {
+			Party.current().join(GUEST);
+			return null;
+		});
+		waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+		waitInWorld(1);
 	}
 
 	/** In the world, player 1's mouse buttons always count, wherever the hidden OS cursor has drifted. */
