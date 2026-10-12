@@ -8,8 +8,8 @@ import java.util.Set;
 /**
  * Builds a satellite's command line from the host's own launch.
  *
- * <p>The satellite runs the host's exact JVM, classpath and mods, with the configured heap and
- * render-distance cap, without the host's debugger or class-data archive, and with the host's
+ * <p>The satellite runs the host's exact JVM, classpath and mods, with the configured heap and the
+ * session's render-distance cap, light graphics and frame-rate cap, without the host's debugger or class-data archive, and with the host's
  * account identity replaced by the guest's. The launch secret travels in the environment, never on
  * the command line.
  */
@@ -50,6 +50,13 @@ public final class LaunchCommandBuilder {
 		cmd.add("-Xmx" + sat.heapMb() + "m");
 		cmd.add("-Dhearthside.role=satellite");
 		cmd.add("-Dhearthside.renderDistanceCap=" + sat.renderDistanceCap());
+		// The rest of the session's tuning only when it applies, so a Quality guest's command line stays as it was.
+		if (sat.lightGraphics()) {
+			cmd.add("-Dhearthside.lightGraphics=true");
+		}
+		if (sat.fpsCap() > 0) {
+			cmd.add("-Dhearthside.fpsCap=" + sat.fpsCap());
+		}
 		cmd.add("-Dhearthside.controlPort=" + sat.controlPort());
 		cmd.add("-Dhearthside.player=" + sat.playerIndex());
 		switch (sat.presentation()) {

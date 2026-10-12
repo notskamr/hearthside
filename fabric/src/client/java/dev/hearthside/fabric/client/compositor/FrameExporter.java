@@ -29,6 +29,7 @@ import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
 import dev.hearthside.fabric.client.compositor.backend.ExportedSlot;
 import dev.hearthside.fabric.client.compositor.backend.ImportFailed;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
+import dev.hearthside.fabric.client.satellite.SessionOptions;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.DirectoryStream;
@@ -115,7 +116,8 @@ public final class FrameExporter {
 			minecraft.resizeGui();
 		}
 		GuiScaleOverride.log(player, minecraft.getWindow(), rect.width(), rect.height());
-		minecraft.options.framerateLimit().set(Math.clamp(viewport.refreshHz(), 10, 260));
+		// Paced to the host's display, or the preset's lower cap; for the session only, never the guest's own setting.
+		SessionOptions.limitFramerate(minecraft.options, viewport.refreshHz());
 		reallocate(size.framebufferWidth(), size.framebufferHeight(), false);
 	}
 

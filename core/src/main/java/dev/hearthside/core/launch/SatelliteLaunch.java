@@ -16,9 +16,13 @@ import java.util.Objects;
  * @param graphicsBackend the graphics API the satellite renders with: the host's own
  * @param heapMb the satellite's maximum heap in MB, from the host's split-screen config
  * @param renderDistanceCap the most chunks the satellite renders this run; {@code 0} means its own setting
+ * @param lightGraphics whether the satellite uses light graphics this run (fast leaves, no clouds, fewer particles,
+ *     nearer entities, no biome blend)
+ * @param fpsCap the satellite's frame-rate cap this run; {@code 0} means the host's refresh rate
  */
 public record SatelliteLaunch(int playerIndex, int controlPort, Path gameDir, String guestName, String launchSecret,
-		Presentation presentation, GraphicsBackend graphicsBackend, int heapMb, int renderDistanceCap) {
+		Presentation presentation, GraphicsBackend graphicsBackend, int heapMb, int renderDistanceCap,
+		boolean lightGraphics, int fpsCap) {
 	/** How a satellite's view reaches the screen. */
 	public enum Presentation {
 		/** Hidden window; frames shared with the host's compositor through GPU memory where possible. */
@@ -32,6 +36,13 @@ public record SatelliteLaunch(int playerIndex, int controlPort, Path gameDir, St
 	public SatelliteLaunch {
 		Objects.requireNonNull(presentation, "presentation");
 		Objects.requireNonNull(graphicsBackend, "graphicsBackend");
+	}
+
+	/** A render-distance cap alone: the satellite's own graphics, paced to the host's refresh rate. */
+	public SatelliteLaunch(int playerIndex, int controlPort, Path gameDir, String guestName, String launchSecret,
+			Presentation presentation, GraphicsBackend graphicsBackend, int heapMb, int renderDistanceCap) {
+		this(playerIndex, controlPort, gameDir, guestName, launchSecret, presentation, graphicsBackend, heapMb,
+				renderDistanceCap, false, 0);
 	}
 
 	/** The default heap, and Balanced's render-distance cap (8), which every guest had before presets. */
