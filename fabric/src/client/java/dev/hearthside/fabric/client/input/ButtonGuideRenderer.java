@@ -86,6 +86,8 @@ public final class ButtonGuideRenderer {
 	/** The screen the menu hints last drew on (the E2E checks screens with their own chips never get them). */
 	public static volatile Screen drewOn;
 	private static volatile List<Hint> lastLayout = List.of();
+	/** Mods' screens the hints stayed off, each logged once. */
+	private static final Set<String> skippedScreens = ConcurrentHashMap.newKeySet();
 	private static volatile boolean screenHintsHidden;
 
 	private ButtonGuideRenderer() {}
@@ -167,6 +169,15 @@ public final class ButtonGuideRenderer {
 				|| screen instanceof ChatScreen) {
 			// Hearthside's screens draw their own hint chips (a second row would sit on top of them); chat is all
 			// text box and messages, and the keyboard's.
+			lastLayout = List.of();
+			return;
+		}
+		if (!screen.getClass().getName().startsWith("net.minecraft.")) {
+			// A mod's screen (Sodium's video settings, for one) may draw its own widgets, which the placement can't
+			// see to keep clear of: no hints rather than hints over its buttons.
+			if (skippedScreens.add(screen.getClass().getName())) {
+				HearthsideMod.LOGGER.info("Hearthside hints skipped on a mod's screen: {}", screen.getClass().getName());
+			}
 			lastLayout = List.of();
 			return;
 		}

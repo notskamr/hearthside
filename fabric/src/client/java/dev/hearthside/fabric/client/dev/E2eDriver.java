@@ -1005,6 +1005,9 @@ public final class E2eDriver {
 				check(satelliteLog().contains("hearthside guest video settings: sodium's fullscreen greyed out"),
 						"Sodium's Fullscreen is greyed out on the guest");
 				Thread.sleep(1500);
+				// Sodium draws its own widgets, which the hints can't see to keep clear of (they covered its Done).
+				check(satelliteLog().contains("hearthside hints skipped on a mod's screen"),
+						"controller hints stay off Sodium's screen");
 				windowShot("guest-sodium-video-settings");
 			}
 			waitFor("the guest back in its game", Duration.ofSeconds(20),
