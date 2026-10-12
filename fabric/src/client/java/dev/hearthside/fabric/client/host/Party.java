@@ -4,6 +4,7 @@ import dev.hearthside.core.auth.GuestTokenAuthority;
 import dev.hearthside.core.channel.ControlConnection;
 import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
+import dev.hearthside.core.config.SplitScreenConfig;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.ControlSchemeJson;
@@ -141,6 +142,8 @@ public final class Party {
 	private volatile Transport hostTransport = Transport.COPY;
 	/** The graphics API guests render with: this game's own, so its compositor can take their frames (decided at session start). */
 	private volatile GraphicsBackend guestBackend = GraphicsBackend.OPENGL;
+	/** Each guest's heap and render-distance cap, from {@code config/hearthside.json} as it was when this session opened. */
+	private final SplitScreenConfig config;
 
 	private static final class Slot {
 		final int index;
@@ -165,6 +168,9 @@ public final class Party {
 		this.minecraft = minecraft;
 		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
+		this.config = SplitScreenConfigFile.load(gameDir);
+		HearthsideMod.LOGGER.info("Hearthside split-screen config guestMemoryMb={} guestRenderDistance={}",
+				config.guestMemoryMb(), config.guestRenderDistance());
 		this.mapSampler = new MapSampler(minecraft.getUser().getName());
 		this.controlServer = ControlServer.start(this::verifyHello);
 		Runtime.getRuntime().addShutdownHook(shutdownHook);
@@ -450,7 +456,7 @@ public final class Party {
 				LaunchCommand command = LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
 						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
-								guestBackend));
+								guestBackend, config.guestMemoryMb(), config.guestRenderDistance()));
 				if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader")) {
 					// E2E: the guest behaves as if its machine had no Vulkan runtime (satellites get no -Dhearthside.*).
 					Map<String, String> environment = new HashMap<>(command.environment());

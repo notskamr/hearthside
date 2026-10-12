@@ -8,13 +8,12 @@ import java.util.Set;
 /**
  * Builds a satellite's command line from the host's own launch.
  *
- * <p>The satellite runs the host's exact JVM, classpath and mods, with a smaller heap, without the
- * host's debugger or class-data archive, and with the host's account identity replaced by the
- * guest's. The launch secret travels in the environment, never on the command line.
+ * <p>The satellite runs the host's exact JVM, classpath and mods, with the configured heap and
+ * render-distance cap, without the host's debugger or class-data archive, and with the host's
+ * account identity replaced by the guest's. The launch secret travels in the environment, never on
+ * the command line.
  */
 public final class LaunchCommandBuilder {
-	public static final double HEAP_FRACTION = 0.6;
-	public static final long MIN_HEAP_MB = 1024;
 	public static final String SECRET_ENV = "HEARTHSIDE_LAUNCH_SECRET";
 
 	/** Fabric Loader 0.19.5 {@code SystemProperties.MODS_FOLDER}. */
@@ -47,9 +46,10 @@ public final class LaunchCommandBuilder {
 				cmd.add(arg);
 			}
 		}
-		long heapMb = Math.max(MIN_HEAP_MB, (long) (host.maxHeapBytes() * HEAP_FRACTION / (1024 * 1024)));
-		cmd.add("-Xmx" + heapMb + "m");
+		// A fixed heap, not a share of the host's: a launcher set to 8 GB would otherwise reserve ~5 GB per guest.
+		cmd.add("-Xmx" + sat.heapMb() + "m");
 		cmd.add("-Dhearthside.role=satellite");
+		cmd.add("-Dhearthside.renderDistanceCap=" + sat.renderDistanceCap());
 		cmd.add("-Dhearthside.controlPort=" + sat.controlPort());
 		cmd.add("-Dhearthside.player=" + sat.playerIndex());
 		switch (sat.presentation()) {
