@@ -675,13 +675,13 @@ public final class E2eDriver {
 
 			long handle = onRender(() -> minecraft.getWindow().handle());
 			onRender(() -> {
-				minecraft.getWindow().toggleFullScreen();
+				toggleFullscreen();
 				return null;
 			});
 			Thread.sleep(2000);
 			guiScalesMatch("fullscreen");
 			onRender(() -> {
-				minecraft.getWindow().toggleFullScreen();
+				toggleFullscreen();
 				return null;
 			});
 			Thread.sleep(2000);
@@ -693,8 +693,8 @@ public final class E2eDriver {
 					minecraft.options.guiScale().set(settingBefore);
 					minecraft.options.save();
 				}
-				if (minecraft.getWindow().isFullscreen()) {
-					minecraft.getWindow().toggleFullScreen();
+				if (minecraft.options.fullscreen().get()) {
+					toggleFullscreen();
 				}
 				return null;
 			});
