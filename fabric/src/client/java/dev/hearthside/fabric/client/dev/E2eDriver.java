@@ -5,6 +5,8 @@ import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
+import dev.hearthside.core.config.SplitScreenConfig;
+import dev.hearthside.core.config.VulkanOffer;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.input.RemapModel;
@@ -33,6 +35,7 @@ import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.SplitScreenConfigFile;
 import dev.hearthside.fabric.client.host.ControlsScreen;
 import dev.hearthside.fabric.client.host.ManageProfilesScreen;
 import dev.hearthside.fabric.client.host.NewWorldScreen;
@@ -84,6 +87,7 @@ import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.client.gui.screens.ConfirmScreen;
+import net.minecraft.client.PreferredGraphicsApi;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.input.KeyEvent;
@@ -129,7 +133,7 @@ public final class E2eDriver {
 			{"X1"}, {"X1b"},
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
-			{"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
+			{"K1"}, {"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
 			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"},
 			{"W10", "L5"}, {"W11", "L5"}, {"W9", "L5"}, {"L6", "W9"},
 			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"R2", "R1"}, {"L11", "R1"},
@@ -205,6 +209,7 @@ public final class E2eDriver {
 			// The lobby and in-world pad blocks are only steps: with none of theirs selected, each reports SKIP and
 			// nothing else happens.
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("K1 Vulkan is offered once where it lets frames be shared, never with Iris, and relaunches the game", this::vulkanOffer);
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
 				step("T4 with Minecraft in the background, a controller does nothing on the title screen", this::titleIgnoresBackgroundPad);
@@ -1705,6 +1710,156 @@ public final class E2eDriver {
 		waitFor("a PlayStation glyph drawn in the guest's hints", Duration.ofSeconds(10),
 				() -> satelliteLog().contains("hearthside hint glyph hearthside:glyph/playstation/"));
 		check(!satelliteLog().contains("hearthside hint glyph hearthside:glyph/xbox/"), "no other family's glyphs");
+	}
+
+	private static final int OFFER_PAD = 108;
+	private static final String OFFER_GUID = "fake-offer-pad";
+
+	/**
+	 * K1 (Spec D section 3.1), with the facts faked: OpenGL that can't share frames, Vulkan that can. Not with Iris; Not
+	 * now is remembered; Switch saves Vulkan and relaunches (the command is logged, not run); a relaunch that dies asks the
+	 * player to start Minecraft again; a probe without a Vulkan loader offers nothing and breaks nothing.
+	 */
+	private void vulkanOffer() throws Exception {
+		Path gameDir = minecraft.gameDirectory.toPath();
+		SplitScreenConfig before = SplitScreenConfigFile.load(gameDir);
+		PreferredGraphicsApi backendBefore = onRender(() -> minecraft.options.preferredGraphicsBackend().get());
+		List<String> hooks = List.of("hearthside.e2e.fakeGlCantImport", "hearthside.e2e.fakeVulkanShares",
+				"hearthside.e2e.fakeIris", "hearthside.e2e.dryRelaunch", "hearthside.e2e.noVulkanLoader");
+		PADS.plug(OFFER_PAD, OFFER_GUID, PadStyle.XBOX);
+		try {
+			System.setProperty("hearthside.e2e.fakeGlCantImport", "true");
+			System.setProperty("hearthside.e2e.fakeVulkanShares", "true");
+			if (!onRender(() -> RenderSystem.getDevice().getDeviceInfo().backendName()).equals("OpenGL")) {
+				SplitScreenConfigFile.save(gameDir, before.withVulkanOffer(VulkanOffer.PENDING));
+				check(pressCoop() instanceof LobbyScreen, "on Vulkan, Co-op opens the lobby (the offer is for OpenGL)");
+				leaveLobby();
+				log("   K1: this game runs Vulkan; the offer doesn't apply");
+				return;
+			}
+
+			// (a) With Iris installed: no card, and the log says why.
+			System.setProperty("hearthside.e2e.fakeIris", "true");
+			SplitScreenConfigFile.save(gameDir, before.withVulkanOffer(VulkanOffer.PENDING));
+			long mark = hostLogLength();
+			check(pressCoop() instanceof LobbyScreen, "with Iris, Co-op opens the lobby directly");
+			check(hostLogSince(mark).contains("hearthside vulkan offer: not offered (iris is installed)"), "the log says Iris is why");
+			leaveLobby();
+
+			// (b) The card; Not now, chosen on a controller, opens the lobby and is remembered.
+			System.setProperty("hearthside.e2e.fakeIris", "false");
+			mark = hostLogLength();
+			check(onOfferCard(pressCoop()), "the offer card shows before the lobby");
+			check(hostLogSince(mark).contains("hearthside vulkan offer: shown"), "the log says the offer was shown");
+			check(onRender(this::focusedLabel).equals("Switch and restart"), "Switch and restart is focused first");
+			screenshot("vulkan-offer");
+			focusWithPad(OFFER_PAD, "Not now");
+			press(OFFER_PAD, PadButton.A);
+			waitFor("the lobby after Not now", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof LobbyScreen));
+			check(SplitScreenConfigFile.load(gameDir).vulkanOffer() == VulkanOffer.DECLINED, "Not now is remembered");
+			leaveLobby();
+			check(pressCoop() instanceof LobbyScreen, "once answered, Co-op opens the lobby directly");
+			leaveLobby();
+
+			// (c) Switch and restart: Vulkan is saved and the relaunch command logged (a dry run starts nothing).
+			SplitScreenConfigFile.save(gameDir, before.withVulkanOffer(VulkanOffer.PENDING));
+			System.setProperty("hearthside.e2e.dryRelaunch", "true");
+			mark = hostLogLength();
+			check(onOfferCard(pressCoop()), "the card again, once the answer is reset");
+			press(OFFER_PAD, PadButton.A);
+			long from = mark;
+			waitFor("the relaunch command in the log", Duration.ofSeconds(10),
+					() -> hostLogSince(from).contains("hearthside relaunch command: "));
+			String command = hostLogSince(mark).lines().filter(l -> l.contains("hearthside relaunch command: ")).findFirst().orElseThrow();
+			check(!command.contains("--graphicsbackend opengl"), "the relaunch doesn't force OpenGL");
+			Matcher token = Pattern.compile("--accesstoken (\\S+)").matcher(command);
+			check(!token.find() || token.group(1).equals("<redacted>"), "the access token is redacted in the log");
+			check(onRender(() -> minecraft.options.preferredGraphicsBackend().get()) == PreferredGraphicsApi.VULKAN,
+					"Switch set the Graphics API to Vulkan");
+			check(SplitScreenConfigFile.load(gameDir).vulkanOffer() == VulkanOffer.ACCEPTED, "Switch is remembered");
+			restoreBackend(backendBefore);
+
+			// (d) A relaunch whose game dies at once: the player is asked to start Minecraft again.
+			SplitScreenConfigFile.save(gameDir, before.withVulkanOffer(VulkanOffer.PENDING));
+			System.setProperty("hearthside.e2e.dryRelaunch", "dead");
+			check(onOfferCard(pressCoop()), "the card for the dead relaunch");
+			press(OFFER_PAD, PadButton.A);
+			waitFor("the restart card", Duration.ofSeconds(10), () -> onRender(
+					() -> minecraft.gui.screen() != null && minecraft.gui.screen().getTitle().getString().contains("Please start Minecraft again")));
+			screenshot("vulkan-offer-restart");
+			restoreBackend(backendBefore);
+			System.clearProperty("hearthside.e2e.dryRelaunch");
+
+			// (e) The real probe without a Vulkan loader: no card, no crash, and the log says why.
+			System.clearProperty("hearthside.e2e.fakeVulkanShares");
+			System.setProperty("hearthside.e2e.noVulkanLoader", "true");
+			SplitScreenConfigFile.save(gameDir, before.withVulkanOffer(VulkanOffer.PENDING));
+			mark = hostLogLength();
+			check(pressCoop() instanceof LobbyScreen, "without a Vulkan loader, Co-op opens the lobby directly");
+			check(hostLogSince(mark).contains("hearthside vulkan offer: not offered (vulkan can't share frames)"),
+					"the log says Vulkan can't share");
+			leaveLobby();
+		} finally {
+			hooks.forEach(System::clearProperty);
+			SplitScreenConfigFile.save(gameDir, before);
+			restoreBackend(backendBefore);
+			PADS.unplug(OFFER_PAD);
+			onRender(() -> {
+				if (!(minecraft.gui.screen() instanceof TitleScreen)) {
+					minecraft.gui.setScreen(new TitleScreen());
+				}
+				return null;
+			});
+		}
+	}
+
+	/** Presses the title screen's Co-op button and returns the screen it opened. */
+	private Screen pressCoop() throws Exception {
+		return onRender(() -> {
+			minecraft.gui.setScreen(new TitleScreen());
+			coopButton().onPress(new KeyEvent(0, 0, 0));
+			return minecraft.gui.screen();
+		});
+	}
+
+	/** Leaves an empty lobby back to the title screen, as Back does. */
+	private void leaveLobby() throws Exception {
+		onRender(() -> {
+			minecraft.gui.screen().onClose();
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() instanceof TitleScreen) && Party.current() == null, "back on the title screen");
+	}
+
+	private static boolean onOfferCard(Screen screen) {
+		return screen != null && screen.getClass().getSimpleName().equals("VulkanOfferScreen");
+	}
+
+	/** The label of the open screen's focused widget, or "". Render thread. */
+	private String focusedLabel() {
+		return minecraft.gui.screen() != null && minecraft.gui.screen().getFocused() instanceof AbstractWidget widget
+				? widget.getMessage().getString() : "";
+	}
+
+	/** Moves focus with {@code pad}'s D-pad (down, then right) until the widget labelled {@code label} has it. */
+	private void focusWithPad(int pad, String label) throws Exception {
+		PadButton[] path = {PadButton.DPAD_DOWN, PadButton.DPAD_DOWN, PadButton.DPAD_RIGHT, PadButton.DPAD_RIGHT};
+		for (int i = 0; i < path.length && !onRender(this::focusedLabel).equals(label); i++) {
+			press(pad, path[i]);
+			Thread.sleep(150);
+		}
+		check(onRender(this::focusedLabel).equals(label), "the D-pad moved focus to " + label);
+	}
+
+	/** Puts player 1's Graphics API option back and saves it. */
+	private void restoreBackend(PreferredGraphicsApi backend) throws Exception {
+		onRender(() -> {
+			if (minecraft.options.preferredGraphicsBackend().get() != backend) {
+				minecraft.options.preferredGraphicsBackend().set(backend);
+				minecraft.options.save();
+			}
+			return null;
+		});
 	}
 
 	private void titleCoopOpensLobby() throws Exception {
