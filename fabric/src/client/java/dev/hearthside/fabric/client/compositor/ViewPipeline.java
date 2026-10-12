@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.pipeline.BlendFunction;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.textures.FilterMode;
@@ -23,6 +24,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import org.joml.Vector4f;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 
 /**
@@ -68,24 +70,31 @@ public final class ViewPipeline {
 			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
 			.build();
 
-	private static boolean fallback;
+	/** Our view pipeline as the last warm-up compiled it; null when it couldn't be built. */
+	private static @Nullable CompiledRenderPipeline view;
 	/** Whether this game composites (a host), so resource reloads warm the pipelines again. */
 	private static boolean wanted;
 
 	private ViewPipeline() {}
 
-	/** Whether views are drawn without fades or blur, because {@code hearthside:pipeline/view} couldn't be built. */
+	/**
+	 * Whether views are drawn without fades or blur: {@code hearthside:pipeline/view} couldn't be built at the last
+	 * warm-up, or a resource reload has since closed it and the warm-up after the reload hasn't run yet.
+	 */
 	public static boolean usingFallback() {
-		return fallback;
+		return view == null || view.isClosed();
 	}
 
 	/**
 	 * Builds the pipelines and draws each once off-screen into a 1×1 texture, so the first composited frame never stalls
-	 * on Minecraft compiling them. If the view pipeline fails, views use the fallback until the next warm-up, and that is
-	 * logged once. The fallback and overlay use Minecraft's own shaders; a failure there is thrown.
+	 * on Minecraft compiling them. The only place our view pipeline is compiled: Minecraft's pipeline cache doesn't
+	 * remember a failed compile, so asking for it per draw would retry a broken one every frame (final review M2). The
+	 * outcome, compiled or failed, holds until the next warm-up; if it failed, views use the fallback and that is logged
+	 * once. The fallback and overlay use Minecraft's own shaders; a failure there is thrown.
 	 */
 	public static void warmUp() {
 		wanted = true;
+		view = null;
 		try (Canvas target = new Canvas("hearthside warm-up target"); Canvas source = new Canvas("hearthside warm-up source")) {
 			target.ensure(1, 1);
 			source.ensure(1, 1);
@@ -96,19 +105,18 @@ public final class ViewPipeline {
 				blit(pass, OVERLAY, source.view(), FilterMode.NEAREST);
 			}
 			try {
-				if (Boolean.getBoolean("hearthside.e2e.breakViewPipeline")) {
-					throw new IllegalStateException("E2E: the view pipeline is broken on purpose");
-				}
-				if (RenderSystem.getCompiledPipelineNullable(VIEW) == null) {
+				HearthsideMod.LOGGER.info("Hearthside view pipeline compiling");
+				CompiledRenderPipeline compiled = RenderSystem.getCompiledPipelineNullable(VIEW);
+				if (compiled == null) {
 					throw new IllegalStateException("Minecraft could not build " + VIEW.getLocation());
 				}
 				try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside warm-up", target.view(), Optional.empty())) {
-					ViewQuad.of(new Rect(0, 0, 1, 1), 1, 1, 1, 1, false, 1f, true).ifPresent(quad -> draw(pass, source.view(), quad));
+					ViewQuad.of(new Rect(0, 0, 1, 1), 1, 1, 1, 1, false, 1f, true)
+							.ifPresent(quad -> draw(pass, compiled, source.view(), quad));
 				}
-				fallback = false;
+				view = compiled;
 				HearthsideMod.LOGGER.info("Hearthside view pipeline warmed");
 			} catch (RuntimeException e) {
-				fallback = true;
 				HearthsideMod.LOGGER.warn("Hearthside view pipeline unavailable; drawing views without fades", e);
 			}
 		}
@@ -134,9 +142,19 @@ public final class ViewPipeline {
 		loader.addListenerOrdering(ResourceReloaderKeys.Client.SHADERS, RELOAD_LISTENER);
 	}
 
-	/** Draws {@code source} as {@code quad} says, in a pass on the canvas. Only while not {@link #usingFallback}. */
+	/**
+	 * Draws {@code source} as {@code quad} says, in a pass on the canvas, with the pipeline the last warm-up compiled
+	 * (never compiling it here). Only while not {@link #usingFallback}.
+	 */
 	public static void draw(RenderPass pass, GpuTextureView source, ViewQuad quad) {
-		pass.setPipeline(RenderSystem.getCompiledPipeline(VIEW));
+		if (usingFallback()) {
+			throw new IllegalStateException("The view pipeline isn't available; views use the fallback");
+		}
+		draw(pass, view, source, quad);
+	}
+
+	private static void draw(RenderPass pass, CompiledRenderPipeline pipeline, GpuTextureView source, ViewQuad quad) {
+		pass.setPipeline(pipeline);
 		// Filtered: it scales mid-glide and blurs; at one texel per pixel it samples texel centres, so nothing smears.
 		pass.setUniform("InSampler", source, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
 		try (MemoryStack stack = MemoryStack.stackPush()) {
