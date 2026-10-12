@@ -499,6 +499,11 @@ final class HostInput implements Runnable {
 		return router.hasPad(player);
 	}
 
+	/** Player 1's OS mouse, not their controller's pointer, drives the open screen. Render thread. */
+	boolean hostMouseDriving() {
+		return hostApplier.mouseDriving();
+	}
+
 	/** {@code /hearthside pad}: the host takes this controller, replacing any it had. */
 	private void claimForHost(int instanceId) {
 		if (router.hasPad(0)) {

@@ -6,8 +6,9 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * Where a row of controller hints goes on a Minecraft screen: the first free spot of bottom centre, bottom right, bottom
- * left and top right, never over a button, a text field or an inventory panel (user session, 2026-10-11).
+ * Where a row of controller hints goes on a Minecraft screen: the first free spot of five, bottom centre, bottom right,
+ * bottom left, top right and top left, never over a button, a text field or an inventory panel (user session,
+ * 2026-10-11), nor a toast (Spec D; see HintPlacementToastTest).
  */
 class HintPlacementTest {
 	static final Rect SCREEN = new Rect(0, 0, 400, 240);

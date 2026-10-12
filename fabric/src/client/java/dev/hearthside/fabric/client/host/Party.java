@@ -614,6 +614,12 @@ public final class Party {
 		return current != null && current.hasPadFor(0);
 	}
 
+	/** Player 1 holds a controller and is playing on it: their mouse isn't driving the open screen. */
+	public boolean hostOnController() {
+		HostInput current = input;
+		return current != null && current.hasPadFor(0) && !current.hostMouseDriving();
+	}
+
 	public boolean hostClaimArmed() {
 		return hostClaimArmed && !hostHasController();
 	}

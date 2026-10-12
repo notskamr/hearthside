@@ -21,7 +21,9 @@ public final class ButtonGuide {
 		if (!scheme.showButtonGuide()) {
 			return prompts;
 		}
-		if (c.inContainerScreen()) {
+		if (c.inContainerScreen() && c.bundle() != BundleState.NONE) {
+			bundlePrompts(prompts, c.bundle(), scheme);
+		} else if (c.inContainerScreen()) {
 			add(prompts, scheme.controlFor(MenuAction.PICK_PLACE), c.holdingSlotItem() ? "place" : "take");
 			add(prompts, scheme.controlFor(MenuAction.TAKE_HALF), c.holdingSlotItem() ? "place_one" : "take_half");
 			if (!c.holdingSlotItem()) {
@@ -45,6 +47,31 @@ public final class ButtonGuide {
 			add(prompts, scheme.controlFor(Action.INVENTORY), "inventory");
 		}
 		return prompts.size() > MAX_PROMPTS ? List.copyOf(prompts.subList(0, MAX_PROMPTS)) : prompts;
+	}
+
+	/**
+	 * Bundles follow vanilla's clicks: over a bundle with an empty hand the look stick (a scroll) chooses an item and a
+	 * right click takes it out; with an item held, a left click puts it in. Holding a bundle, a left click scoops a stack
+	 * into it, and a right click over an empty slot takes one out.
+	 */
+	private static void bundlePrompts(List<Prompt> prompts, BundleState bundle, ControlScheme scheme) {
+		Optional<Control> pick = scheme.controlFor(MenuAction.PICK_PLACE);
+		Optional<Control> half = scheme.controlFor(MenuAction.TAKE_HALF);
+		switch (bundle) {
+			case OVER_BUNDLE_EMPTY_HAND -> {
+				add(prompts, pick, "take");
+				add(prompts, Optional.of(scheme.swapSticks() ? Control.LEFT_STICK : Control.RIGHT_STICK), "bundle_choose");
+				add(prompts, half, "bundle_take_out");
+				add(prompts, scheme.controlFor(MenuAction.QUICK_MOVE), "quick_move");
+			}
+			case OVER_BUNDLE_HOLDING, HOLDING_BUNDLE_OVER_STACK -> add(prompts, pick, "bundle_put_in");
+			case HOLDING_BUNDLE_OVER_EMPTY -> {
+				add(prompts, pick, "place");
+				add(prompts, half, "bundle_take_out");
+			}
+			case NONE -> {}
+		}
+		add(prompts, scheme.controlFor(MenuAction.CLOSE), "close");
 	}
 
 	private static void add(List<Prompt> prompts, Optional<Control> control, String label) {
