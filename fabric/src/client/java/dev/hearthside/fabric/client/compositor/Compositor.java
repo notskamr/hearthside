@@ -299,6 +299,8 @@ public final class Compositor {
 			stale.clear();
 			List<Draw> draws = new ArrayList<>();
 			List<CanvasReadback.GuestView> guests = new ArrayList<>();
+			boolean tearCheck = FrameHooks.tearCheck();
+			List<CanvasReadback.SteadyView> steady = new ArrayList<>();
 			for (ViewFrame view : frames) {
 				Rect rect = view.rect();
 				drawn.put(view.seat(), rect);
@@ -320,10 +322,18 @@ public final class Compositor {
 				draws.add(new Draw(view.seat(), imp.hostTexture(), rect, view.alpha(), waiting, imp.rowsTopDown()));
 				framed.add(view.seat());
 				guests.add(new CanvasReadback.GuestView(view.seat() + 1, imp.generation(), rect));
+				if (tearCheck && view.alpha() >= 1f && !waiting && rect.equals(target)) {
+					// Fully faded in, at its frame's size and not gliding: every pixel is the guest's own.
+					steady.add(new CanvasReadback.SteadyView(view.seat() + 1, imp, rect));
+				}
 			}
-			draw(encoder, draws, OverlayPass.texture());
+			// While checking frames, nothing of Hearthside's (borders, name tags) lands on the sampled points.
+			draw(encoder, draws, tearCheck ? Optional.empty() : OverlayPass.texture());
 			retireGone();
 			readback.afterCompose(encoder, canvas, guests, frames);
+			if (tearCheck) {
+				readback.checkTears(encoder, canvas, steady);
+			}
 		} catch (RuntimeException e) {
 			// Never take the game down for a frame: show player 1's own view instead, and say why once.
 			if (!composeFailed) {

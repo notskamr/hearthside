@@ -83,6 +83,10 @@ loom {
 				// inherit the host's -D options, so this reaches them too.
 				vmArg '-Dfabric.debug.disableModIds=iris'
 			}
+			if (project.findProperty('e2eForceCopy') == 'true') {
+				// Every guest copies its frames, as on a PC whose OpenGL can't share them (Intel); guests get it too.
+				vmArg '-Dhearthside.forceCopy=true'
+			}
 			if (project.findProperty('e2eValidation') == 'true') {
 				programArg '--vulkanValidation'
 			}

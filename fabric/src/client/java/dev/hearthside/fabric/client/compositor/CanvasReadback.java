@@ -4,6 +4,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
+import dev.hearthside.core.compositor.TearCheck;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.ViewFrame;
 import dev.hearthside.fabric.HearthsideMod;
@@ -35,7 +36,30 @@ final class CanvasReadback {
 	/** A guest's view as drawn this frame: the pixels just inside its top-left and bottom-left corners are probed. */
 	record GuestView(int player, int generation, Rect rect) {}
 
+	/**
+	 * A guest's view drawn steady this frame (fully faded in, at its frame's size, not gliding), for the tear check.
+	 * {@code source} is the import it was drawn from: the counts restart when that changes.
+	 */
+	record SteadyView(int player, Object source, Rect rect) {}
+
+	/** One import's tear-check counts so far. */
+	private static final class TearTally {
+		final Object source;
+		int frames, mixed, bad;
+		int firstBad = -1;
+
+		TearTally(Object source) {
+			this.source = source;
+		}
+	}
+
+	/** The tear check's sample points per view: 5 down its middle, then 2 px inside each edge at a third and two. */
+	private static final int TEAR_POINTS = 13;
+	/** A tear-check line per guest every this many judged frames. */
+	private static final int TEAR_LOG_EVERY = 120;
+
 	private final boolean probe = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
+	private final Map<Integer, TearTally> tears = new HashMap<>();
 	private long lastProbe;
 	private final Map<Integer, Long> lastGapLog = new HashMap<>();
 	// Composition cost, logged as percentiles every 30 s.
@@ -142,6 +166,57 @@ final class CanvasReadback {
 				if (rgb[i] == DIVIDER_RGB && now - lastGapLog.getOrDefault(seat, 0L) > 250_000_000L) {
 					lastGapLog.put(seat, now);
 					HearthsideMod.LOGGER.info("Hearthside compositor gap player={}", seat + 1);
+				}
+			}
+		});
+	}
+
+	/**
+	 * E2E ({@link FrameHooks#TEAR_CHECK}): samples every steady guest view at {@value #TEAR_POINTS} points and judges the
+	 * frame with {@link TearCheck}: the guest paints whole frames in one of two colours, so both in one frame is a torn
+	 * frame and anything else is garbage or see-through. Logs each guest's running counts every {@value #TEAR_LOG_EVERY}
+	 * judged frames.
+	 */
+	void checkTears(CommandEncoder encoder, Canvas canvas, List<SteadyView> views) {
+		List<int[]> points = new ArrayList<>();
+		for (SteadyView view : views) {
+			Rect r = view.rect();
+			int right = r.x() + r.width() - 1 - 2, bottom = r.y() + r.height() - 1 - 2;
+			for (int tenths = 1; tenths <= 9; tenths += 2) {
+				points.add(new int[] {r.x() + r.width() / 2, r.y() + r.height() * tenths / 10});
+			}
+			for (int third = 1; third <= 2; third++) {
+				int x = r.x() + r.width() * third / 3, y = r.y() + r.height() * third / 3;
+				points.add(new int[] {x, r.y() + 2});
+				points.add(new int[] {x, bottom});
+				points.add(new int[] {r.x() + 2, y});
+				points.add(new int[] {right, y});
+			}
+		}
+		readPixels(encoder, canvas, points, rgb -> {
+			for (int i = 0; i < views.size(); i++) {
+				SteadyView view = views.get(i);
+				int[] samples = Arrays.copyOfRange(rgb, i * TEAR_POINTS, (i + 1) * TEAR_POINTS);
+				if (Arrays.stream(samples).anyMatch(sample -> sample < 0)) {
+					continue; // partly off the canvas
+				}
+				TearTally tally = tears.get(view.player());
+				if (tally == null || tally.source != view.source()) {
+					tally = new TearTally(view.source());
+					tears.put(view.player(), tally);
+				}
+				TearCheck.Frame frame = TearCheck.judge(samples, FrameHooks.SOLID_A, FrameHooks.SOLID_B);
+				tally.frames++;
+				tally.mixed += frame.mixed() ? 1 : 0;
+				if (frame.bad()) {
+					tally.bad++;
+					if (tally.firstBad < 0) {
+						tally.firstBad = frame.firstBad();
+					}
+				}
+				if (tally.frames % TEAR_LOG_EVERY == 0) {
+					HearthsideMod.LOGGER.info("Hearthside tear check player={} frames={} mixed={} bad={} first={}",
+							view.player(), tally.frames, tally.mixed, tally.bad, tally.firstBad < 0 ? "-" : hex(tally.firstBad));
 				}
 			}
 		});

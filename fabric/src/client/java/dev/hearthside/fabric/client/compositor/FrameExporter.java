@@ -56,6 +56,8 @@ public final class FrameExporter {
 	private final ControlConnection connection;
 	private final Path dir;
 	private final boolean pattern = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
+	/** E2E ({@link FrameHooks#SOLID_FRAMES}): the solid frames' alpha, or 0. */
+	private final int solidAlpha = FrameHooks.solidFramesAlpha();
 	private final InWorldSignal world = new InWorldSignal();
 	/** When this game last told the host it was in the world (0 once checked). */
 	private long liveSince;
@@ -125,7 +127,13 @@ public final class FrameExporter {
 			droppedFrames++;
 			return; // the host still holds every slot; drop this frame
 		}
-		current.draw(claimed.getAsInt(), mainColor, RenderSystem.getDevice().createCommandEncoder(), ++frame);
+		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
+		if (solidAlpha > 0) {
+			// E2E: the whole frame in one colour, the other one next frame, through the real export path.
+			encoder.clearColorTexture(mainColor.texture(),
+					FrameHooks.colour(frame % 2 == 0 ? FrameHooks.SOLID_A : FrameHooks.SOLID_B, solidAlpha));
+		}
+		current.draw(claimed.getAsInt(), mainColor, encoder, ++frame);
 		exportedFrames++;
 		observeWorld();
 	}
@@ -215,7 +223,8 @@ public final class FrameExporter {
 		}
 		if (choice == Transport.COPY) {
 			try {
-				current = new CopiedFrames(controlFile, table, width, height, pattern, this::deleteOldFiles);
+				current = new CopiedFrames(controlFile, table, width, height, pattern, FrameHooks.slowCopyMs(),
+						this::deleteOldFiles);
 			} catch (RuntimeException e) {
 				HearthsideMod.LOGGER.error("Could not set up the copy transport at {}", controlFile, e);
 				table.close();
@@ -435,14 +444,18 @@ public final class FrameExporter {
 		private final GpuTextureView stagingView;
 		private final GpuBuffer[] buffers;
 		private final boolean pattern;
+		/** E2E: the pause halfway through writing a frame into the pixel file ({@link FrameHooks#SLOW_COPY_MS}). */
+		private final int slowCopyMs;
 		private final Runnable afterClose;
 		private int inFlight;
 		private boolean closeRequested;
 		private boolean closed;
 
-		CopiedFrames(Path controlFile, SegmentSlotTable table, int width, int height, boolean pattern, Runnable afterClose) {
+		CopiedFrames(Path controlFile, SegmentSlotTable table, int width, int height, boolean pattern, int slowCopyMs,
+				Runnable afterClose) {
 			super(table, width, height);
 			this.pattern = pattern;
+			this.slowCopyMs = slowCopyMs;
 			this.afterClose = afterClose;
 			GpuDevice device = RenderSystem.getDevice();
 			PixelFile file = PixelFile.open(PixelFile.forControlFile(controlFile), width, height, table.slots());
@@ -452,6 +465,7 @@ public final class FrameExporter {
 				texture = device.createTexture("hearthside export " + table.generation(),
 						GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_COPY_SRC
 								| GpuTexture.USAGE_COPY_DST, GpuFormat.RGBA8_UNORM, width, height, 1, 1);
+				FrameHooks.poison(texture);
 				long bytes = (long) width * height * 4;
 				for (int slot = 0; slot < readbacks.length; slot++) {
 					int index = slot;
@@ -492,7 +506,16 @@ public final class FrameExporter {
 					slots.abandon(slot);
 				} else {
 					try (GpuBufferSlice.MappedView read = buffers[slot].map(true, false)) {
-						pixels.region(slot).put(read.data());
+						ByteBuffer region = pixels.region(slot);
+						if (slowCopyMs > 0) {
+							// E2E: the first half of the rows, a pause, then the rest, as a slow machine might.
+							int half = height / 2 * width * 4;
+							region.put(read.data().slice(0, half));
+							FrameHooks.pause(slowCopyMs);
+							region.put(read.data().slice(half, region.capacity() - half));
+						} else {
+							region.put(read.data());
+						}
 					}
 					slots.publish(slot, frame);
 				}

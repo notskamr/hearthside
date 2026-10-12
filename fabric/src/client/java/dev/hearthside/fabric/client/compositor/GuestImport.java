@@ -16,6 +16,8 @@ import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.fabric.client.compositor.backend.ImportFailed;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.compositor.backend.SlotMemory;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.OptionalInt;
@@ -45,6 +47,9 @@ public final class GuestImport implements AutoCloseable {
 	private long lastFrame;
 	private boolean pulled;
 	private final boolean rowsTopDown;
+	/** E2E: the pause halfway through reading a copied frame, and the buffer it is read into (see {@link #slowRead}). */
+	private final int slowCopyMs = FrameHooks.slowCopyMs();
+	private ByteBuffer slowCopy;
 
 	private GuestImport(ControlMessage.FrameSlotsReady ready, SegmentSlotTable table, SharedImages images,
 			GpuTexture[] shared, PixelFile pixels, GpuTexture hostTexture) {
@@ -92,6 +97,7 @@ public final class GuestImport implements AutoCloseable {
 			hostTexture = device.createTexture("hearthside guest " + ready.generation(),
 					GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING,
 					GpuFormat.RGBA8_UNORM, ready.width(), ready.height(), 1, 1);
+			FrameHooks.poison(hostTexture);
 			return new GuestImport(ready, table, images, shared, pixels, hostTexture);
 		} catch (ImportFailed | RuntimeException e) {
 			closeAll(shared);
@@ -121,7 +127,8 @@ public final class GuestImport implements AutoCloseable {
 		lastFrame = table.frame(slot);
 		if (pixels != null) {
 			// Uploaded (into Minecraft's staging memory on Vulkan) before this returns: the slot is free again at once.
-			encoder.writeToTexture(hostTexture, pixels.region(slot), 0, 0, 0, 0, width, height);
+			encoder.writeToTexture(hostTexture, slowCopyMs > 0 ? slowRead(slot) : pixels.region(slot), 0, 0, 0, 0, width,
+					height);
 			slots.release(slot);
 		} else {
 			GpuTexture source = shared[slot];
@@ -132,6 +139,21 @@ public final class GuestImport implements AutoCloseable {
 		}
 		pulled = true;
 		return true;
+	}
+
+	/**
+	 * E2E ({@link FrameHooks#SLOW_COPY_MS}): reads a slot as a slow machine might, into a buffer of our own in two halves
+	 * with a pause between, so a guest writing the slot meanwhile would tear what is uploaded.
+	 */
+	private ByteBuffer slowRead(int slot) {
+		ByteBuffer region = pixels.region(slot);
+		if (slowCopy == null) {
+			slowCopy = ByteBuffer.allocateDirect(region.capacity()).order(ByteOrder.nativeOrder());
+		}
+		int half = height / 2 * width * 4;
+		slowCopy.clear().put(region.slice(0, half));
+		FrameHooks.pause(slowCopyMs);
+		return slowCopy.put(region.slice(half, region.capacity() - half)).flip();
 	}
 
 	/** Whether a frame has reached the host texture yet (a new generation is drawn only from then on). */

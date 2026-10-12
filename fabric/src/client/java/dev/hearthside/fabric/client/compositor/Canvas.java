@@ -38,6 +38,7 @@ final class Canvas implements AutoCloseable {
 		close();
 		GpuDevice device = RenderSystem.getDevice();
 		texture = device.createTexture(label, USAGE, GpuFormat.RGBA8_UNORM, width, height, 1, 1);
+		FrameHooks.poison(texture);
 		view = device.createTextureView(texture);
 		return true;
 	}

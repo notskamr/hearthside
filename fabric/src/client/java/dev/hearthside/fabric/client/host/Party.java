@@ -51,6 +51,7 @@ import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.TransportDecision;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.FrameHooks;
 import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
@@ -475,6 +476,13 @@ public final class Party {
 				if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader")) {
 					// E2E: the guest behaves as if its machine had no Vulkan runtime.
 					command = withEnvironment(command, ExportDevice.NO_VULKAN_LOADER_ENV, "1");
+				}
+				for (Map.Entry<String, String> hook : FrameHooks.GUEST_ENV.entrySet()) {
+					// E2E: the frame hand-over's stress hooks (F1, F3), for the guest's side of it.
+					String value = System.getProperty(hook.getKey());
+					if (value != null) {
+						command = withEnvironment(command, hook.getValue(), value);
+					}
 				}
 				if (Boolean.getBoolean("hearthside.e2e.guestTryFullscreen")) {
 					// E2E: once in the world, the guest tries every way into fullscreen (Q4).
