@@ -317,7 +317,7 @@ Composite cost, host CPU, p95, one guest: OpenGL 0.044 ms shared, 0.294 ms copie
 | E2 | Auto chooses from the machine when a party is created (GPU type and memory faked): integrated → Performance, 8 GB → Performance, discrete 32 GB → Quality or Balanced with its reason | PASS |
 | E3 | `presetForPlayer1`: player 1's own game takes the preset for the session (not its resolution); a save writes player 1's own values; leaving split-screen puts them back | PASS |
 | K1 | The Vulkan offer: not with Iris (logged); the card, Not now by controller (remembered); Switch saves Vulkan and logs the relaunch (token redacted); a relaunch that dies asks the player to start Minecraft again; no Vulkan loader → no card, no crash; the real probe on this machine | PASS — FAILED before the change |
-| H7 | Toasts never cover the hints, which move clear and stay drawn; no keyboard tutorial toast for player 1 on a controller; one hint row per frame; a bundle offers Choose and Take out, and the right stick chooses | PASS — FAILED before the change |
+| H7 | Toasts never cover the hints, which move clear and stay drawn; no keyboard tutorial toast for player 1 holding a controller (even while the mouse drives a menu), and one already up goes when they take or reconnect a controller (user report); one hint row per frame; a bundle offers Choose and Take out, and the right stick chooses | PASS — FAILED before the change |
 | Q1 | The guest's render distance is capped at the party preset's cap (none under Quality) | PASS |
 | Q1b | Under Balanced, a guest's own 12 survives a save while the server hears 8 | PASS |
 
