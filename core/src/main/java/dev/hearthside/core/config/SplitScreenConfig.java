@@ -11,8 +11,17 @@ import com.google.gson.JsonPrimitive;
 import dev.hearthside.core.layout.LayoutSettings;
 import java.io.IOException;
 import java.io.Reader;
+import java.io.StringReader;
 import java.io.Writer;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -48,6 +57,7 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	private static final String TWO_PLAYERS = "twoPlayerLayout";
 	private static final String THREE_PLAYERS = "threePlayerLayout";
 	private static final String PARTY_PANEL = "partyPanel";
+	private static final List<String> FIELDS = List.of(MEMORY, RENDER_DISTANCE, TWO_PLAYERS, THREE_PLAYERS, PARTY_PANEL);
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final BigDecimal INT_MIN = BigDecimal.valueOf(Integer.MIN_VALUE);
 	private static final BigDecimal INT_MAX = BigDecimal.valueOf(Integer.MAX_VALUE);
@@ -90,6 +100,55 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 				.withPartyPanel(booleanOr(object, PARTY_PANEL, DEFAULTS.layout().partyPanel()));
 		return new SplitScreenConfig(intOr(object, MEMORY, DEFAULTS.guestMemoryMb()),
 				intOr(object, RENDER_DISTANCE, DEFAULTS.guestRenderDistance()), layout);
+	}
+
+	/**
+	 * Whether this is a settings object that lacks a field, such as a file from before a setting existed. Content that
+	 * isn't a JSON object doesn't count: it is left as it is. Only a failed read throws.
+	 */
+	public static boolean lacksFields(Reader in) throws IOException {
+		JsonElement root;
+		try {
+			root = JsonParser.parseReader(in);
+		} catch (JsonIOException e) {
+			throw e.getCause() instanceof IOException io ? io : new IOException(e);
+		} catch (JsonParseException e) {
+			return false;
+		}
+		return root.isJsonObject() && !root.getAsJsonObject().keySet().containsAll(FIELDS);
+	}
+
+	/**
+	 * The settings in {@code file}. A missing file is created with every field at its default; a file that lacks some
+	 * fields gets them, keeping its own values (an invalid one becomes its default), so players can find every setting.
+	 * One that isn't a settings object at all gives the defaults and is left as it is. Only a failed read or write
+	 * throws.
+	 */
+	public static SplitScreenConfig loadOrCreate(Path file) throws IOException {
+		if (Files.notExists(file)) {
+			Files.createDirectories(file.toAbsolutePath().getParent());
+			try (Writer out = Files.newBufferedWriter(file, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW,
+					StandardOpenOption.WRITE)) {
+				DEFAULTS.write(out);
+				return DEFAULTS;
+			} catch (FileAlreadyExistsException e) {
+				// created by someone else meanwhile: read theirs
+			}
+		}
+		String content = Files.readString(file, StandardCharsets.UTF_8);
+		SplitScreenConfig config = read(new StringReader(content));
+		if (lacksFields(new StringReader(content))) {
+			Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
+			try (Writer out = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+				config.write(out);
+			}
+			try {
+				Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+			} catch (AtomicMoveNotSupportedException e) {
+				Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+			}
+		}
+		return config;
 	}
 
 	/** Writes every field, pretty-printed, so players can find them all in the file. */
