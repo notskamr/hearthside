@@ -162,6 +162,7 @@ barrier platform at y = 249 so terrain never blocks it.
 | P9 | `Player2` leaves | PASS |
 | H3 | Player 1 on a controller: no pointer in play; killed, the death screen draws it; the stick steers it onto Respawn and A respawns; START's pause menu and Y's inventory draw it, B closes them | PASS — FAILED before the fix |
 | H4 | Player 1 on a controller: hints on pause, Options, Video, death and inventory cover no widget, panel or the hotbar; none over chat; no Back on the death screen; Select only with the pointer on something to click | PASS — FAILED before the fix |
+| H5 | Player 1 on a controller, pause menu: an OS mouse move over Back to Game hides the pointer (and the hints) and its click closes the menu; reopened, the stick brings the pointer back where the mouse left it and A on Back to Game closes it | PASS — FAILED before the fix |
 
 Every controller step runs with the guest window **unfocused**, as in real play: the `e2eClient` run sets
 `HEARTHSIDE_E2E_GUEST_UNFOCUSED=1`, which guests inherit and which makes their window report no focus (P1 checks it).
