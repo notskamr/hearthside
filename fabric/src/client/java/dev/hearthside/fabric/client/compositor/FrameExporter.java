@@ -368,6 +368,12 @@ public final class FrameExporter {
 					ExportedSlot memory = device.export(description, name);
 					frames.exported[slot] = memory;
 					frames.textures[slot] = images.importSlot(description, memory.byHandle(), "hearthside slot " + name);
+					// Opaque black from the start, like every texture Hearthside creates. Nothing is published before a
+					// slot is fully drawn, and the host imports only once FrameSlotsReady is sent, so this can't race it.
+					CommandEncoder encoder = gpu.createCommandEncoder();
+					images.beforeUse(frames.textures[slot], encoder);
+					Canvas.startBlack(frames.textures[slot]);
+					images.afterUse(frames.textures[slot], encoder);
 					frames.views[slot] = gpu.createTextureView(frames.textures[slot]);
 					table.setMemorySize(slot, memory.allocationSize());
 					table.setMemoryType(slot, memory.memoryType());

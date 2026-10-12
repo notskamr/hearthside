@@ -87,6 +87,7 @@ public final class GuestImport implements AutoCloseable {
 				shared = new GpuTexture[table.slots()];
 				for (int slot = 0; slot < shared.length; slot++) {
 					String name = FrameNames.gpuMemory(ready.controlFile(), ready.generation(), slot);
+					// Never cleared here: it is the guest's own memory (which the guest cleared), and may already hold a frame.
 					shared[slot] = images.importSlot(description, new SlotMemory(table.memorySize(slot), table.memoryType(slot),
 							new SlotMemory.Source.ByName(name)), "hearthside guest slot " + name);
 				}
