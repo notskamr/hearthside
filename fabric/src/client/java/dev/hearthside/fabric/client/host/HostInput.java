@@ -146,6 +146,8 @@ final class HostInput implements Runnable {
 			lastGuestDrive = 0;
 		}
 		sharedButtons.clear();
+		// In the world player 1's mouse and controller take turns on their screens (the lobby's pointer is everyone's).
+		hostApplier.shareWithMouse(true);
 		long now = System.nanoTime();
 		update.frames().forEach((player, frame) -> {
 			if (player == 0) {
@@ -177,16 +179,18 @@ final class HostInput implements Runnable {
 	/**
 	 * In the world, player 1's pointer is drawn on Minecraft's screens (the death screen, pause, inventory) while they
 	 * hold a controller, and hidden in play; their controller moves it and A clicks under it. Their applier centres it
-	 * as each screen opens from play.
+	 * as each screen opens from play. When they move or click the mouse it drives instead, as without a controller (no
+	 * pointer, no controller hints), until the stick, D-pad or A takes over again.
 	 */
 	private void showHostPointer() {
 		Screen screen = minecraft.gui.screen();
-		boolean show = screen != null && !(screen instanceof PadScreen);
+		boolean show = screen != null && !(screen instanceof PadScreen) && !hostApplier.mouseDriving();
 		if (show && !VirtualCursor.isDrawn()) {
 			// It may still wear the colour of a guest who drove the lobby.
 			VirtualCursor.setTint(session.colorOf(0));
 		}
 		VirtualCursor.setDrawn(show);
+		ButtonGuideRenderer.setScreenHintsHidden(hostApplier.mouseDriving());
 	}
 
 	/**
@@ -198,6 +202,8 @@ final class HostInput implements Runnable {
 	private Screen lastSharedScreen;
 
 	private void driveSharedScreen(Map<Integer, InputFrame> frames) {
+		hostApplier.shareWithMouse(false);
+		ButtonGuideRenderer.setScreenHintsHidden(false);
 		Screen screen = minecraft.gui.screen();
 		if (screen != lastSharedScreen) {
 			// A new screen: a button already down on the frame before was pressed for the old screen (the B that closed
@@ -508,6 +514,7 @@ final class HostInput implements Runnable {
 			hostApplier.release();
 			router.release(0);
 			restoreHostOptions();
+			ButtonGuideRenderer.setScreenHintsHidden(false);
 			if (!sharedDriving) {
 				VirtualCursor.setDrawn(false);
 			}

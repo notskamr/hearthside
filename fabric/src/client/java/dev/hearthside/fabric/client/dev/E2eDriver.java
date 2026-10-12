@@ -135,7 +135,7 @@ public final class E2eDriver {
 			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
 			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
-			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"S2", "B3", "P9"},
+			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
 			{"D9"}, {"7"},
@@ -301,6 +301,7 @@ public final class E2eDriver {
 				step("P9 Player2 leaves", this::player2Leaves);
 				step("H3 player 1 on a controller gets a pointer on Minecraft's screens and can respawn", this::hostPointerOnScreens);
 				step("H4 controller hints on Minecraft's screens never cover anything and offer only what works", this::hintsStayClear);
+				step("H5 player 1 can switch between the controller pointer and the mouse at any time", this::pointerOrMouse);
 				step("S2 the join prompt, a drop-in and a leave make their warm sounds", () -> dropInMakesSounds(dropInSounds));
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
@@ -2679,6 +2680,84 @@ public final class E2eDriver {
 		} finally {
 			releaseHostPad();
 		}
+	}
+
+	private void pointerOrMouse() throws Exception {
+		claimHostPad();
+		try {
+			openPause();
+			check(VirtualCursor.isDrawn(), "the controller's pointer is drawn on the pause menu");
+			// Park the pointer on empty space, so a click that went to it would do nothing.
+			PADS.set(HOST_PAD, new InputFrame(0, 0, -1, 0, 0, 0, 0, 0));
+			Thread.sleep(800);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(150);
+			// The OS mouse moves over Back to Game (events as they arrive from the window), rests, then clicks.
+			double[] resume = onRender(() -> windowCentre(widgetLabelled("menu.returnToGame")));
+			osMove(resume[0] - 6, resume[1] - 2);
+			osMove(resume[0], resume[1]);
+			Thread.sleep(300);
+			check(!VirtualCursor.isDrawn(), "the mouse took over: the controller's pointer is hidden");
+			check(onRender(ButtonGuideRenderer::lastLayout).isEmpty(), "and no controller hints while the mouse drives");
+			osButtonOnly(true);
+			osButtonOnly(false);
+			waitFor("the mouse's click closed the menu", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+
+			openPause();
+			double[] mouse = onRender(() -> new double[] {minecraft.mouseHandler.xpos(), minecraft.mouseHandler.ypos()});
+			PADS.set(HOST_PAD, new InputFrame(0, 0, 0, 0.4f, 0, 0, 0, 0));
+			Thread.sleep(60);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(200);
+			check(VirtualCursor.isDrawn(), "the stick takes over again: the pointer is drawn");
+			double[] pointer = {VirtualCursor.x(), VirtualCursor.y()};
+			check(Math.abs(pointer[0] - mouse[0]) < 2 && pointer[1] >= mouse[1] && pointer[1] - mouse[1] < 60,
+					"it starts where the mouse left it (mouse " + Arrays.toString(mouse) + ", pointer " + Arrays.toString(pointer) + ")");
+			steerPointerOnto(HOST_PAD, onRender(() -> widgetLabelled("menu.returnToGame")));
+			press(HOST_PAD, PadButton.A);
+			waitFor("A closed the menu", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	private void openPause() throws Exception {
+		// Minecraft only pauses from play (a world that just opened may still show its loading screen).
+		waitFor("in play", Duration.ofSeconds(10), () -> onRender(() -> minecraft.gui.screen() == null));
+		String before = onRender(() -> {
+			Screen open = minecraft.gui.screen();
+			minecraft.pauseGame(false);
+			return open == null ? "none" : open.getClass().getSimpleName();
+		});
+		waitFor("the pause menu (over " + before + ")", Duration.ofSeconds(5),
+				() -> onRender(() -> minecraft.gui.screen() instanceof PauseScreen));
+		Thread.sleep(300);
+	}
+
+	/** A widget's centre in window coordinates, where OS mouse events are. Render thread. */
+	private double[] windowCentre(AbstractWidget widget) {
+		var window = minecraft.getWindow();
+		double toScreen = (double) window.getScreenWidth() / window.getGuiScaledWidth();
+		return new double[] {(widget.getX() + widget.getWidth() / 2.0) * toScreen, (widget.getY() + widget.getHeight() / 2.0) * toScreen};
+	}
+
+	/** An OS mouse move, as the window delivers it. */
+	private void osMove(double windowX, double windowY) throws Exception {
+		onRender(() -> {
+			minecraft.mouseHandler.onMove(minecraft.getWindow().handle(), windowX, windowY, 0, 0);
+			return null;
+		});
+		Thread.sleep(50);
+	}
+
+	/** An OS left-button press or release where the mouse rests. */
+	private void osButtonOnly(boolean press) throws Exception {
+		onRender(() -> {
+			minecraft.mouseHandler.onButton(minecraft.getWindow().handle(),
+					new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0), press ? 1 : 0);
+			return null;
+		});
+		Thread.sleep(100);
 	}
 
 	/** The open screen's widget with this translated label. Render thread. */

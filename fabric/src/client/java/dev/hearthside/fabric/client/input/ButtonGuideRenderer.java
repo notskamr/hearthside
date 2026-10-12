@@ -86,6 +86,7 @@ public final class ButtonGuideRenderer {
 	/** The screen the menu hints last drew on (the E2E checks screens with their own chips never get them). */
 	public static volatile Screen drewOn;
 	private static volatile List<Hint> lastLayout = List.of();
+	private static volatile boolean screenHintsHidden;
 
 	private ButtonGuideRenderer() {}
 
@@ -105,6 +106,11 @@ public final class ButtonGuideRenderer {
 
 	public static void disable() {
 		schemeSource = null;
+	}
+
+	/** Player 1's mouse is driving their screens: no controller hints on them until the controller takes over. */
+	public static void setScreenHintsHidden(boolean hidden) {
+		screenHintsHidden = hidden;
 	}
 
 	public static void setStyle(PadStyle padStyle) {
@@ -157,7 +163,8 @@ public final class ButtonGuideRenderer {
 	private static void drawScreen(Screen screen, GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
 		Minecraft mc = Minecraft.getInstance();
 		Supplier<ControlScheme> scheme = schemeSource;
-		if (scheme == null || screen instanceof LobbyScreen || screen instanceof PadScreen || screen instanceof ChatScreen) {
+		if (scheme == null || screenHintsHidden || screen instanceof LobbyScreen || screen instanceof PadScreen
+				|| screen instanceof ChatScreen) {
 			// Hearthside's screens draw their own hint chips (a second row would sit on top of them); chat is all
 			// text box and messages, and the keyboard's.
 			lastLayout = List.of();
