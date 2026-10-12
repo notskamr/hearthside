@@ -232,8 +232,9 @@ public final class Compositor {
 				retired.add(older);
 			}
 		}
-		HearthsideMod.LOGGER.info("Hearthside compositor: player {} frames {} {}x{}", playerIndex + 1,
-				ready.transport(), ready.width(), ready.height());
+		HearthsideMod.LOGGER.info("Hearthside compositor: player {} frames {} {}x{} backend={}", playerIndex + 1,
+				ready.transport(), ready.width(), ready.height(),
+				com.mojang.blaze3d.systems.RenderSystem.getDevice().getDeviceInfo().backendName().toLowerCase(java.util.Locale.ROOT));
 	}
 
 	/**

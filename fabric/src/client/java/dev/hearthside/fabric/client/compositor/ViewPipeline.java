@@ -176,7 +176,8 @@ public final class ViewPipeline {
 				rect.y() + rect.height() - y1, x1 - x0, y1 - y0);
 	}
 
-	private static void blit(RenderPass pass, RenderPipeline pipeline, GpuTextureView source, FilterMode filter) {
+	/** Draws {@code source} over the whole of the pass's target through one of the blit-pair pipelines above. */
+	static void blit(RenderPass pass, RenderPipeline pipeline, GpuTextureView source, FilterMode filter) {
 		pass.setPipeline(RenderSystem.getCompiledPipeline(pipeline));
 		pass.setUniform("InSampler", source, RenderSystem.getSamplerCache().getClampToEdge(filter));
 		pass.draw(3, 1, 0, 0);
