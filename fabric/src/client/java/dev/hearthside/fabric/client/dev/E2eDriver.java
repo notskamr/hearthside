@@ -1081,6 +1081,9 @@ public final class E2eDriver {
 		writeOption(options, "cutoutLeaves", "true");
 		writeOption(options, "biomeBlendRadius", "2");
 		writeOption(options, "entityDistanceScaling", "1.0");
+		// Custom graphics, as these are: a named preset (a fresh game folder's "fancy") would set its own values over
+		// them as the guest loads its options.
+		writeOption(options, "graphicsPreset", "\"custom\"");
 		Map<String, String> own = optionValues(options);
 		System.setProperty("hearthside.e2e.preset", "performance");
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
