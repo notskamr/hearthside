@@ -2300,13 +2300,16 @@ public final class E2eDriver {
 		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
 		Thread.sleep(300);
 		try {
-			onRender(() -> {
-				Screens.getWidgets(lobby).stream()
-						.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("+ Controller"))
-						.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
-				return null;
-			});
-			press(HOST_PAD, PadButton.A);
+			// Player 1 takes it (a run that skipped L6 still remembers it as theirs, and it is taken at once).
+			if (!onRender(() -> Party.current().hostHasController())) {
+				onRender(() -> {
+					Screens.getWidgets(lobby).stream()
+							.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("+ Controller"))
+							.map(w -> (AbstractButton) w).findFirst().orElseThrow().onPress(new KeyEvent(0, 0, 0));
+					return null;
+				});
+				press(HOST_PAD, PadButton.A);
+			}
 			waitFor("player 1 has the Xbox pad", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
 			// Player 1 nudges the pointer: the lobby's chips are theirs.
 			PADS.set(HOST_PAD, new InputFrame(0, 0, 0.6f, 0, 0, 0, 0, 0));
