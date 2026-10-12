@@ -4283,8 +4283,8 @@ public final class E2eDriver {
 	/**
 	 * H7 (Spec D section 3.5, plan R8): player 1 on a controller in the survival inventory. Minecraft's toasts never
 	 * cover the hints, which move clear and stay drawn; a keyboard tutorial toast already up goes when player 1 takes the
-	 * controller, and none appears after; the screen draws one
-	 * hint row; and a bundle offers Choose and Take out, with the right stick choosing.
+	 * controller, and none appears after; the screen draws one hint row; and a bundle offers Choose and Take out, with
+	 * the right stick choosing.
 	 */
 	private void hintsAndToasts() throws Exception {
 		// Run on its own, the step starts as soon as the session exists: player 1 may not have spawned yet.
