@@ -14,6 +14,8 @@ import dev.hearthside.core.protocol.LifecycleCommand;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
+import dev.hearthside.fabric.client.input.OsCursor;
+import dev.hearthside.fabric.client.input.RealMouse;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.menu.SeatScreen;
@@ -180,7 +182,8 @@ final class HostInput implements Runnable {
 	 * In the world, player 1's pointer is drawn on Minecraft's screens (the death screen, pause, inventory) while they
 	 * hold a controller, and hidden in play; their controller moves it and A clicks under it. Their applier centres it
 	 * as each screen opens from play. When they move or click the mouse it drives instead, as without a controller (no
-	 * pointer, no controller hints), until the stick, D-pad or A takes over again.
+	 * pointer, no controller hints), until the stick, D-pad or A takes over again. Only one pointer ever shows: the OS
+	 * arrow is hidden while theirs is drawn.
 	 */
 	private void showHostPointer() {
 		Screen screen = minecraft.gui.screen();
@@ -190,6 +193,7 @@ final class HostInput implements Runnable {
 			VirtualCursor.setTint(session.colorOf(0));
 		}
 		VirtualCursor.setDrawn(show);
+		OsCursor.setHidden(show);
 		ButtonGuideRenderer.setScreenHintsHidden(hostApplier.mouseDriving());
 	}
 
@@ -203,6 +207,8 @@ final class HostInput implements Runnable {
 
 	private void driveSharedScreen(Map<Integer, InputFrame> frames) {
 		hostApplier.shareWithMouse(false);
+		// The lobby's pointer is everyone's: the OS arrow stays for player 1's mouse.
+		OsCursor.setHidden(false);
 		ButtonGuideRenderer.setScreenHintsHidden(false);
 		Screen screen = minecraft.gui.screen();
 		if (screen != lastSharedScreen) {
@@ -369,6 +375,7 @@ final class HostInput implements Runnable {
 		hostApplier.release();
 		ButtonGuideRenderer.disable();
 		VirtualCursor.setDrawn(false);
+		OsCursor.setHidden(false);
 		restoreHostOptions();
 		if (source instanceof AutoCloseable closeable) {
 			try {
@@ -392,6 +399,13 @@ final class HostInput implements Runnable {
 				if (lost.player() == 0) {
 					hostApplier.release();
 					minecraft.pauseGame(false);
+					// The mouse has player 1's screens now, at once: no pointer, no controller hints, the OS arrow back, and
+					// the game's mouse where that arrow is (not where the pointer rested).
+					VirtualCursor.setDrawn(false);
+					ButtonGuideRenderer.disable();
+					OsCursor.setHidden(false);
+					RealMouse.handOff().padGone();
+					RealMouse.resync(minecraft);
 				} else {
 					session.sendToGuest(lost.player(), new ControlMessage.Lifecycle(LifecycleCommand.PAUSE));
 					session.onPadLost(lost.player());
@@ -403,6 +417,10 @@ final class HostInput implements Runnable {
 					session.onPadRestored(restored.player(), restored.instanceId());
 					session.sendToGuest(restored.player(), new ControlMessage.SetPadStyle(router.styleOf(restored.player()).orElse(PadStyle.GENERIC)));
 					session.sendToGuest(restored.player(), new ControlMessage.Lifecycle(LifecycleCommand.RESUME));
+				} else {
+					// Player 1's hints come back with their controller; its pointer on its next input.
+					ButtonGuideRenderer.setStyle(router.styleOf(0).orElse(PadStyle.GENERIC));
+					ButtonGuideRenderer.enable(hostApplier::scheme);
 				}
 				chat(Component.literal("Player " + (restored.player() + 1) + "'s controller reconnected."));
 			}
@@ -517,6 +535,7 @@ final class HostInput implements Runnable {
 			router.release(0);
 			restoreHostOptions();
 			ButtonGuideRenderer.setScreenHintsHidden(false);
+			OsCursor.setHidden(false);
 			if (!sharedDriving) {
 				VirtualCursor.setDrawn(false);
 			}

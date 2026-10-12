@@ -12,6 +12,7 @@ import dev.hearthside.core.input.HeldSuppression;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.MenuAction;
 import dev.hearthside.core.input.MenuIntent;
+import dev.hearthside.core.input.PointerHandOff;
 import dev.hearthside.core.input.SlotGeometry;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
@@ -64,10 +65,11 @@ public final class InputApplier {
 	private final DropGesture drop = new DropGesture();
 	/** Player 1's screens are shared with the OS mouse: whichever was used last drives them. */
 	private boolean sharesWithMouse;
-	/** The OS mouse drives the open screen; the pointer waits (hidden) until the stick, D-pad or A takes it back. */
+	/**
+	 * The OS mouse drives the open screen ({@link RealMouse#handOff()}); the pointer waits (hidden) until the stick, D-pad
+	 * or A takes it back.
+	 */
 	private boolean mouseDriving;
-	/** The OS mouse use already seen, and when this controller was last used. */
-	private long mouseSeen, padUsed;
 
 	public InputApplier(Minecraft minecraft) {
 		this.minecraft = minecraft;
@@ -122,12 +124,13 @@ public final class InputApplier {
 			// throttled to the "away from keyboard" frame rate.
 			minecraft.getFramerateLimitTracker().onInputReceived();
 		}
-		if (used(frame)) {
-			padUsed = now;
-		}
 		try {
 			Screen screen = minecraft.gui.screen();
 			if (screen == null) {
+				if (sharesWithMouse && used(frame)) {
+					// Playing with the controller: a screen that opens now is the controller's (Esc after mouse look, the mouse's).
+					RealMouse.handOff().padUsed(now);
+				}
 				if (inMenu) {
 					HearthsideMod.LOGGER.info("Hearthside controller: world mode");
 					// Buttons still held from the menu (B to close, A on a widget) must not act in the world.
@@ -148,12 +151,8 @@ public final class InputApplier {
 					drop.step(false, now);
 					PadMovement.clear();
 					VirtualCursor.centre(minecraft.getWindow());
-					// The screen opens for whichever player 1 used last: the mouse (Esc after mouse look) or the pad.
-					long mouse = RealMouse.lastUsed();
-					mouseSeen = mouse;
-					mouseDriving = sharesWithMouse && mouse != 0 && mouse - padUsed > 0;
 				}
-				applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt));
+				applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt), now);
 			}
 		} finally {
 			// Even if applying failed, never replay the same button edge on the next frame.
@@ -246,24 +245,24 @@ public final class InputApplier {
 		}
 	}
 
-	private void applyMenu(Screen screen, MenuIntent intent) {
+	private void applyMenu(Screen screen, MenuIntent intent, long now) {
 		Window window = minecraft.getWindow();
 		long handle = window.handle();
 		if (sharesWithMouse) {
-			long mouse = RealMouse.lastUsed();
-			if (mouse != mouseSeen) {
-				// Moved or clicked: the mouse drives at once, as without a controller.
-				mouseSeen = mouse;
-				mouseDriving = true;
-			}
+			// The screen is whichever player 1 used last: the mouse once it really moves or clicks (RealMouse), the
+			// controller once it points or clicks.
 			boolean points = intent.cursorDx() != 0 || intent.cursorDy() != 0 || intent.hopX() != 0 || intent.hopY() != 0
 					|| intent.down().contains(MenuAction.PICK_PLACE) || intent.down().contains(MenuAction.TAKE_HALF)
 					|| intent.down().contains(MenuAction.QUICK_MOVE);
-			if (mouseDriving && points) {
-				// The controller takes over from where the mouse left off.
-				mouseDriving = false;
-				VirtualCursor.moveTo(minecraft.mouseHandler.xpos(), minecraft.mouseHandler.ypos(), window);
+			PointerHandOff handOff = RealMouse.handOff();
+			if (points) {
+				if (handOff.owner() == PointerHandOff.Owner.MOUSE) {
+					// The controller takes over from where the mouse left off.
+					VirtualCursor.moveTo(minecraft.mouseHandler.xpos(), minecraft.mouseHandler.ypos(), window);
+				}
+				handOff.padUsed(now);
 			}
+			mouseDriving = handOff.owner() == PointerHandOff.Owner.MOUSE;
 		}
 		if (mouseDriving) {
 			// Nothing of the pointer's; a button let go still goes out, and the right stick still scrolls, B still closes.

@@ -62,17 +62,23 @@ if [ -n "$READY" ]; then
     fi
   fi
 fi
-# Only this checkout's leftovers: a game or Gradle wrapper whose command line names a path inside this repository (its
-# build output, loom cache or wrapper jar), so a Minecraft being played, or another checkout's run, is left alone.
+# Only this run's leftovers, so a Minecraft being played (the dev client from fabric/run in this same checkout too) or
+# another checkout's run is left alone. A java process is killed when its command line names, in this checkout:
+#   - the E2E run directory fabric/run-e2e/ (each guest's game folder and mods folder);
+#   - fabric/build/loom-cache/argFiles/runE2eClient (the E2E host: its command line names its run only through the
+#     runE2eClient task's argument file; the dev client's is argFiles/runClient);
+#   - the Gradle wrapper jar together with the :fabric:runE2eClient task (this script's wrapper, not a runClient's).
 if [ -n "$WINDOWS" ]; then
   # Command lines spell the repository C:\..., C:/... or /c/...; compared with \ as / and in lower case.
-  KILL_LEFTOVERS='$roots = @($env:E2E_ROOT_WIN, $env:E2E_ROOT_POSIX) | ForEach-Object { $_.Replace([string][char]92, "/").TrimEnd("/").ToLowerInvariant() }; Get-CimInstance Win32_Process | Where-Object { $_.Name -match "java" -and $_.CommandLine -match "KnotClient|hearthside.role|gradle-wrapper" } | Where-Object { $line = $_.CommandLine.Replace([string][char]92, "/").ToLowerInvariant(); @(foreach ($r in $roots) { foreach ($d in "/fabric/", "/.gradle/", "/gradle/") { if ($line.Contains($r + $d)) { $true } } }).Count -gt 0 } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }'
+  KILL_LEFTOVERS='$roots = @($env:E2E_ROOT_WIN, $env:E2E_ROOT_POSIX) | ForEach-Object { $_.Replace([string][char]92, "/").TrimEnd("/").ToLowerInvariant() }; Get-CimInstance Win32_Process | Where-Object { $_.Name -match "java" -and $_.CommandLine } | Where-Object { $line = $_.CommandLine.Replace([string][char]92, "/").ToLowerInvariant(); @(foreach ($r in $roots) { if ($line.Contains($r + "/fabric/run-e2e/") -or $line.Contains($r + "/fabric/build/loom-cache/argfiles/rune2eclient") -or ($line.Contains($r + "/gradle/wrapper/gradle-wrapper.jar") -and $line.Contains(":fabric:rune2eclient"))) { $true } }).Count -gt 0 } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }'
   E2E_ROOT_WIN="$(pwd -W)" E2E_ROOT_POSIX="$(pwd)" powershell -NoProfile -Command "$KILL_LEFTOVERS"
 else
   ROOT="$(pwd)"
-  ps -axww -o pid=,command= | grep -E 'java.*(KnotClient|hearthside\.role|gradle-wrapper)' \
-    | grep -F -e "$ROOT/fabric/" -e "$ROOT/.gradle/" -e "$ROOT/gradle/" | awk '{print $1}' \
-    | while read -r PID; do kill -9 "$PID" 2>/dev/null; done
+  { ps -axww -o pid=,command= | grep -F 'java' \
+      | grep -F -e "$ROOT/fabric/run-e2e/" -e "$ROOT/fabric/build/loom-cache/argFiles/runE2eClient"
+    ps -axww -o pid=,command= | grep -F 'java' | grep -F "$ROOT/gradle/wrapper/gradle-wrapper.jar" \
+      | grep -F ':fabric:runE2eClient'
+  } | awk '{print $1}' | while read -r PID; do kill -9 "$PID" 2>/dev/null; done
 fi
 kill $GRADLE 2>/dev/null
 echo "PASS $(grep -c '^PASS' "$R")  FAIL $(grep -c '^FAIL' "$R")  SKIP $(grep -c '^SKIP' "$R")"

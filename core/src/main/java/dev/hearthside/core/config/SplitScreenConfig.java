@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.io.Writer;
+import java.lang.System.Logger.Level;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -39,7 +40,8 @@ import java.util.Objects;
  *
  * @param guestMemoryMb each guest's maximum heap ({@code -Xmx}), 768..8192 MB
  * @param guestRenderDistance the most chunks a guest renders, 2..32, never above the guest's own setting; {@code 0}
- *     means no cap (the guest's own setting)
+ *     means no cap (the guest's own setting), and so does any negative number (a player writing {@code -1} for "none"
+ *     gets none, not the harshest cap)
  * @param layout how the players share the one window
  */
 public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, LayoutSettings layout) {
@@ -58,13 +60,16 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	private static final String THREE_PLAYERS = "threePlayerLayout";
 	private static final String PARTY_PANEL = "partyPanel";
 	private static final List<String> FIELDS = List.of(MEMORY, RENDER_DISTANCE, TWO_PLAYERS, THREE_PLAYERS, PARTY_PANEL);
-	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	private static final System.Logger LOG = System.getLogger(SplitScreenConfig.class.getName());
+	private static final Gson GSON =new GsonBuilder().setPrettyPrinting().create();
 	private static final BigDecimal INT_MIN = BigDecimal.valueOf(Integer.MIN_VALUE);
 	private static final BigDecimal INT_MAX = BigDecimal.valueOf(Integer.MAX_VALUE);
 
 	public SplitScreenConfig {
 		guestMemoryMb = Math.clamp(guestMemoryMb, MIN_GUEST_MEMORY_MB, MAX_GUEST_MEMORY_MB);
-		if (guestRenderDistance != NO_RENDER_DISTANCE_CAP) {
+		if (guestRenderDistance <= NO_RENDER_DISTANCE_CAP) {
+			guestRenderDistance = NO_RENDER_DISTANCE_CAP;
+		} else {
 			guestRenderDistance = Math.clamp(guestRenderDistance, MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE);
 		}
 		Objects.requireNonNull(layout, "layout");
@@ -121,8 +126,9 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	/**
 	 * The settings in {@code file}. A missing file is created with every field at its default; a file that lacks some
 	 * fields gets them, keeping its own values (an invalid one becomes its default), so players can find every setting.
-	 * One that isn't a settings object at all gives the defaults and is left as it is. Only a failed read or write
-	 * throws.
+	 * One that isn't a settings object at all gives the defaults and is left as it is. If the missing fields can't be
+	 * added (the file is held open by another program, or the folder is read-only), that is logged and the values read
+	 * are still used; the file stays as it was. Only a failed read, or a failed creation of a missing file, throws.
 	 */
 	public static SplitScreenConfig loadOrCreate(Path file) throws IOException {
 		if (Files.notExists(file)) {
@@ -138,8 +144,25 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 		String content = Files.readString(file, StandardCharsets.UTF_8);
 		SplitScreenConfig config = read(new StringReader(content));
 		if (lacksFields(new StringReader(content))) {
-			Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
+			try {
+				replace(file, config);
+			} catch (IOException e) {
+				LOG.log(Level.WARNING, "Could not add the missing settings to " + file + "; using the ones it has", e);
+			}
+		}
+		return config;
+	}
+
+	/**
+	 * Writes {@code config} to {@code file} through a temporary file beside it ({@code <name>.tmp}) and a move, so the
+	 * file is never half-written. A temporary file this left is removed again if the write or the move fails.
+	 */
+	private static void replace(Path file, SplitScreenConfig config) throws IOException {
+		Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
+		boolean created = false;
+		try {
 			try (Writer out = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+				created = true;
 				config.write(out);
 			}
 			try {
@@ -147,8 +170,16 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 			} catch (AtomicMoveNotSupportedException e) {
 				Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
 			}
+		} catch (IOException | RuntimeException e) {
+			if (created) {
+				try {
+					Files.deleteIfExists(temporary);
+				} catch (IOException suppressed) {
+					e.addSuppressed(suppressed);
+				}
+			}
+			throw e;
 		}
-		return config;
 	}
 
 	/** Writes every field, pretty-printed, so players can find them all in the file. */

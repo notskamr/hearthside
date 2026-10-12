@@ -96,6 +96,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.sdl.SDLMouse;
 import org.lwjgl.sdl.SDLVideo;
 import net.minecraft.util.HttpUtil;
 import net.minecraft.world.level.GameType;
@@ -126,9 +127,9 @@ public final class E2eDriver {
 			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"}, {"L12", "L3"},
 			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
 			// The in-world session: the world opens with the host alone.
-			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
+			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"Q1b", "Q1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
-			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"},
+			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
 			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
@@ -138,7 +139,7 @@ public final class E2eDriver {
 			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
 			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
-			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"S2", "B3", "P9"},
+			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
 			{"D9"}, {"7"},
@@ -246,6 +247,7 @@ public final class E2eDriver {
 			step("C1 guest window is hidden", this::guestWindowHidden);
 			step("C2 guest frames reach the host's window", this::guestFramesComposited);
 			step("Q1 each guest's heap is the configured size and its memory is logged", this::guestMemoryConfigured);
+			step("Q1b a guest saving its options doesn't tell the server its own render distance", this::guestSaveKeepsTheCap);
 			step("V1 frames are shared zero-copy on this backend", this::zeroCopyOnThisBackend);
 			step("V6 the guest's window is hidden on its backend", this::guestWindowHiddenOnItsBackend);
 			step("O1 the overlay pass draws over every view", this::overlayDrawsOverViews);
@@ -264,6 +266,7 @@ public final class E2eDriver {
 			step("V9 a game without Vulkan copies frames instead of crashing", this::noVulkanCopies);
 			step("Q3 a guest's own Sodium settings survive its next launch", this::guestSodiumSettingsSurvive);
 			step("Q4 a guest can't switch to fullscreen", this::guestRefusesFullscreen);
+			step("Q4b an untested Sodium version leaves Sodium's options alone instead of crashing guests", this::untestedSodiumLeftAlone);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
@@ -313,6 +316,8 @@ public final class E2eDriver {
 				step("H3 player 1 on a controller gets a pointer on Minecraft's screens and can respawn", this::hostPointerOnScreens);
 				step("H4 controller hints on Minecraft's screens never cover anything and offer only what works", this::hintsStayClear);
 				step("H5 player 1 can switch between the controller pointer and the mouse at any time", this::pointerOrMouse);
+				step("H5b a mouse click goes where the arrow is, never where the controller's pointer rests", this::clickWhereTheArrowIs);
+				step("H6 unplugging player 1's controller with a screen open hides its pointer and hints", this::hostPadUnpluggedOnScreen);
 				step("S2 the join prompt, a drop-in and a leave make their warm sounds", () -> dropInMakesSounds(dropInSounds));
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
@@ -483,6 +488,52 @@ public final class E2eDriver {
 		check(renderDistance <= 8, "the guest's render distance " + renderDistance + " is capped at 8");
 		log("   memory host=" + workingSetMb(ProcessHandle.current().pid()) + " MB guest="
 				+ workingSetMb(satellites().getFirst().pid()) + " MB");
+	}
+
+	/**
+	 * Q1b: a guest whose own render distance (12) is capped at 8 saves its options, as closing Video Settings does
+	 * (batch review I1). Its options.txt keeps 12, and the host's server never hears more than the cap: it goes on
+	 * loading and sending chunks for 8.
+	 */
+	private void guestSaveKeepsTheCap() throws Exception {
+		Path options = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/options.txt");
+		guestLeaves();
+		String before = Files.exists(options) ? Files.readString(options) : null;
+		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
+		try {
+			writeOption(options, "renderDistance", "12");
+			guestRejoins();
+			check(satelliteLog().contains("hearthside capped the render distance at 8 for this session (own setting 12)"),
+					"the guest's own 12 is capped at 8 this session");
+			waitFor("the guest saved its options", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest saved its options"));
+			// The save's own broadcast reaches the server within milliseconds; watch it for 5 s.
+			long until = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+			int requested = 0;
+			while (System.nanoTime() < until) {
+				IntegratedServer server = minecraft.getSingleplayerServer();
+				requested = server.submit(() -> server.getPlayerList().getPlayerByName(GUEST).requestedViewDistance()).join();
+				check(requested <= 8, "the server hears the guest's capped render distance, not " + requested);
+				Thread.sleep(100);
+			}
+			log("   server's requested view distance for " + GUEST + ": " + requested);
+			check(Files.readString(options).lines().anyMatch(l -> l.equals("renderDistance:12")),
+					"the guest's options.txt keeps its own 12");
+		} finally {
+			System.clearProperty("hearthside.e2e.guestSaveOptions");
+			if (before != null) {
+				Files.writeString(options, before);
+			}
+		}
+	}
+
+	/** Sets {@code key:value} in an options.txt (adding the line when it has none). */
+	private static void writeOption(Path options, String key, String value) throws IOException {
+		List<String> lines = Files.exists(options) ? new ArrayList<>(Files.readAllLines(options)) : new ArrayList<>();
+		lines.removeIf(l -> l.startsWith(key + ":"));
+		lines.add(key + ":" + value);
+		Files.createDirectories(options.getParent());
+		Files.write(options, lines);
 	}
 
 	/** A process's resident memory in MB: PowerShell's working set on Windows, ps's RSS on macOS. */
@@ -959,6 +1010,42 @@ public final class E2eDriver {
 			waitFor("the guest back in its game", Duration.ofSeconds(20),
 					() -> satelliteLog().contains("hearthside e2e guest closed video settings"));
 		} finally {
+			System.clearProperty("hearthside.e2e.guestTryFullscreen");
+		}
+	}
+
+	/**
+	 * Q4b: on a Sodium version Hearthside wasn't tested with, a guest's game leaves Sodium's video options alone (greying
+	 * Fullscreen there relies on Sodium's internals, and Sodium turns a failed overlay into a crash). It still reaches the
+	 * world and still refuses fullscreen (batch review I3).
+	 */
+	private void untestedSodiumLeftAlone() throws Exception {
+		if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")) {
+			log("   no Sodium in this run");
+			return;
+		}
+		System.setProperty("hearthside.e2e.pretendSodiumVersion", "0.10.0");
+		System.setProperty("hearthside.e2e.guestTryFullscreen", "true");
+		try {
+			guestLeaves();
+			guestRejoins();
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+			check(satelliteLog().contains("hearthside left sodium's video options alone: sodium 0.10.0 is untested"),
+					"the guest says it left Sodium's options alone on Sodium 0.10.0");
+			check(!satelliteLog().contains("hearthside guest video settings: sodium's fullscreen greyed out"),
+					"and didn't grey Sodium's Fullscreen");
+			waitFor("the guest tried fullscreen", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest fullscreen option="));
+			String log = satelliteLog();
+			String tried = log.substring(log.indexOf("hearthside e2e guest tries fullscreen"));
+			int refused = tried.split(Pattern.quote("hearthside guest fullscreen refused"), -1).length - 1;
+			check(refused == 3, "each of the 3 attempts was still refused (got " + refused + ")");
+			check(tried.contains("fullscreen option=false window fullscreen=false hidden=true"),
+					"the guest's option stays off and its window windowed and hidden");
+			waitFor("the guest back in its game", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest closed video settings"));
+		} finally {
+			System.clearProperty("hearthside.e2e.pretendSodiumVersion");
 			System.clearProperty("hearthside.e2e.guestTryFullscreen");
 		}
 	}
@@ -2461,8 +2548,8 @@ public final class E2eDriver {
 		List<String> legend = dev.hearthside.fabric.client.ui.KeyboardWidget.drawnLegend;
 		log("   legend: " + legend);
 		List<String> labels = legend.stream().map(entry -> entry.substring(entry.indexOf(' ') + 1)).toList();
-		check(labels.equals(List.of("Type", "Close", "Space", "Del", "Aa", "Done")),
-				"the legend says A Type, B Close, Y Space, X Del, LB/RB Aa and Menu Done (" + labels + ")");
+		check(labels.equals(List.of("Type", "Close", "_", "Del", "Aa", "Done")),
+				"the legend says A Type, B Close, Y _ (a name has no spaces), X Del, LB/RB Aa and Menu Done (" + labels + ")");
 		check(legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/a "))
 				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/b "))
 				&& legend.stream().anyMatch(e -> e.startsWith("hearthside:glyph/playstation/left_bumper+hearthside:glyph/playstation/right_bumper "))
@@ -2515,6 +2602,19 @@ public final class E2eDriver {
 			press(HOST_PAD, PadButton.DPAD_DOWN);
 			newWorldGlyphs = chipGlyphs();
 			check(allFamily(newWorldGlyphs, "xbox"), "then driven by the Xbox pad: Xbox chips " + newWorldGlyphs);
+			// A world's name is free text (W3's keyboard): there Y types a space.
+			NewWorldScreen newWorld = onRender(() -> (NewWorldScreen) minecraft.gui.screen());
+			pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> newWorld.focusedRow().equals("name"));
+			press(HOST_PAD, PadButton.A);
+			check(onRender(newWorld::typing), "A on the world's name opens the keyboard");
+			Thread.sleep(300);
+			List<String> worldLegend = dev.hearthside.fabric.client.ui.KeyboardWidget.drawnLegend;
+			log("   world-name legend: " + worldLegend);
+			List<String> worldLabels = worldLegend.stream().map(entry -> entry.substring(entry.indexOf(' ') + 1)).toList();
+			check(worldLabels.equals(List.of("Type", "Close", "Space", "Del", "Aa!", "Done")),
+					"the world-name legend says A Type, B Close, Y Space, X Del, LB/RB Aa! and Menu Done (" + worldLabels + ")");
+			press(HOST_PAD, PadButton.B);
+			check(!onRender(newWorld::typing), "B closes the world-name keyboard");
 		} finally {
 			backToLobby();
 			onRender(() -> {
@@ -3146,6 +3246,105 @@ public final class E2eDriver {
 		} finally {
 			releaseHostPad();
 		}
+	}
+
+	/**
+	 * H5b: a real click with no move before it lands where the OS arrow is, not where the controller's pointer rests
+	 * (batch review I2): the pointer parked on Options…, the arrow on empty space, a click opens nothing. The OS arrow is
+	 * hidden while the controller drives, and back once the mouse does.
+	 */
+	private void clickWhereTheArrowIs() throws Exception {
+		claimHostPad();
+		try {
+			openPause();
+			double[] empty = onRender(this::emptySpotOnScreen);
+			osMove(empty[0] + 8, empty[1]);
+			osMove(empty[0], empty[1]);
+			check(onRender(() -> minecraft.gui.screen() instanceof PauseScreen), "the mouse's moves clicked nothing");
+			steerPointerOnto(HOST_PAD, onRender(() -> widgetLabelled("menu.options")));
+			Thread.sleep(150);
+			check(VirtualCursor.isDrawn(), "the controller drives: its pointer is drawn on Options…");
+			boolean arrowShown = onRender(SDLMouse::SDL_CursorVisible);
+			log("   OS arrow shown while the controller drives: " + arrowShown);
+			// The real button, pressed and let go where the arrow rests (no move first).
+			osButtonOnly(true);
+			osButtonOnly(false);
+			Thread.sleep(300);
+			String open = onRender(() -> minecraft.gui.screen() == null ? "none" : minecraft.gui.screen().getClass().getSimpleName());
+			check(open.equals("PauseScreen"), "the click landed on empty space where the arrow is: the pause menu is still open (" + open + ")");
+			check(!arrowShown, "the OS arrow was hidden while the controller drove");
+			check(!VirtualCursor.isDrawn(), "the mouse drives now: the controller's pointer is hidden");
+			check(onRender(SDLMouse::SDL_CursorVisible), "and the OS arrow is shown");
+			double[] resume = onRender(() -> windowCentre(widgetLabelled("menu.returnToGame")));
+			osMove(resume[0] - 6, resume[1] - 2);
+			osMove(resume[0], resume[1]);
+			osButtonOnly(true);
+			osButtonOnly(false);
+			waitFor("the mouse's click on Back to Game closed the menu", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() == null));
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/**
+	 * H6: player 1's controller unplugged with the pause menu open (batch review M2): within two frames the pointer and
+	 * the controller hints are gone and the OS arrow is back, and the mouse drives the menu. Plugged back in, it is
+	 * player 1's again.
+	 */
+	private void hostPadUnpluggedOnScreen() throws Exception {
+		claimHostPad();
+		try {
+			openPause();
+			PADS.set(HOST_PAD, new InputFrame(0, 0, -1, 0, 0, 0, 0, 0));
+			Thread.sleep(400);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			Thread.sleep(300);
+			check(VirtualCursor.isDrawn(), "the controller's pointer is drawn on the pause menu");
+			check(!onRender(ButtonGuideRenderer::lastLayout).isEmpty(), "with its hints");
+			java.util.concurrent.CompletableFuture<Object[]> afterTwoFrames = new java.util.concurrent.CompletableFuture<>();
+			int[] frames = {0};
+			Runnable[] counter = new Runnable[1];
+			counter[0] = () -> {
+				// At the start of the third frame since the unplug: two whole frames have run.
+				if (++frames[0] == 3) {
+					afterTwoFrames.complete(new Object[] {VirtualCursor.isDrawn(), ButtonGuideRenderer.lastLayout(),
+							SDLMouse.SDL_CursorVisible(), minecraft.gui.screen() instanceof PauseScreen});
+					dev.hearthside.fabric.client.input.FrameHook.unregister(counter[0]);
+				}
+			};
+			onRender(() -> {
+				PADS.unplug(HOST_PAD);
+				dev.hearthside.fabric.client.input.FrameHook.register(counter[0]);
+				return null;
+			});
+			Object[] state = afterTwoFrames.get(5, TimeUnit.SECONDS);
+			log("   two frames after the unplug: pointer drawn=" + state[0] + " hints=" + state[1] + " OS arrow shown=" + state[2]);
+			check((Boolean) state[3], "the pause menu is still open");
+			check(!(Boolean) state[0], "the controller's pointer is hidden");
+			check(((List<?>) state[1]).isEmpty(), "no controller hints");
+			check((Boolean) state[2], "the OS arrow is shown");
+			double[] resume = onRender(() -> windowCentre(widgetLabelled("menu.returnToGame")));
+			osMove(resume[0] - 6, resume[1] - 2);
+			osMove(resume[0], resume[1]);
+			osButtonOnly(true);
+			osButtonOnly(false);
+			waitFor("the mouse's click on Back to Game closed the menu", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() == null));
+			PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+			waitFor("player 1's controller back", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/** A point on the open screen with no widget under it, in window coordinates: the left edge, half way down. */
+	private double[] emptySpotOnScreen() {
+		Screen screen = minecraft.gui.screen();
+		double gx = 6, gy = screen.height / 2.0;
+		check(Screens.getWidgets(screen).stream().noneMatch(w -> w.isMouseOver(gx, gy)), "the spot at " + gx + "," + gy + " is empty");
+		double toScreen = (double) minecraft.getWindow().getScreenWidth() / minecraft.getWindow().getGuiScaledWidth();
+		return new double[] {gx * toScreen, gy * toScreen};
 	}
 
 	private void openPause() throws Exception {

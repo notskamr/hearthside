@@ -42,14 +42,15 @@ public final class KeyboardWidget {
 	}
 
 	/**
-	 * Every button the keyboard uses, two to a row: typing and closing, then editing (Y is a space; in a name, which
-	 * can't have spaces, its "_"), then the layers and keeping the text.
+	 * Every button the keyboard uses, two to a row: typing and closing, then editing (Y types a space; in a name, which
+	 * can't have spaces, a "_", and the legend says so), then the layers and keeping the text.
 	 */
 	public static List<Hint> legend(KeyboardModel model) {
-		String layers = model.mode() == KeyboardModel.Mode.NAME ? "Aa" : "Aa!";
+		boolean name = model.mode() == KeyboardModel.Mode.NAME;
+		String layers = name ? "Aa" : "Aa!";
 		return List.of(
 				new Hint(Control.A, "Type"), new Hint(Control.B, "Close"),
-				new Hint(Control.Y, "Space"), new Hint(Control.X, "Del"),
+				new Hint(Control.Y, name ? "_" : "Space"), new Hint(Control.X, "Del"),
 				new Hint(List.of(Control.LEFT_BUMPER, Control.RIGHT_BUMPER), layers, layers),
 				new Hint(List.of(Control.START), "Done", "OK"));
 	}

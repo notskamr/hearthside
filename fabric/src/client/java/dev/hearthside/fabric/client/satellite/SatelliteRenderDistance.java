@@ -12,7 +12,8 @@ import net.minecraft.client.Options;
  *
  * <p>The cap is a session setting, not the guest's: whenever the game saves {@code options.txt} (closing an options
  * screen, for one), the guest's own value is written instead, so a later session with a higher cap, or none, gets it
- * back. If the player moves the slider themselves, their choice is kept and saved as usual.
+ * back; the server is still only told the cap. If the player moves the slider themselves, their choice is kept and
+ * saved as usual.
  */
 public final class SatelliteRenderDistance {
 	public static final String CAP_PROPERTY = "hearthside.renderDistanceCap";
@@ -51,7 +52,10 @@ public final class SatelliteRenderDistance {
 		((OptionInstanceAccessor) (Object) options.renderDistance()).hearthside$setValue(own);
 	}
 
-	/** After {@code options.txt} is written: the cap again. */
+	/**
+	 * After {@code options.txt} is written, before the server is told the guest's settings: the cap again, so the
+	 * host's server only ever loads and sends chunks for the cap. Calling it twice changes nothing.
+	 */
 	public static void afterSave(Options options) {
 		if (own != null) {
 			((OptionInstanceAccessor) (Object) options.renderDistance()).hearthside$setValue(capped);
