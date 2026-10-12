@@ -18,6 +18,7 @@ public final class RemapModel {
 			Map.entry(Action.ATTACK, "Attack"),
 			Map.entry(Action.USE, "Use / place"),
 			Map.entry(Action.DROP, "Drop"),
+			Map.entry(Action.DROP_STACK, "Drop stack"),
 			Map.entry(Action.INVENTORY, "Inventory"),
 			Map.entry(Action.CRAFTING, "Crafting"),
 			Map.entry(Action.HOTBAR_PREV, "Previous item"),

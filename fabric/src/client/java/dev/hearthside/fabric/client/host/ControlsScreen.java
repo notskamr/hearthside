@@ -30,7 +30,8 @@ import net.minecraft.network.chat.Component;
  * presets; a strip at the bottom says what each pressed button would do. Menu saves, B discards.
  */
 public final class ControlsScreen extends Screen implements SeatScreen {
-	private static final int ROWS = 8, ROW_H = 14, ROW_GAP = 2, TOP = 48;
+	/** Every action in two columns. */
+	private static final int ROWS = (Action.values().length + 1) / 2, ROW_H = 14, ROW_GAP = 2, TOP = 48;
 	private static final long LISTEN_NANOS = 5_000_000_000L;
 	private static final int ERROR_INK = 0xFFA8321E;
 
@@ -287,6 +288,11 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 
 	public RemapModel model() {
 		return model;
+	}
+
+	/** Each row's action and bounds, top to bottom, left column first. */
+	public List<java.util.Map.Entry<Action, net.minecraft.client.gui.navigation.ScreenRectangle>> listedRows() {
+		return rows.stream().map(row -> java.util.Map.entry(row.action, row.getRectangle())).toList();
 	}
 
 	/** The action on the focused row, or null. */
