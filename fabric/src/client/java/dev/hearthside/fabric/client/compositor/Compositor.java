@@ -3,8 +3,12 @@ package dev.hearthside.fabric.client.compositor;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import dev.hearthside.core.compositor.CopyReason;
+import dev.hearthside.core.compositor.ImageDescription;
 import dev.hearthside.core.compositor.SegmentSlotTable;
+import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
+import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.ViewQuad;
 import dev.hearthside.core.compositor.ViewportMath;
 import dev.hearthside.core.layout.Rect;
@@ -24,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.IntConsumer;
 import net.minecraft.client.Minecraft;
 import org.joml.Vector4f;
@@ -196,7 +201,10 @@ public final class Compositor {
 		return screenPerFb;
 	}
 
-	/** A guest (re)allocated its frame slots; import them. */
+	/**
+	 * A guest (re)allocated its frame slots; import them. GPU-shared slots are imported only when the guest's GPU and
+	 * driver are this game's (Spec C section 3.7, step 3); otherwise the guest is told to copy, and the host says why.
+	 */
 	public void onGuestSlots(int playerIndex, ControlMessage.FrameSlotsReady ready) {
 		GuestImport previous = imports.get(playerIndex);
 		GuestImport waiting = incoming.get(playerIndex);
@@ -210,6 +218,16 @@ public final class Compositor {
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.error("Could not open player {}'s frame slots at {}", playerIndex + 1, ready.controlFile(), e);
 			return;
+		}
+		if (ready.transport() == Transport.GPU_SHARED) {
+			Optional<CopyReason> copy = table.description().flatMap(description -> TransportChoice
+					.decide(guestFacts(description), SharedImages.forThisGame().facts(), false).reason());
+			if (copy.isPresent()) {
+				HearthsideMod.LOGGER.info("Hearthside player {} copies frames: {}", playerIndex + 1, copy.get());
+				table.close();
+				onImportFailed.accept(playerIndex);
+				return;
+			}
 		}
 		GuestImport fresh;
 		try {
@@ -235,6 +253,24 @@ public final class Compositor {
 		HearthsideMod.LOGGER.info("Hearthside compositor: player {} frames {} {}x{} backend={}", playerIndex + 1,
 				ready.transport(), ready.width(), ready.height(),
 				com.mojang.blaze3d.systems.RenderSystem.getDevice().getDeviceInfo().backendName().toLowerCase(java.util.Locale.ROOT));
+	}
+
+	/**
+	 * What a guest that exported GPU slots can do, from its slot table: it is on Windows and can share memory, or its
+	 * own decision would not have exported them. A nil UUID (the guest's backend couldn't report one) is unknown, and
+	 * never matches this game's.
+	 */
+	private static SharingFacts guestFacts(ImageDescription description) {
+		UUID device = description.deviceUuid();
+		if (Boolean.getBoolean("hearthside.e2e.fakeDeviceMismatch")) {
+			// E2E: a guest on another GPU.
+			device = UUID.randomUUID();
+		}
+		return new SharingFacts(true, true, known(device), known(description.driverUuid()));
+	}
+
+	private static UUID known(UUID uuid) {
+		return SharedImages.UNKNOWN.equals(uuid) ? null : uuid;
 	}
 
 	/**

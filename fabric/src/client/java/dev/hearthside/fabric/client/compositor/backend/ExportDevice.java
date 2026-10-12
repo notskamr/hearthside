@@ -166,25 +166,6 @@ public final class ExportDevice {
 		throw new IllegalStateException("No device-local memory type for a shared frame");
 	}
 
-	/**
-	 * Whether a Vulkan device has this device UUID, and whether it can export Win32 memory: what {@code GlInterop}'s
-	 * probe needs without creating an export device.
-	 */
-	public static Match find(UUID deviceUuid) {
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			VkPhysicalDevice device = matchingDevice(stack, deviceUuid);
-			if (device == null) {
-				return new Match(false, false);
-			}
-			boolean canExport = hasExtension(stack, device, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
-			vkDestroyInstance(device.getInstance(), null);
-			return new Match(true, canExport);
-		}
-	}
-
-	/** What {@link #find} learnt about a device UUID. */
-	public record Match(boolean found, boolean canExport) {}
-
 	/** The Vulkan device with this device UUID, on a new instance the caller destroys; null if none. */
 	private static VkPhysicalDevice matchingDevice(MemoryStack stack, UUID deviceUuid) {
 		ByteBuffer wanted = stack.bytes(ImageDescription.bytesOf(deviceUuid));

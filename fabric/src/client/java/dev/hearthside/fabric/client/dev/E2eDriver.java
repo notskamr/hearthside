@@ -112,7 +112,8 @@ public final class E2eDriver {
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
-			{"C6", "C2"}, {"C12", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"D5", "C7b"}, {"D6", "D5"},
+			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"D5", "C7b"},
+			{"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
 			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"},
 			// The in-world pad block (fake pads).
@@ -235,6 +236,7 @@ public final class E2eDriver {
 			step("C5b two quick resizes on the copy transport keep the guest composited", this::quickResizesOnCopy);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
+			step("V3 a device mismatch copies frames and says why", this::deviceMismatchCopies);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
@@ -676,6 +678,31 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.e2e.failGpuImport");
 			onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), hostWindowBefore.width(), hostWindowBefore.height()));
+		}
+	}
+
+	/** V3: when a guest's GPU or driver differs from the host's, its frames are copied and the host says why (Spec C 3.7). */
+	private void deviceMismatchCopies() throws Exception {
+		System.setProperty("hearthside.e2e.fakeDeviceMismatch", "true");
+		try {
+			onRender(() -> {
+				Party.current().leave(GUEST);
+				return null;
+			});
+			waitFor("guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			long mark = hostLogLength();
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("guest back", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("the host chose copying, with the reason", Duration.ofSeconds(60),
+					() -> hostLogSince(mark).contains("copies frames: device_mismatch"));
+			waitFor("satellite on the copy transport", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside frame slots ready transport=copy"));
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(30));
+		} finally {
+			System.clearProperty("hearthside.e2e.fakeDeviceMismatch");
 		}
 	}
 

@@ -2,14 +2,9 @@ package dev.hearthside.core.compositor;
 
 import java.util.Objects;
 
-/** Picks the frame transport for a session from what the GPU supports. */
+/** Picks a guest's frame transport from what each side's GPU, driver and graphics API can do (Spec C section 3.7). */
 public final class TransportChoice {
 	private TransportChoice() {}
-
-	public static Transport choose(ProbeFacts facts) {
-		boolean gpuSharing = facts.glMemoryObjectWin32() && facts.vulkanDeviceMatchesGl() && facts.vulkanExternalMemoryWin32();
-		return gpuSharing && !facts.forceCopy() ? Transport.GPU_SHARED : Transport.COPY;
-	}
 
 	/**
 	 * Whether {@code exporter}'s frames can be shared with {@code importer}. The first reason to copy wins, in
