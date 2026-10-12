@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
 import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.ControlScheme;
+import dev.hearthside.core.input.DropGesture;
 import dev.hearthside.core.input.FreshInput;
 import dev.hearthside.core.input.GameplayIntent;
 import dev.hearthside.core.input.GamepadMapping;
@@ -59,6 +60,8 @@ public final class InputApplier {
 	private boolean inMenu;
 	/** Key mappings this applier is currently holding down. */
 	private final Set<Action> holding = EnumSet.noneOf(Action.class);
+	/** Drop: a tap throws one, holding throws the rest of the stack. */
+	private final DropGesture drop = new DropGesture();
 
 	public InputApplier(Minecraft minecraft) {
 		this.minecraft = minecraft;
@@ -112,7 +115,7 @@ public final class InputApplier {
 				inMenu = false;
 				PadPlay.set(true);
 				InputFrame filtered = suppression.filter(frame);
-				applyGameplay(GamepadMapping.gameplay(scheme, previousGameplay, filtered, dt));
+				applyGameplay(GamepadMapping.gameplay(scheme, previousGameplay, filtered, dt), now);
 				previousGameplay = filtered;
 			} else {
 				if (!inMenu) {
@@ -120,6 +123,7 @@ public final class InputApplier {
 					inMenu = true;
 					PadPlay.set(false);
 					releaseHeld();
+					drop.step(false, now);
 					PadMovement.clear();
 					VirtualCursor.centre(minecraft.getWindow());
 				}
@@ -135,13 +139,14 @@ public final class InputApplier {
 	public void release() {
 		PadPlay.set(false);
 		releaseHeld();
+		drop.step(false, System.nanoTime());
 		PadMovement.clear();
 		input.clear();
 		previous = InputFrame.NEUTRAL;
 		previousGameplay = InputFrame.NEUTRAL;
 	}
 
-	private void applyGameplay(GameplayIntent intent) {
+	private void applyGameplay(GameplayIntent intent, long now) {
 		LocalPlayer player = minecraft.player;
 		if (player == null || minecraft.level == null) {
 			return;
@@ -159,14 +164,24 @@ public final class InputApplier {
 		// Attack and use are held above and also clicked here, like a mouse button: vanilla starts
 		// an attack or a use from a click and only continues it from the held state.
 		Map<Action, KeyMapping> clickMappings = Map.of(
-				Action.ATTACK, o.keyAttack, Action.USE, o.keyUse, Action.INVENTORY, o.keyInventory, Action.DROP, o.keyDrop, Action.SWAP_OFFHAND, o.keySwapOffhand,
+				Action.ATTACK, o.keyAttack, Action.USE, o.keyUse, Action.INVENTORY, o.keyInventory, Action.SWAP_OFFHAND, o.keySwapOffhand,
 				Action.PERSPECTIVE, o.keyTogglePerspective, Action.PICK_BLOCK, o.keyPickItem, Action.CHAT, o.keyChat);
 		clickMappings.forEach((action, mapping) -> {
 			if (intent.pressed().contains(action)) {
-				KeyMappingAccessor accessor = (KeyMappingAccessor) mapping;
-				accessor.hearthside$setClickCount(accessor.hearthside$getClickCount() + 1);
+				click(mapping);
 			}
 		});
+		// One item through vanilla's Q (its spectator check and drop-spam throttle); the rest of the stack as Ctrl+Q does.
+		drop.step(intent.held().contains(Action.DROP), now).ifPresent(d -> {
+			if (d == DropGesture.Drop.ONE) {
+				click(o.keyDrop);
+			} else {
+				dropStack(player);
+			}
+		});
+		if (intent.pressed().contains(Action.DROP_STACK)) {
+			dropStack(player);
+		}
 
 		if (intent.pressed().contains(Action.CRAFTING)) {
 			// A split-screen window is often narrower than vanilla's 379 GUI px, where the recipe book
@@ -189,6 +204,19 @@ public final class InputApplier {
 			PadMovement.set(intent.moveX(), intent.moveY());
 		} else {
 			PadMovement.clear();
+		}
+	}
+
+	/** Presses a key mapping once, as a key press would (vanilla consumes the click on its next tick). */
+	private static void click(KeyMapping mapping) {
+		KeyMappingAccessor accessor = (KeyMappingAccessor) mapping;
+		accessor.hearthside$setClickCount(accessor.hearthside$getClickCount() + 1);
+	}
+
+	/** Throws the selected stack (what's left of it), as Ctrl+Q does. */
+	private void dropStack(LocalPlayer player) {
+		if (!player.isSpectator() && minecraft.gameMode != null) {
+			minecraft.gameMode.dropItem(player, true);
 		}
 	}
 

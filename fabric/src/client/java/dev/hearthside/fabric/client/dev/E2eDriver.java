@@ -7,6 +7,7 @@ import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
+import dev.hearthside.core.input.RemapModel;
 import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
@@ -61,6 +62,17 @@ import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.events.ContainerEventHandler;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.gui.screens.DeathScreen;
+import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.options.OptionsScreen;
+import net.minecraft.client.gui.screens.options.VideoSettingsScreen;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.Items;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.data.AtlasIds;
@@ -123,7 +135,7 @@ public final class E2eDriver {
 			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
 			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
-			{"P8", "P1"}, {"P9", "P1"}, {"S2", "B3", "P9"},
+			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
 			{"D9"}, {"7"},
@@ -284,8 +296,11 @@ public final class E2eDriver {
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
+				step("P10 holding Drop throws the whole stack; a tap throws one", this::dropTapAndHold);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
 				step("P9 Player2 leaves", this::player2Leaves);
+				step("H3 player 1 on a controller gets a pointer on Minecraft's screens and can respawn", this::hostPointerOnScreens);
+				step("H4 controller hints on Minecraft's screens never cover anything and offer only what works", this::hintsStayClear);
 				step("S2 the join prompt, a drop-in and a leave make their warm sounds", () -> dropInMakesSounds(dropInSounds));
 			}
 			step("6 closing the world closes satellites", this::closingWorldClosesSatellites);
@@ -2513,6 +2528,312 @@ public final class E2eDriver {
 		pull(102, true);
 		waitFor("dirt placed", Duration.ofSeconds(5), () -> blockAt(guest, expected).is(Blocks.DIRT));
 		server("gamemode creative Player2");
+	}
+
+	private void dropTapAndHold() throws Exception {
+		aimAtTarget("kill @e[type=item]", "item replace entity Player2 weapon.mainhand with minecraft:cobblestone 16");
+		ServerPlayer guest = guest("Player2");
+		Callable<Integer> inHand = () -> minecraft.getSingleplayerServer()
+				.submit(() -> guest.getInventory().getSelectedItem().getCount()).join();
+		check(inHand.call() == 16, "Player2 holds 16 cobblestone");
+		hold(102, PadButton.DPAD_DOWN, 100);
+		waitFor("one thrown", Duration.ofSeconds(5), () -> inHand.call() == 15 && cobblestoneOnGround(guest) == 1);
+		hold(102, PadButton.DPAD_DOWN, 700);
+		waitFor("the rest thrown", Duration.ofSeconds(5), () -> inHand.call() == 0);
+		waitFor("16 cobblestone on the ground", Duration.ofSeconds(5), () -> cobblestoneOnGround(guest) == 16);
+
+		// Drop stack on a button of its own: one press throws the lot.
+		Party party = onRender(Party::current);
+		GuestProfile profile = onRender(() -> party.profileOf(1));
+		ControlScheme before = profile.controls();
+		check(before.controlFor(Action.DROP_STACK).isEmpty(), "Drop stack starts unbound");
+		int told = count("hearthside setcontrols");
+		check(onRender(() -> party.saveControls(profile.id(), before.withBinding(Action.DROP_STACK, Control.RIGHT_STICK))),
+				"Drop stack bound to the right stick");
+		try {
+			waitFor("the guest's game told", Duration.ofSeconds(10), () -> count("hearthside setcontrols") > told);
+			server("kill @e[type=item]", "item replace entity Player2 weapon.mainhand with minecraft:cobblestone 16");
+			Thread.sleep(300);
+			check(inHand.call() == 16, "Player2 holds 16 again");
+			press(102, PadButton.RIGHT_STICK);
+			waitFor("the stack thrown at once", Duration.ofSeconds(5), () -> inHand.call() == 0);
+			check(cobblestoneOnGround(guest) == 16, "all 16 on the ground");
+		} finally {
+			onRender(() -> party.saveControls(profile.id(), before));
+			server("kill @e[type=item]", "gamemode creative Player2");
+		}
+
+		// The controls screen lists it, beside Drop, with no button until a player gives it one.
+		ControlsScreen screen = onRender(() -> {
+			GuestProfile fresh = new GuestProfile(UUID.randomUUID(), "E2E", SkinRef.defaultSkin("alex"), null,
+					ControlScheme.BEDROCK);
+			ControlsScreen controls = new ControlsScreen(null, party, 1, fresh);
+			minecraft.gui.setScreen(controls);
+			return controls;
+		});
+		try {
+			var rows = onRender(screen::listedRows);
+			List<Action> actions = rows.stream().map(Map.Entry::getKey).toList();
+			check(actions.contains(Action.DROP_STACK), "the controls screen has a Drop stack row");
+			check(actions.indexOf(Action.DROP_STACK) == actions.indexOf(Action.DROP) + 1, "right after Drop");
+			check(onRender(() -> screen.model().scheme().controlFor(Action.DROP_STACK)).isEmpty(),
+					"unbound (—) by default");
+			int width = onRender(() -> screen.width), height = onRender(() -> screen.height);
+			for (int i = 0; i < rows.size(); i++) {
+				var a = rows.get(i).getValue();
+				check(a.left() >= 0 && a.right() <= width && a.bottom() <= height, RemapModel.label(actions.get(i)) + " row is on screen");
+				for (int j = i + 1; j < rows.size(); j++) {
+					check(!a.overlaps(rows.get(j).getValue()), "rows " + actions.get(i) + " and " + actions.get(j) + " don't overlap");
+				}
+			}
+			screenshot("controls-drop-stack");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
+	}
+
+	/** Cobblestone lying near a player, kept on the ground (nobody picks it up) so it can be counted. */
+	private int cobblestoneOnGround(ServerPlayer player) {
+		return minecraft.getSingleplayerServer().submit(() -> {
+			int total = 0;
+			for (ItemEntity item : player.level().getEntitiesOfClass(ItemEntity.class, player.getBoundingBox().inflate(12))) {
+				if (item.getItem().is(Items.COBBLESTONE)) {
+					item.setNeverPickUp();
+					total += item.getItem().getCount();
+				}
+			}
+			return total;
+		}).join();
+	}
+
+	// ---- Player 1 on a controller, in the world ----
+
+	/** Player 1 takes a controller the way their lobby card does: armed, then A on the free pad. */
+	private void claimHostPad() throws Exception {
+		PADS.plug(HOST_PAD, HOST_GUID, PadStyle.XBOX);
+		Thread.sleep(300);
+		onRender(() -> {
+			Party.current().useController();
+			return null;
+		});
+		press(HOST_PAD, PadButton.A);
+		waitFor("player 1 has the controller", Duration.ofSeconds(5), () -> onRender(() -> Party.current().hostHasController()));
+		Thread.sleep(500); // the claiming A's jump lands
+	}
+
+	/** Player 1 gives the controller back (and it is forgotten), as before the step. */
+	private void releaseHostPad() throws Exception {
+		onRender(() -> {
+			if (minecraft.gui.screen() != null) {
+				minecraft.gui.setScreen(null);
+			}
+			Party.current().releaseController();
+			return null;
+		});
+		PADS.unplug(HOST_PAD);
+		Thread.sleep(300);
+	}
+
+	private void hostPointerOnScreens() throws Exception {
+		claimHostPad();
+		try {
+			check(!VirtualCursor.isDrawn(), "no pointer in play");
+			String name = onRender(() -> minecraft.player.getName().getString());
+			IntegratedServer server = minecraft.getSingleplayerServer();
+			server.submit(() -> {
+				ServerPlayer host = server.getPlayerList().getPlayerByName(name);
+				host.kill(host.level());
+			}).join();
+			waitFor("the death screen", Duration.ofSeconds(10), () -> onRender(() -> minecraft.gui.screen() instanceof DeathScreen));
+			Thread.sleep(300);
+			check(VirtualCursor.isDrawn(), "player 1's pointer is drawn on the death screen");
+			AbstractWidget respawn = onRender(() -> widgetLabelled("deathScreen.respawn"));
+			waitFor("Respawn active", Duration.ofSeconds(5), () -> onRender(() -> respawn.active));
+			steerPointerOnto(HOST_PAD, respawn);
+			screenshot("death-pointer");
+			press(HOST_PAD, PadButton.A);
+			waitFor("respawned, in play", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.player != null && minecraft.player.isAlive() && minecraft.gui.screen() == null));
+			Thread.sleep(200);
+			check(!VirtualCursor.isDrawn(), "the pointer is hidden again in play");
+
+			press(HOST_PAD, PadButton.START);
+			waitFor("the pause menu", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof PauseScreen));
+			Thread.sleep(200);
+			check(VirtualCursor.isDrawn(), "the pointer is drawn on the pause menu");
+			press(HOST_PAD, PadButton.B);
+			waitFor("pause menu closed", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+
+			press(HOST_PAD, PadButton.Y);
+			waitFor("the inventory", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() instanceof AbstractContainerScreen<?>));
+			Thread.sleep(200);
+			check(VirtualCursor.isDrawn(), "the pointer is drawn on the inventory");
+			press(HOST_PAD, PadButton.B);
+			waitFor("inventory closed", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+			Thread.sleep(200);
+			check(!VirtualCursor.isDrawn(), "and hidden in play");
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/** The open screen's widget with this translated label. Render thread. */
+	private AbstractWidget widgetLabelled(String key) {
+		String label = Component.translatable(key).getString();
+		return Screens.getWidgets(minecraft.gui.screen()).stream().filter(w -> w.getMessage().getString().equals(label))
+				.findFirst().orElseThrow();
+	}
+
+	/** Steers the pointer onto a widget with a pad's left stick, slowing as it nears. */
+	private void steerPointerOnto(int pad, AbstractWidget target) throws Exception {
+		long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
+		try {
+			while (true) {
+				double[] off = onRender(() -> {
+					var window = minecraft.getWindow();
+					double toGui = (double) window.getGuiScaledWidth() / window.getScreenWidth();
+					return new double[] {target.getX() + target.getWidth() / 2.0 - VirtualCursor.x() * toGui,
+							target.getY() + target.getHeight() / 2.0 - VirtualCursor.y() * toGui};
+				});
+				if (Math.abs(off[0]) < target.getWidth() / 2.0 - 3 && Math.abs(off[1]) < target.getHeight() / 2.0 - 3) {
+					break;
+				}
+				check(System.nanoTime() < deadline, "the pointer reached " + target.getMessage().getString());
+				PADS.set(pad, new InputFrame(0, 0, stick(off[0]), stick(off[1]), 0, 0, 0, 0));
+				Thread.sleep(30);
+			}
+		} finally {
+			PADS.set(pad, InputFrame.NEUTRAL);
+		}
+		Thread.sleep(150);
+	}
+
+	/** Stick deflection toward a GUI-pixel offset: full far away, gentle (still past the dead zone) close in. */
+	private static float stick(double offset) {
+		if (Math.abs(offset) < 2) {
+			return 0;
+		}
+		return (float) (Math.signum(offset) * Math.clamp(Math.abs(offset) / 40, 0.3, 1));
+	}
+
+	private void hintsStayClear() throws Exception {
+		claimHostPad();
+		try {
+			PauseScreen pause = onRender(() -> {
+				minecraft.pauseGame(false);
+				return (PauseScreen) minecraft.gui.screen();
+			});
+			// Away from every button: nothing to select.
+			PADS.set(HOST_PAD, new InputFrame(0, 0, -1, 0, 0, 0, 0, 0));
+			Thread.sleep(800);
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+			List<String> labels = hintsClear("pause");
+			check(labels.contains("Back"), "the pause menu offers Back");
+			check(!labels.contains("Select"), "no Select with the pointer on empty space");
+			AbstractWidget resume = onRender(() -> widgetLabelled("menu.returnToGame"));
+			steerPointerOnto(HOST_PAD, resume);
+			check(hintsClear("pause, on Back to Game").contains("Select"), "Select with the pointer on a button");
+			screenshot("hints-pause");
+
+			onRender(() -> {
+				minecraft.gui.setScreen(new OptionsScreen(pause, minecraft.options));
+				return null;
+			});
+			hintsClear("options");
+			screenshot("hints-options");
+			onRender(() -> {
+				minecraft.gui.setScreen(new VideoSettingsScreen(pause, minecraft, minecraft.options));
+				return null;
+			});
+			hintsClear("video");
+			screenshot("hints-video");
+			onRender(() -> {
+				minecraft.gui.setScreen(new DeathScreen(Component.literal("E2E"), false, minecraft.player));
+				return null;
+			});
+			check(!hintsClear("death").contains("Back"), "no Back on the death screen (B does nothing there)");
+			AbstractWidget respawn = onRender(() -> widgetLabelled("deathScreen.respawn"));
+			waitFor("Respawn active", Duration.ofSeconds(5), () -> onRender(() -> respawn.active));
+			steerPointerOnto(HOST_PAD, respawn);
+			check(hintsClear("death, on Respawn").contains("Select"), "Select on the death screen's Respawn");
+			screenshot("hints-death");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			Thread.sleep(300); // back in play first: a button already down as a screen closes is held from it
+			press(HOST_PAD, PadButton.Y);
+			waitFor("the inventory", Duration.ofSeconds(5),
+					() -> onRender(() -> minecraft.gui.screen() instanceof AbstractContainerScreen<?>));
+			check(!hintsClear("inventory").isEmpty(), "the inventory has its hints");
+			screenshot("hints-inventory");
+			onRender(() -> {
+				minecraft.gui.setScreen(new ChatScreen("", false));
+				return null;
+			});
+			check(hintsClear("chat").isEmpty(), "nothing drawn over chat");
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/**
+	 * After two frames on the open screen: no drawn hint covers a widget it shows (inside lists too) or a container's
+	 * panel. Logs and returns the hints' labels.
+	 */
+	private List<String> hintsClear(String name) throws Exception {
+		Thread.sleep(300);
+		return onRender(() -> {
+			Screen screen = minecraft.gui.screen();
+			List<ButtonGuideRenderer.Hint> hints = ButtonGuideRenderer.lastLayout();
+			List<Rect> shown = new ArrayList<>();
+			shownWidgets(screen.children(), new Rect(0, 0, screen.width, screen.height), shown);
+			shown.add(new Rect(screen.width / 2 - 91, screen.height - 22, 182, 22)); // the hotbar, under in-world screens
+			if (screen instanceof AbstractContainerScreen<?> container) {
+				ContainerScreenAccessor panel = (ContainerScreenAccessor) container;
+				shown.add(new Rect(panel.hearthside$leftPos(), panel.hearthside$topPos(), panel.hearthside$imageWidth(),
+						panel.hearthside$imageHeight()));
+			}
+			for (ButtonGuideRenderer.Hint hint : hints) {
+				check(new Rect(0, 0, screen.width, screen.height).contains(hint.rect()), name + ": " + hint + " is on screen");
+				for (Rect widget : shown) {
+					check(!hint.rect().intersects(widget), name + ": " + hint + " covers " + widget);
+				}
+			}
+			List<String> labels = hints.stream().map(ButtonGuideRenderer.Hint::label).toList();
+			log("   hints " + name + ": " + labels);
+			return labels;
+		});
+	}
+
+	/** The widgets a screen shows, inside lists and their entries too, clipped to what each list shows. */
+	private static void shownWidgets(List<? extends GuiEventListener> children, Rect clip, List<Rect> into) {
+		for (GuiEventListener child : children) {
+			if (!(child instanceof AbstractWidget widget)) {
+				if (child instanceof ContainerEventHandler entry) {
+					shownWidgets(entry.children(), clip, into);
+				}
+				continue;
+			}
+			if (!widget.visible) {
+				continue;
+			}
+			int x0 = Math.max(widget.getX(), clip.x()), y0 = Math.max(widget.getY(), clip.y());
+			int x1 = Math.min(widget.getRight(), clip.x() + clip.width());
+			int y1 = Math.min(widget.getBottom(), clip.y() + clip.height());
+			if (x1 <= x0 || y1 <= y0) {
+				continue;
+			}
+			Rect rect = new Rect(x0, y0, x1 - x0, y1 - y0);
+			into.add(rect);
+			if (widget instanceof ContainerEventHandler list) {
+				shownWidgets(list.children(), rect, into);
+			}
+		}
 	}
 
 	private BlockState blockAt(ServerPlayer player, BlockPos pos) {

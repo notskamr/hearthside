@@ -169,6 +169,24 @@ final class HostInput implements Runnable {
 			}
 		});
 		hostApplier.onFrame();
+		if (router.hasPad(0)) {
+			showHostPointer();
+		}
+	}
+
+	/**
+	 * In the world, player 1's pointer is drawn on Minecraft's screens (the death screen, pause, inventory) while they
+	 * hold a controller, and hidden in play; their controller moves it and A clicks under it. Their applier centres it
+	 * as each screen opens from play.
+	 */
+	private void showHostPointer() {
+		Screen screen = minecraft.gui.screen();
+		boolean show = screen != null && !(screen instanceof PadScreen);
+		if (show && !VirtualCursor.isDrawn()) {
+			// It may still wear the colour of a guest who drove the lobby.
+			VirtualCursor.setTint(session.colorOf(0));
+		}
+		VirtualCursor.setDrawn(show);
 	}
 
 	/**

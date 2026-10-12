@@ -2,7 +2,9 @@ package dev.hearthside.fabric.client.input;
 
 import com.mojang.blaze3d.platform.Window;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.screens.Screen;
 
 /**
  * A controller-driven pointer for menus. Every window on the PC shares one OS cursor, so a
@@ -25,9 +27,22 @@ public final class VirtualCursor {
 		drawn = show;
 		if (show && !registered) {
 			registered = true;
-			ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) ->
-					ScreenEvents.afterExtract(screen).register((s, graphics, mouseX, mouseY, delta) -> draw(graphics, minecraft.getWindow())));
+			ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) -> drawOn(screen, minecraft));
+			// A screen already open (the death screen player 1 takes a controller on) gets the pointer too.
+			Minecraft minecraft = Minecraft.getInstance();
+			Screen open = minecraft == null || minecraft.gui == null ? null : minecraft.gui.screen();
+			if (open != null) {
+				drawOn(open, minecraft);
+			}
 		}
+	}
+
+	private static void drawOn(Screen screen, Minecraft minecraft) {
+		ScreenEvents.afterExtract(screen).register((s, graphics, mouseX, mouseY, delta) -> draw(graphics, minecraft.getWindow()));
+	}
+
+	public static boolean isDrawn() {
+		return drawn;
 	}
 
 	/** Colours the pointer for the player driving it, 0xRRGGBB. */

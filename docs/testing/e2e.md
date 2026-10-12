@@ -157,8 +157,11 @@ barrier platform at y = 249 so terrain never blocks it.
 | A1 | RT punches a pig in front of the guest (survival) | PASS — FAILED before the fix |
 | A2 | Holding RT mines dirt, with the guest window unfocused | PASS — FAILED before the fix |
 | A3 | LT places a block | PASS |
+| P10 | A 100 ms tap on Drop throws one of 16 cobblestone; holding 700 ms throws the rest (16 on the ground); Drop stack bound to RS throws all 16 in one press; the controls screen lists Drop stack after Drop, unbound, rows clear of each other | PASS — FAILED before the fix |
 | P8 | Satellite received the PlayStation pad style | PASS |
 | P9 | `Player2` leaves | PASS |
+| H3 | Player 1 on a controller: no pointer in play; killed, the death screen draws it; the stick steers it onto Respawn and A respawns; START's pause menu and Y's inventory draw it, B closes them | PASS — FAILED before the fix |
+| H4 | Player 1 on a controller: hints on pause, Options, Video, death and inventory cover no widget, panel or the hotbar; none over chat; no Back on the death screen; Select only with the pointer on something to click | PASS — FAILED before the fix |
 
 Every controller step runs with the guest window **unfocused**, as in real play: the `e2eClient` run sets
 `HEARTHSIDE_E2E_GUEST_UNFOCUSED=1`, which guests inherit and which makes their window report no focus (P1 checks it).
