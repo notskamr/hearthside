@@ -19,7 +19,7 @@ import java.io.UTFDataFormatException;
  * add messages.
  */
 public final class ControlCodec {
-	public static final int PROTOCOL_VERSION = 4;
+	public static final int PROTOCOL_VERSION = 5;
 	public static final int MAX_FRAME_BYTES = 65_536;
 
 	private static final int HELLO = 1;
@@ -73,6 +73,9 @@ public final class ControlCodec {
 				p.writeInt(r.width());
 				p.writeInt(r.height());
 				p.writeShort(m.refreshHz());
+				p.writeInt(m.guiScale());
+				p.writeInt(m.frameWidth());
+				p.writeInt(m.frameHeight());
 				yield SET_VIEWPORT;
 			}
 			case ControlMessage.FrameSlotsReady m -> {
@@ -135,7 +138,7 @@ public final class ControlCodec {
 				case INPUT -> new ControlMessage.Input(new InputFrame(p.readLong(), p.readInt(),
 						p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat(), p.readFloat()));
 				case SET_VIEWPORT -> new ControlMessage.SetViewport(new Rect(p.readInt(), p.readInt(), p.readInt(), p.readInt()),
-						p.readUnsignedShort());
+						p.readUnsignedShort(), p.readInt(), p.readInt(), p.readInt());
 				case USE_COPY_TRANSPORT -> new ControlMessage.UseCopyTransport();
 				case IN_WORLD -> new ControlMessage.InWorld();
 				case LEFT_WORLD -> new ControlMessage.LeftWorld();
