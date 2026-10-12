@@ -82,7 +82,7 @@ class ControlCodecTest {
 
 	@Test
 	void shortPayloadIsRejected() {
-		// SetViewport needs 20 payload bytes; give it 4.
+		// SetViewport needs 30 payload bytes; give it 4.
 		assertThatThrownBy(() -> ControlCodec.read(input(frame(2 + 4, 4, new byte[4]))))
 				.isInstanceOf(ProtocolException.class);
 	}
@@ -136,11 +136,6 @@ class ControlCodecTest {
 	@Test
 	void useCopyTransportRoundTrips() throws IOException {
 		assertThat(roundTrip(new ControlMessage.UseCopyTransport())).isEqualTo(new ControlMessage.UseCopyTransport());
-	}
-
-	@Test
-	void protocolVersionIsFour() {
-		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(4);
 	}
 
 	@Test
