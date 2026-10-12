@@ -6,6 +6,8 @@ import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
+import dev.hearthside.core.config.Preset;
+import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.core.config.SplitScreenConfig;
 import dev.hearthside.core.config.VulkanOffer;
 import dev.hearthside.core.input.PadButton;
@@ -516,9 +518,24 @@ public final class E2eDriver {
 		long maxMb = Long.parseLong(m.group(1));
 		int renderDistance = Integer.parseInt(m.group(2));
 		check(maxMb <= 1536 * 105 / 100, "the guest's max heap " + maxMb + " MB is the configured 1536 MB");
-		check(renderDistance <= 8, "the guest's render distance " + renderDistance + " is capped at 8");
+		// The cap is the party's preset's (Spec D section 3.3), or the config's own number.
+		Preset preset = partyPreset();
+		int cap = SessionTuning.of(preset, SplitScreenConfigFile.load(minecraft.gameDirectory.toPath())).renderDistanceCap();
+		log("   party preset " + preset + ", guest render distance cap " + cap);
+		check(cap == 0 || renderDistance <= cap, "the guest's render distance " + renderDistance + " is capped at " + cap);
 		log("   memory host=" + workingSetMb(ProcessHandle.current().pid()) + " MB guest="
 				+ workingSetMb(satellites().getFirst().pid()) + " MB");
+	}
+
+	/** The preset the current party resolved, from its log line (Auto's choice, or the config's own preset). */
+	private Preset partyPreset() throws IOException {
+		Matcher m = Pattern.compile("hearthside preset (?:auto → )?([a-z]+)").matcher(hostLogSince(0));
+		String last = null;
+		while (m.find()) {
+			last = m.group(1);
+		}
+		check(last != null && !last.equals("auto"), "the party logged its preset");
+		return Preset.valueOf(last.toUpperCase(Locale.ROOT));
 	}
 
 	/**
@@ -531,6 +548,8 @@ public final class E2eDriver {
 		guestLeaves();
 		String before = Files.exists(options) ? Files.readString(options) : null;
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
+		// Balanced's cap of 8, whatever Auto chose for this machine: the step is about a cap holding through a save.
+		System.setProperty("hearthside.e2e.preset", "balanced");
 		try {
 			writeOption(options, "renderDistance", "12");
 			guestRejoins();
@@ -552,6 +571,7 @@ public final class E2eDriver {
 					"the guest's options.txt keeps its own 12");
 		} finally {
 			System.clearProperty("hearthside.e2e.guestSaveOptions");
+			System.clearProperty("hearthside.e2e.preset");
 			if (before != null) {
 				Files.writeString(options, before);
 			}
@@ -1058,7 +1078,12 @@ public final class E2eDriver {
 		Map<String, String> own = optionValues(options);
 		System.setProperty("hearthside.e2e.preset", "performance");
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
+		long handle = onRender(() -> minecraft.getWindow().handle());
 		try {
+			// Views big enough for a GUI scale of 3, where Performance renders the guest at 2/3 (plan R3); a smaller
+			// screen clamps the window, and the frame check below then expects full resolution.
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2560, 1440));
+			Thread.sleep(2000);
 			long mark = hostLogLength();
 			guestRejoins();
 			waitFor("the guest's session options", Duration.ofSeconds(30),
@@ -1102,6 +1127,7 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.e2e.preset");
 			System.clearProperty("hearthside.e2e.guestSaveOptions");
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
 			guestLeaves();
 			if (before != null) {
 				Files.writeString(options, before);
