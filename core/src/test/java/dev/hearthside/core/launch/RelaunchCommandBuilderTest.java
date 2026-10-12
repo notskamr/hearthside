@@ -47,6 +47,14 @@ class RelaunchCommandBuilderTest {
 	}
 
 	@Test
+	void dropsTheEqualsFormToo() {
+		HostJvm forced = host(KNOT, List.of("--username", "Jo", "--graphicsBackend=opengl", "--version", "fabric-26.3"));
+		List<String> cmd = RelaunchCommandBuilder.build(forced, WORK).command();
+		assertThat(cmd).noneMatch(a -> a.startsWith("--graphicsBackend"));
+		assertThat(cmd).containsSubsequence(KNOT, "--username", "Jo", "--version", "fabric-26.3");
+	}
+
+	@Test
 	void keepsPrismsMainClassAndArguments() {
 		// HostJvm.capture has already swapped Prism's entry point for the game's own main class and arguments.
 		HostJvm prism = host(KNOT, List.of("--username", "Jo", "--version", "26.3", "--gameDir",
