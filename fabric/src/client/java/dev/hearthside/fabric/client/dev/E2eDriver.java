@@ -134,7 +134,7 @@ public final class E2eDriver {
 			{"X1"}, {"X1b"},
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
-			{"K1"}, {"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
+			{"K1"}, {"E2"}, {"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
 			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"},
 			{"W10", "L5"}, {"W11", "L5"}, {"W9", "L5"}, {"L6", "W9"},
 			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"R2", "R1"}, {"L11", "R1"},
@@ -143,7 +143,7 @@ public final class E2eDriver {
 			// The in-world session: the world opens with the host alone.
 			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"Q1", "1"}, {"Q1b", "Q1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
 			{"V2", "C2"}, {"U1", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
-			{"F1", "1"}, {"F2", "1"}, {"F3", "1"},
+			{"F1", "1"}, {"F2", "1"}, {"F3", "1"}, {"E1", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
 			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
@@ -211,6 +211,7 @@ public final class E2eDriver {
 			// nothing else happens.
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("K1 Vulkan is offered once where it lets frames be shared, never with Iris, and relaunches the game", this::vulkanOffer);
+				step("E2 Auto chooses a preset from the machine when a party is created", this::autoChoosesFromTheMachine);
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
 				step("T4 with Minecraft in the background, a controller does nothing on the title screen", this::titleIgnoresBackgroundPad);
@@ -288,6 +289,7 @@ public final class E2eDriver {
 			step("F1 copied frames are never torn, even when copying is slow", this::copiedFramesAreWhole);
 			step("F2 copying keeps a guest's pixels in shared memory, never in a file", this::copyingLeavesNoPixelFile);
 			step("F3 no uncleared memory or see-through pixels in a guest's view, on either transport", this::noGarbageOrSeeThrough);
+			step("E1 a forced Performance preset applies for the session and leaves the guest's own options alone", this::forcedPerformancePreset);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
 			step("V3 a device mismatch copies frames and says why", this::deviceMismatchCopies);
@@ -652,8 +654,14 @@ public final class E2eDriver {
 	 */
 	private void oneGuiScale() throws Exception {
 		int settingBefore = onRender(() -> minecraft.options.guiScale().get());
+		Path guestOptions = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/options.txt");
+		String guestOptionsBefore = null;
+		long handle = onRender(() -> minecraft.getWindow().handle());
 		try {
-			guiScalesMatch("as is");
+			// A big window, so the settings below give different scales (at the E2E's 854×480 every one caps to 1).
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 1920, 1080));
+			Thread.sleep(2000);
+			guiScalesMatch("as is, 1920×1080");
 
 			onRender(() -> {
 				minecraft.options.guiScale().set(4);
@@ -662,18 +670,30 @@ public final class E2eDriver {
 			});
 			guiScalesMatch("player 1's GUI scale fixed at 4");
 			onRender(() -> {
+				minecraft.options.guiScale().set(1);
+				minecraft.options.save();
+				return null;
+			});
+			guiScalesMatch("player 1's GUI scale fixed at 1, smaller than Auto");
+			onRender(() -> {
 				minecraft.options.guiScale().set(settingBefore);
 				minecraft.options.save();
 				return null;
 			});
 			guiScalesMatch("player 1's own GUI scale back");
 
+			// The laptop's cause (Task 4's finding): a guest whose own options say GUI scale 1.
+			guestLeaves();
+			guestOptionsBefore = Files.exists(guestOptions) ? Files.readString(guestOptions) : null;
+			writeOption(guestOptions, "guiScale", "1");
+			guestRejoins();
+			guiScalesMatch("the guest's own options say GUI scale 1");
+
 			withGuestHooks(Map.of("hearthside.e2e.fakeScreenPerFb", "1.5"), () -> {
 				rejoinGuest();
 				guiScalesMatch("a display scale of 150%");
 			});
 
-			long handle = onRender(() -> minecraft.getWindow().handle());
 			onRender(() -> {
 				toggleFullscreen();
 				return null;
@@ -698,6 +718,12 @@ public final class E2eDriver {
 				}
 				return null;
 			});
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
+			if (guestOptionsBefore != null) {
+				guestLeaves();
+				Files.writeString(guestOptions, guestOptionsBefore);
+				guestRejoins();
+			}
 		}
 	}
 
@@ -1008,6 +1034,127 @@ public final class E2eDriver {
 			return last[0] != null && Integer.parseInt(last[0][0]) >= frames;
 		});
 		return last[0];
+	}
+
+	/** The guest options a preset sets for the session; options.txt must keep the guest's own values for each. */
+	private static final List<String> TUNED_OPTIONS = List.of("renderDistance", "maxFps", "cutoutLeaves", "biomeBlendRadius",
+			"entityDistanceScaling", "renderClouds", "particles", "graphicsPreset");
+
+	/**
+	 * E1 (Spec D section 3.3; plan R3): a forced Performance preset. Guest2's game renders 6 chunks with light graphics and
+	 * a 45 fps cap for the session, its frame snaps to the party's GUI scale, the server simulates at most 6 chunks, frames
+	 * still arrive, and when the guest saves its options its own values are what's written.
+	 */
+	private void forcedPerformancePreset() throws Exception {
+		Path options = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/options.txt");
+		guestLeaves();
+		String before = Files.exists(options) ? Files.readString(options) : null;
+		// The guest's own settings, each unlike what Performance sets for the session.
+		writeOption(options, "renderDistance", "12");
+		writeOption(options, "maxFps", "120");
+		writeOption(options, "cutoutLeaves", "true");
+		writeOption(options, "biomeBlendRadius", "2");
+		writeOption(options, "entityDistanceScaling", "1.0");
+		Map<String, String> own = optionValues(options);
+		System.setProperty("hearthside.e2e.preset", "performance");
+		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
+		try {
+			long mark = hostLogLength();
+			guestRejoins();
+			waitFor("the guest's session options", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside session options light=true fpscap=45"));
+			Matcher distance = Pattern.compile("hearthside guest heap max=([0-9]+) mb render distance=([0-9]+)").matcher(satelliteLog());
+			check(distance.find() && Integer.parseInt(distance.group(2)) == 6, "the guest renders 6 chunks this session");
+			waitForProbe(2, mark, Duration.ofSeconds(30));
+
+			// The guest's frame snaps to the party's GUI scale (plan R3): reduced only where its GUI stays a whole scale.
+			String[] seen = {""};
+			waitFor("the guest's frame at the Performance size", Duration.ofSeconds(10), () -> {
+				GuiScaleLine host = lastGuiScale(hostLogSince(0), 1);
+				GuiScaleLine guest = lastGuiScale(satelliteLog(), 2);
+				if (host == null || guest == null) {
+					return false;
+				}
+				int setting = onRender(() -> minecraft.options.guiScale().get());
+				Rect guestView = new Rect(0, 0, guest.viewWidth(), guest.viewHeight());
+				int party = GuiScaleRule.partyScale(setting, List.of(new Rect(0, 0, host.viewWidth(), host.viewHeight()), guestView));
+				GuiScaleRule.ViewScale expected = GuiScaleRule.forView(guestView, party, true);
+				seen[0] = "party " + party + ", expected " + expected + ", guest " + guest;
+				return guest.scale() == expected.guiScale() && guest.frameWidth() == expected.frameWidth()
+						&& guest.frameHeight() == expected.frameHeight();
+			});
+			log("   performance frame: " + seen[0]);
+
+			IntegratedServer server = minecraft.getSingleplayerServer();
+			int simulation = server.submit(() -> server.getPlayerList().getSimulationDistance()).join();
+			check(simulation <= 6, "the server simulates at most 6 chunks (" + simulation + ")");
+			check(hostLogSince(mark).contains("hearthside simulation distance 6 (preset)") || simulation < 6,
+					"the preset's simulation distance is logged");
+			screenshot("preset-performance");
+
+			waitFor("the guest saved its options", Duration.ofSeconds(30),
+					() -> satelliteLog().contains("hearthside e2e guest saved its options"));
+			Map<String, String> after = optionValues(options);
+			for (String key : TUNED_OPTIONS) {
+				check(java.util.Objects.equals(own.get(key), after.get(key)),
+						key + " is still the guest's own " + own.get(key) + " in options.txt (saved " + after.get(key) + ")");
+			}
+		} finally {
+			System.clearProperty("hearthside.e2e.preset");
+			System.clearProperty("hearthside.e2e.guestSaveOptions");
+			guestLeaves();
+			if (before != null) {
+				Files.writeString(options, before);
+			}
+			guestRejoins();
+		}
+	}
+
+	/** Every {@code key:value} line of an options.txt. */
+	private static Map<String, String> optionValues(Path options) throws IOException {
+		Map<String, String> values = new java.util.HashMap<>();
+		if (Files.exists(options)) {
+			for (String line : Files.readAllLines(options)) {
+				int colon = line.indexOf(':');
+				if (colon > 0) {
+					values.put(line.substring(0, colon), line.substring(colon + 1));
+				}
+			}
+		}
+		return values;
+	}
+
+	/**
+	 * E2 (Spec D section 3.3): Auto chooses from the machine when a party is created, with the GPU type and memory faked:
+	 * an integrated GPU or 8 GB is Performance; a discrete GPU with 32 GB is Quality, or Balanced for 3–4 players or a
+	 * very big window, with the reasons logged.
+	 */
+	private void autoChoosesFromTheMachine() throws Exception {
+		Pattern line = Pattern.compile("hearthside preset auto → ([a-z]+) \\(([^)]*)\\)");
+		try {
+			for (String[] machine : new String[][] {{"INTEGRATED", "32", "performance"}, {"DISCRETE", "8", "performance"},
+					{"DISCRETE", "32", null}}) {
+				System.setProperty("hearthside.e2e.fakeGpuType", machine[0]);
+				System.setProperty("hearthside.e2e.fakeRamGb", machine[1]);
+				long mark = hostLogLength();
+				check(pressCoop() instanceof LobbyScreen, "Co-op opens the lobby");
+				Matcher m = line.matcher(hostLogSince(mark));
+				check(m.find(), "the lobby's party logged Auto's choice for " + machine[0] + " " + machine[1] + " GB");
+				log("   auto with " + machine[0] + " GPU, " + machine[1] + " GB: " + m.group(1) + " (" + m.group(2) + ")");
+				if (machine[2] != null) {
+					check(m.group(1).equals(machine[2]), machine[0] + " " + machine[1] + " GB is " + machine[2] + " (got " + m.group(1) + ")");
+					check(m.group(2).contains(machine[0].equals("INTEGRATED") ? "integrated gpu" : "8 gb ram"), "the reason is logged");
+				} else {
+					check(m.group(1).equals("quality") ? m.group(2).equals("discrete gpu, 32 gb ram")
+							: m.group(1).equals("balanced") && (m.group(2).contains("players") || m.group(2).contains("window")),
+							"a discrete GPU with 32 GB is Quality, or Balanced with its reason (got " + m.group(1) + " (" + m.group(2) + "))");
+				}
+				leaveLobby();
+			}
+		} finally {
+			System.clearProperty("hearthside.e2e.fakeGpuType");
+			System.clearProperty("hearthside.e2e.fakeRamGb");
+		}
 	}
 
 	/** Where the host log stood when gap sampling first started; G1 reads every gap line after it. */
