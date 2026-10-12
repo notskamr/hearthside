@@ -174,6 +174,8 @@ public final class E2eDriver {
 	private final Path report;
 	private Rect hostWindowBefore;
 	private StepSelection selection;
+	/** A run started with every frame copied ({@code -Pe2eForceCopy=true}): the steps about GPU sharing don't apply. */
+	private final boolean copyForcedForTheRun = Boolean.getBoolean("hearthside.forceCopy");
 
 	private E2eDriver(Minecraft minecraft) {
 		this.minecraft = minecraft;
@@ -497,6 +499,10 @@ public final class E2eDriver {
 
 	/** V1: on a GPU that can share, the guest's frames reach the host zero-copy, whatever the backend (Spec C 3.5). */
 	private void zeroCopyOnThisBackend() throws Exception {
+		if (copyForcedForTheRun) {
+			log("   V1: every frame is copied in this run (forced); nothing is shared to check");
+			return;
+		}
 		String host = hostLogSince(0);
 		Matcher backend = Pattern.compile("hearthside graphics backend=(opengl|vulkan)").matcher(host);
 		check(backend.find(), "the host logged its graphics backend");
@@ -1227,6 +1233,10 @@ public final class E2eDriver {
 
 	/** A GPU import that fails must not freeze the guest: the host switches it to the copy transport. */
 	private void failedImportFallsBackToCopy() throws Exception {
+		if (copyForcedForTheRun) {
+			log("   C12: every frame is copied in this run (forced); there is no GPU import to fail");
+			return;
+		}
 		// Start from a guest on GPU sharing (C5 left it on copy).
 		onRender(() -> {
 			Party.current().leave(GUEST);
@@ -1258,6 +1268,10 @@ public final class E2eDriver {
 
 	/** V3: when a guest's GPU or driver differs from the host's, its frames are copied and the host says why (Spec C 3.7). */
 	private void deviceMismatchCopies() throws Exception {
+		if (copyForcedForTheRun) {
+			log("   V3: every frame is copied in this run (forced), so the copy's reason is FORCED, not a mismatch");
+			return;
+		}
 		System.setProperty("hearthside.e2e.fakeDeviceMismatch", "true");
 		try {
 			onRender(() -> {
