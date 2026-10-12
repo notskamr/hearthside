@@ -983,7 +983,12 @@ public final class E2eDriver {
 		String text = Files.readString(log).toLowerCase(Locale.ROOT);
 		check(text.contains("hearthside client starting as satellite"), "satellite role line");
 		check(text.contains("sodium"), "sodium loaded");
-		check(text.contains("iris"), "iris loaded");
+		// Iris 1.11.7 calls OpenGL directly and crashes Minecraft on Vulkan, so Vulkan runs disable it (Spec C, Task 4).
+		if (System.getProperty("fabric.debug.disableModIds", "").contains("iris")) {
+			log("   iris is off in this run (it can't run on Vulkan)");
+		} else {
+			check(text.contains("iris"), "iris loaded");
+		}
 	}
 
 	private void crashedSatelliteRestarts() throws Exception {
