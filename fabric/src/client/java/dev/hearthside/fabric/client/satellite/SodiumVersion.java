@@ -16,7 +16,7 @@ import net.fabricmc.loader.api.VersionParsingException;
  */
 public final class SodiumVersion {
 	/** As the install guide quotes it. */
-	public static final String TESTED = "0.9.2 and later 0.9.x releases (below 0.10)";
+	public static final String TESTED = "0.9.2 and later 0.9.x";
 	/** E2E (Q4b): the guest takes its Sodium for this version (a host's {@code -Dhearthside.e2e.pretendSodiumVersion}). */
 	public static final String PRETEND_ENV = "HEARTHSIDE_E2E_PRETEND_SODIUM_VERSION";
 
