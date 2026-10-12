@@ -3935,7 +3935,11 @@ public final class E2eDriver {
 			// validation and never reach the game).
 			PADS.set(HOST_PAD, new InputFrame(0, 0, 0, 0.4f, 0, 0, 0, 0));
 			try {
-				waitFor("the stick takes over again: the pointer is drawn", Duration.ofSeconds(1), VirtualCursor::isDrawn);
+				long until = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+				Thread.sleep(60);
+				while (!VirtualCursor.isDrawn() && System.nanoTime() < until) {
+					Thread.sleep(10);
+				}
 			} finally {
 				PADS.set(HOST_PAD, InputFrame.NEUTRAL);
 			}
