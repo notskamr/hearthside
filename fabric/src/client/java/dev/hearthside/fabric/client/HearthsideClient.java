@@ -5,6 +5,7 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.compositor.ViewPipeline;
 import dev.hearthside.fabric.client.dev.E2eDriver;
 import dev.hearthside.fabric.client.dev.GuestFullscreenAttempt;
+import dev.hearthside.fabric.client.dev.GuestSavesOptions;
 import dev.hearthside.fabric.client.host.HostCommands;
 import dev.hearthside.fabric.client.host.Party;
 import dev.hearthside.fabric.client.host.TitleCoopButton;
@@ -40,6 +41,7 @@ public final class HearthsideClient implements ClientModInitializer {
 			SatelliteBoot.register();
 			GuestVideoSettings.register();
 			GuestFullscreenAttempt.registerIfEnabled();
+			GuestSavesOptions.registerIfEnabled();
 		}
 	}
 }

@@ -45,6 +45,7 @@ import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
+import dev.hearthside.fabric.client.satellite.SodiumVersion;
 import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
@@ -443,6 +444,13 @@ public final class Party {
 		return startGuest(loadOrCreateProfile(name));
 	}
 
+	/** The command with one more environment variable for the guest's game (E2E hooks: satellites get no -Dhearthside.*). */
+	private static LaunchCommand withEnvironment(LaunchCommand command, String name, String value) {
+		Map<String, String> environment = new HashMap<>(command.environment());
+		environment.put(name, value);
+		return new LaunchCommand(command.command(), environment, command.removedEnvironment(), command.workingDirectory());
+	}
+
 	/** Starts a guest's game in the lowest free slot, as {@code profile}; returns their player index. Render thread. */
 	private int startGuest(GuestProfile profile) throws IOException, UnsupportedLauncherException {
 		HostJvm host = HostJvm.capture(HostLaunchFacts.read());
@@ -465,18 +473,21 @@ public final class Party {
 						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
 								guestBackend, config.guestMemoryMb(), config.guestRenderDistance()));
 				if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader")) {
-					// E2E: the guest behaves as if its machine had no Vulkan runtime (satellites get no -Dhearthside.*).
-					Map<String, String> environment = new HashMap<>(command.environment());
-					environment.put(ExportDevice.NO_VULKAN_LOADER_ENV, "1");
-					command = new LaunchCommand(command.command(), environment, command.removedEnvironment(),
-							command.workingDirectory());
+					// E2E: the guest behaves as if its machine had no Vulkan runtime.
+					command = withEnvironment(command, ExportDevice.NO_VULKAN_LOADER_ENV, "1");
 				}
 				if (Boolean.getBoolean("hearthside.e2e.guestTryFullscreen")) {
 					// E2E: once in the world, the guest tries every way into fullscreen (Q4).
-					Map<String, String> environment = new HashMap<>(command.environment());
-					environment.put(dev.hearthside.fabric.client.dev.GuestFullscreenAttempt.ENV, "1");
-					command = new LaunchCommand(command.command(), environment, command.removedEnvironment(),
-							command.workingDirectory());
+					command = withEnvironment(command, dev.hearthside.fabric.client.dev.GuestFullscreenAttempt.ENV, "1");
+				}
+				if (Boolean.getBoolean("hearthside.e2e.guestSaveOptions")) {
+					// E2E: once in the world, the guest saves its options, as closing Video Settings does (Q1b).
+					command = withEnvironment(command, dev.hearthside.fabric.client.dev.GuestSavesOptions.ENV, "1");
+				}
+				String sodium = System.getProperty("hearthside.e2e.pretendSodiumVersion");
+				if (sodium != null) {
+					// E2E: the guest takes its Sodium for this version (Q4b).
+					command = withEnvironment(command, SodiumVersion.PRETEND_ENV, sodium);
 				}
 				return command;
 			} catch (IOException e) {
