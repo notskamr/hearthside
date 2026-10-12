@@ -52,6 +52,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
@@ -304,7 +305,10 @@ public final class ButtonGuideRenderer {
 		return obstacles.stream().map(r -> new Rect(r.x() - 1, r.y() - 1, r.width() + 2, r.height() + 2)).toList();
 	}
 
-	/** Where a bundle is: under the pointer (with or without an item held), or held over a slot. */
+	/**
+	 * Where a bundle is: under the pointer (with or without an item held), or held over a slot. Creative's item picker
+	 * handles its own clicks (a click there with a bundle held replaces it), so only the player's inventory counts there.
+	 */
 	private static BundleState bundleState(AbstractContainerScreen<?> screen) {
 		Slot hovered = ((ContainerScreenAccessor) screen).hearthside$hoveredSlot();
 		if (hovered == null) {
@@ -312,13 +316,9 @@ public final class ButtonGuideRenderer {
 		}
 		ItemStack carried = screen.getMenu().getCarried();
 		ItemStack under = hovered.getItem();
-		if (carried.is(ItemTags.BUNDLES)) {
-			return under.isEmpty() ? BundleState.HOLDING_BUNDLE_OVER_EMPTY : BundleState.HOLDING_BUNDLE_OVER_STACK;
-		}
-		if (under.is(ItemTags.BUNDLES)) {
-			return carried.isEmpty() ? BundleState.OVER_BUNDLE_EMPTY_HAND : BundleState.OVER_BUNDLE_HOLDING;
-		}
-		return BundleState.NONE;
+		boolean realSlot = !(screen instanceof CreativeModeInventoryScreen) || hovered.container instanceof Inventory;
+		return BundleState.of(carried.is(ItemTags.BUNDLES), carried.isEmpty(), under.is(ItemTags.BUNDLES), under.isEmpty(),
+				realSlot);
 	}
 
 	/**
