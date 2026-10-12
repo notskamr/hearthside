@@ -447,6 +447,8 @@ public final class E2eDriver {
 	private void resizeRelaysOut() throws Exception {
 		long mark = hostLogLength();
 		onRender(() -> SDLVideo.SDL_SetWindowSize(minecraft.getWindow().handle(), 1280, 720));
+		// Until the guest's frames at its new size arrive, its old ones are drawn stretched and softly blurred.
+		windowShot("resize-stale");
 		try {
 			int halfWidth = onRender(() -> {
 					var size = minecraft.getWindow().queryFramebufferSize();
