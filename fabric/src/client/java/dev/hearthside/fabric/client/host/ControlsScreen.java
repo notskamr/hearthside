@@ -71,8 +71,15 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 			HearthSounds.play(HearthSounds.Ui.KNOCK);
 		}
 
+		/** As last drawn, for the E2E: lit as the selection, under the pointer, and the glyph sprite shown. */
+		boolean drawnSelected, drawnHovered;
+		String drawnGlyph;
+
 		@Override
 		protected void extractContents(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+			drawnSelected = isHoveredOrFocused();
+			drawnHovered = isHovered();
+			drawnGlyph = null;
 			var sprite = isHoveredOrFocused() ? HearthSprites.BUTTON_HIGHLIGHTED : HearthSprites.BUTTON;
 			g.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, getX(), getY(), getWidth(), getHeight());
 			int textY = getY() + (getHeight() - 8) / 2;
@@ -85,6 +92,7 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 			}
 			var control = model.scheme().controlFor(action);
 			if (control.isPresent()) {
+				drawnGlyph = HearthSprites.glyph(control.get(), style()).toString();
 				int w = HearthDraw.glyphWidth(control.get());
 				HearthDraw.glyph(g, control.get(), style(), right - w, getY() + (getHeight() - HearthDraw.GLYPH_HEIGHT) / 2);
 			} else {
@@ -280,5 +288,35 @@ public final class ControlsScreen extends Screen implements SeatScreen {
 	/** The action on the focused row, or null. */
 	public Action focusedAction() {
 		return getFocused() instanceof ActionRow row ? row.action : null;
+	}
+
+	/** How many rows drew themselves as the selection last frame. */
+	public long selectedRowCount() {
+		return rows.stream().filter(row -> row.drawnSelected).count();
+	}
+
+	/** The first row drawn as the selection, or null. */
+	public Action selectedAction() {
+		return rows.stream().filter(row -> row.drawnSelected).map(row -> row.action).findFirst().orElse(null);
+	}
+
+	/** The row under the pointer, or null. */
+	public Action hoveredAction() {
+		return rows.stream().filter(row -> row.drawnHovered).map(row -> row.action).findFirst().orElse(null);
+	}
+
+	/** The glyph sprite an action's row draws, or null. */
+	public String drawnGlyph(Action action) {
+		return row(action).drawnGlyph;
+	}
+
+	/** An action's row centre, in GUI coordinates. */
+	public double[] rowCentre(Action action) {
+		ActionRow row = row(action);
+		return new double[] {row.getX() + row.getWidth() / 2.0, row.getY() + row.getHeight() / 2.0};
+	}
+
+	private ActionRow row(Action action) {
+		return rows.stream().filter(row -> row.action == action).findFirst().orElseThrow();
 	}
 }

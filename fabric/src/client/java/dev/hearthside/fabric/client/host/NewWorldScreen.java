@@ -273,6 +273,19 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 		return keyboard != null;
 	}
 
+	/** The cheats choice (kept while Hardcore greys it out). */
+	public boolean cheats() {
+		return cheats;
+	}
+
+	public String cheatsLabel() {
+		return cheatsRow.getMessage().getString();
+	}
+
+	public boolean cheatsActive() {
+		return cheatsRow.active;
+	}
+
 	/** Which row has focus: "name", "mode", "difficulty", "cheats", "create" or "". For the E2E. */
 	public String focusedRow() {
 		var focused = getFocused();

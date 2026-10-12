@@ -16,6 +16,10 @@ public final class HearthDraw {
 	private static final int FIRELIGHT = 0x59FF963C;
 	public static final int INK = 0xFF3A2410;
 	public static final int CREAM = 0xFFF3DFB6;
+	/** Secondary text on parchment (dates, who played, hints): a warm faded ink. */
+	public static final int MUTED = 0xFF7A6A58;
+	/** D-pad glyphs drawn with their pressed arm painted in the accent. For the E2E. */
+	public static volatile int dpadArmsDrawn;
 
 	private HearthDraw() {}
 

@@ -243,6 +243,12 @@ public final class WorldsScreen extends Screen implements PadScreen {
 				.map(c -> c.playedWith).orElse(null);
 	}
 
+	/** The colour a world's card last drew its "Last played with …" line in (0 before it drew one). For the E2E. */
+	public int playedWithColour(String levelId) {
+		return cards.stream().filter(c -> c.summary != null && c.summary.getLevelId().equals(levelId)).findFirst()
+				.map(c -> c.playedWithDrawn).orElse(0);
+	}
+
 	/** The cards' worlds top to bottom ("" for Create). For the E2E. */
 	public List<String> cardLevelIds() {
 		return cards.stream().map(c -> c.summary == null ? "" : c.summary.getLevelId()).toList();
@@ -297,6 +303,7 @@ public final class WorldsScreen extends Screen implements PadScreen {
 	private final class WorldCard extends Button {
 		final LevelSummary summary;
 		final String playedWith;
+		int playedWithDrawn;
 
 		WorldCard(int x, int width, LevelSummary summary, OnPress onPress) {
 			super(x, 0, width, summary == null ? CREATE_H : CARD_H,
@@ -336,7 +343,8 @@ public final class WorldsScreen extends Screen implements PadScreen {
 			String detail = mode + " · " + DATE.format(Instant.ofEpochMilli(summary.getLastPlayed()));
 			g.text(font, detail, getX() + getWidth() - 8 - font.width(detail), getY() + 5, 0xFF7A6A58, false);
 			if (!playedWith.isEmpty()) {
-				g.text(font, playedWith, x, getY() + 19, 0xFFA8321E, false);
+				playedWithDrawn = 0xFFA8321E;
+				g.text(font, playedWith, x, getY() + 19, playedWithDrawn, false);
 			}
 		}
 	}

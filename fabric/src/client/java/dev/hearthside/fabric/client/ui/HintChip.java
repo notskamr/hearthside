@@ -2,6 +2,8 @@ package dev.hearthside.fabric.client.ui;
 
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.PadStyle;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -41,6 +43,8 @@ public final class HintChip extends Button {
 	}
 
 	public static final int HEIGHT = 15;
+	/** Every glyph sprite a chip has drawn since this was last cleared. For the E2E. */
+	public static final Set<String> drawn = ConcurrentHashMap.newKeySet();
 
 	public static int width(Control control, Component label) {
 		return 4 + HearthDraw.glyphWidth(control) + 4 + Minecraft.getInstance().font.width(label) + 5;
@@ -52,7 +56,9 @@ public final class HintChip extends Button {
 		if (isActive() && isHoveredOrFocused()) {
 			g.fill(getX() + 1, getY() + 1, getX() + getWidth() - 1, getY() + getHeight() - 1, 0x30FFB35A);
 		}
-		int glyph = HearthDraw.glyph(g, control, style.get(), getX() + 4, getY() + 2);
+		PadStyle family = style.get();
+		drawn.add(HearthSprites.glyph(control, family).toString());
+		int glyph = HearthDraw.glyph(g, control, family, getX() + 4, getY() + 2);
 		HearthDraw.label(g, Minecraft.getInstance().font, getMessage(), getX() + 4 + glyph + 4, getY() + 4,
 				HearthDraw.CREAM);
 	}

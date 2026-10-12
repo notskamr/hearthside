@@ -3,6 +3,7 @@ package dev.hearthside.fabric.client.ui;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.ui.KeyboardModel;
+import java.util.List;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.network.chat.Component;
@@ -65,6 +66,7 @@ public final class KeyboardWidget {
 
 		int hintY = gridTop + 4 * (KEY_H + GAP) + 3;
 		int hintX = x + PAD;
+		legendDrawing = new java.util.ArrayList<>();
 		hintX = hint(g, font, Control.X, style, "Del", hintX, hintY);
 		hint(g, font, Control.RIGHT_BUMPER, style, model.mode() == KeyboardModel.Mode.NAME ? "Aa" : "Aa!", hintX, hintY);
 		hintX = x + PAD;
@@ -73,9 +75,15 @@ public final class KeyboardWidget {
 			hintX = hint(g, font, Control.Y, style, "Space", hintX, hintY);
 		}
 		hint(g, font, Control.START, style, "Done", hintX, hintY);
+		drawnLegend = List.copyOf(legendDrawing);
 	}
 
+	/** The legend the last keyboard drew: each entry's glyph sprites (joined by +), a space, its label. For the E2E. */
+	public static volatile List<String> drawnLegend = List.of();
+	private static List<String> legendDrawing = new java.util.ArrayList<>();
+
 	private static int hint(GuiGraphicsExtractor g, Font font, Control control, PadStyle style, String label, int x, int y) {
+		legendDrawing.add(HearthSprites.glyph(control, style) + " " + label);
 		int width = HearthDraw.glyph(g, control, style, x, y);
 		g.text(font, Component.literal(label), x + width + 2, y + 2, TEXT, false);
 		return x + width + 2 + font.width(label) + 5;
