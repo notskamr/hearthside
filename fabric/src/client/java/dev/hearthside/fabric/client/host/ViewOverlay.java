@@ -165,7 +165,8 @@ final class ViewOverlay implements OverlayLayer {
 			if (context.views().size() > 1) {
 				borderAndTag(g, font, view, context);
 			}
-			if (view.alpha() < 1f) {
+			// The compositor fades a view's picture itself; with no picture yet, fade the card drawn there instead.
+			if (view.alpha() < 1f && !compositor.hasFrame(seat)) {
 				int alpha = Math.round((1f - view.alpha()) * 255);
 				g.fill(r.x(), r.y(), r.x() + r.width(), r.y() + r.height(), alpha << 24 | DIVIDER);
 			}

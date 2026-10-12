@@ -2,6 +2,7 @@ package dev.hearthside.fabric.client;
 
 import dev.hearthside.core.Role;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.compositor.ViewPipeline;
 import dev.hearthside.fabric.client.dev.E2eDriver;
 import dev.hearthside.fabric.client.host.HostCommands;
 import dev.hearthside.fabric.client.host.Party;
@@ -30,6 +31,7 @@ public final class HearthsideClient implements ClientModInitializer {
 			Party.register();
 			HostCommands.register();
 			TitleCoopButton.register();
+			ViewPipeline.registerReloadListener();
 			ClientLifecycleEvents.CLIENT_STARTED.register(TitleInput::register);
 			E2eDriver.registerIfEnabled();
 		} else {

@@ -50,6 +50,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -109,7 +110,8 @@ public final class E2eDriver {
 			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"},
 			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
 			// The in-world session: the world opens with the host alone.
-			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"}, {"C5", "1"},
+			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
+			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"D5", "C7b"}, {"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
 			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"},
@@ -222,6 +224,11 @@ public final class E2eDriver {
 			step("O1 the overlay pass draws over every view", this::overlayDrawsOverViews);
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
+			step("V2 views are the right way up", this::viewsUpright);
+			step("V4 a resource reload while composited keeps every view composited", this::reloadKeepsViews);
+			step("V5 composite cost within budget", this::compositeCostWithinBudget);
+			step("V7 minimise, restore and fullscreen keep views composited", this::minimiseRestoreFullscreen);
+			step("V8 a broken view shader falls back to a plain blit", this::brokenViewShaderFallsBack);
 			step("C5 copy transport works", this::copyTransportWorks);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
@@ -425,6 +432,97 @@ public final class E2eDriver {
 		// The transport is decided once; a resize must not re-probe the GPU (each probe creates Vulkan instances).
 		int probes = count("hearthside gpu sharing probe");
 		check(probes <= 1, "the guest probed the GPU once, not " + probes + " times");
+	}
+
+	/** V2: the guest's magenta corner lands at the top-left of its view, and the bottom-left is the game (Spec C 4.4). */
+	private void viewsUpright() throws Exception {
+		long mark = hostLogLength();
+		waitForProbe(2, mark, Duration.ofSeconds(10));
+		Matcher m = Pattern.compile("hearthside compositor probe player=2 gen=[0-9]+ rgb=([0-9a-f]{6}) corner=([0-9a-f]{6})")
+				.matcher(hostLogSince(mark));
+		String last = null;
+		while (m.find()) {
+			last = "rgb=" + m.group(1) + " corner=" + m.group(2);
+		}
+		log("   probe " + last);
+	}
+
+	/** V4: a resource reload rebuilds Minecraft's pipelines; the views stay composited and ours is warmed again. */
+	private void reloadKeepsViews() throws Exception {
+		long mark = hostLogLength();
+		onRender(() -> minecraft.reloadResourcePacks()).get(60, TimeUnit.SECONDS);
+		check(hostLogSince(mark).contains("hearthside view pipeline warmed"), "the view pipeline was warmed again after the reload");
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+	}
+
+	/** V5: the host's CPU time to composite stays within Spec C's budget per guest (zero-copy 0.3 ms, copying 1 ms). */
+	private void compositeCostWithinBudget() throws Exception {
+		long mark = hostLogLength();
+		// The cost line is logged every 30 s; take the first one from here on.
+		waitFor("a compositor cost line", Duration.ofSeconds(45), () -> hostLogSince(mark).contains("hearthside compositor cost"));
+		Matcher m = Pattern.compile("hearthside compositor cost guests=([0-9]+) p50=([0-9.]+) ms p95=([0-9.]+) ms")
+				.matcher(hostLogSince(mark));
+		check(m.find(), "the cost line parses");
+		int guests = Math.max(1, Integer.parseInt(m.group(1)));
+		double p95 = Double.parseDouble(m.group(3));
+		Matcher transport = Pattern.compile("hearthside compositor: player 2 frames ([a-z_]+)").matcher(hostLogSince(0));
+		String last = "gpu_shared";
+		while (transport.find()) {
+			last = transport.group(1);
+		}
+		double budget = ("copy".equals(last) ? 1.0 : 0.3) * guests;
+		log("   compositor cost guests=" + guests + " p95=" + p95 + " ms, budget " + budget + " ms (" + last + ")");
+		check(p95 < budget, "p95 " + p95 + " ms is within the " + budget + " ms budget");
+	}
+
+	/** V7: minimising, restoring and going fullscreen and back keep every view composited (Review Focus 1). */
+	private void minimiseRestoreFullscreen() throws Exception {
+		long mark = hostLogLength();
+		long handle = onRender(() -> minecraft.getWindow().handle());
+		onRender(() -> SDLVideo.SDL_MinimizeWindow(handle));
+		Thread.sleep(2000);
+		onRender(() -> SDLVideo.SDL_RestoreWindow(handle));
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(10));
+		onRender(() -> {
+			toggleFullscreen();
+			return null;
+		});
+		try {
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+		} finally {
+			onRender(() -> {
+				toggleFullscreen();
+				return null;
+			});
+		}
+		waitFor("window back to its size", Duration.ofSeconds(10),
+				() -> onRender(() -> minecraft.getWindow().queryFramebufferSize().width()) == hostWindowBefore.width());
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+		check(!hostLogSince(mark).contains("exception"), "no exception in the host log");
+	}
+
+	/** What Minecraft's fullscreen key does (26.3's {@code Window} has no toggle), without saving the setting. */
+	private void toggleFullscreen() {
+		minecraft.options.fullscreen().set(!minecraft.options.fullscreen().get());
+	}
+
+	/** V8: if our view shader can't be built (a resource pack overriding it badly), views still draw (Review Focus 3). */
+	private void brokenViewShaderFallsBack() throws Exception {
+		long mark = hostLogLength();
+		System.setProperty("hearthside.e2e.breakViewPipeline", "true");
+		try {
+			onRender(() -> minecraft.reloadResourcePacks()).get(60, TimeUnit.SECONDS);
+			waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
+			String log = hostLogSince(mark);
+			int warnings = log.split("hearthside view pipeline unavailable; drawing views without fades", -1).length - 1;
+			check(warnings == 1, "the fallback was logged once, not " + warnings + " times");
+		} finally {
+			System.clearProperty("hearthside.e2e.breakViewPipeline");
+		}
+		long restoring = hostLogLength();
+		onRender(() -> minecraft.reloadResourcePacks()).get(60, TimeUnit.SECONDS);
+		check(hostLogSince(restoring).contains("hearthside view pipeline warmed"), "the view pipeline is back after the next reload");
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(15));
 	}
 
 	private void copyTransportWorks() throws Exception {
@@ -782,13 +880,16 @@ public final class E2eDriver {
 
 	/** Waits for the host to log the pattern for {@code player} from an import other than generation {@code notGeneration}. */
 	private int waitForProbe(int player, long fromOffset, Duration timeout, int notGeneration) throws Exception {
-		Pattern line = Pattern.compile("hearthside compositor probe player=" + player + " gen=([0-9]+) " + PATTERN);
+		// The guest paints only its frame's top-left corner magenta: magenta there and not at the bottom-left means the
+		// view is the right way up (Spec C section 4.4).
+		Pattern line = Pattern.compile(
+				"hearthside compositor probe player=" + player + " gen=([0-9]+) " + PATTERN + " corner=([0-9a-f]{6})");
 		int[] found = {-1};
 		waitFor("player " + player + "'s pattern in the host window" + (notGeneration < 0 ? "" : " from a new import"), timeout, () -> {
 			Matcher m = line.matcher(hostLogSince(fromOffset));
 			while (m.find()) {
 				int generation = Integer.parseInt(m.group(1));
-				if (generation != notGeneration) {
+				if (generation != notGeneration && !m.group(2).equals("ff00ff")) {
 					found[0] = generation;
 					return true;
 				}

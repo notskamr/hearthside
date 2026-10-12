@@ -3,7 +3,6 @@ package dev.hearthside.fabric.client.compositor;
 import static org.lwjgl.opengl.EXTMemoryObject.*;
 import static org.lwjgl.opengl.EXTMemoryObjectWin32.*;
 import static org.lwjgl.opengl.GL11C.*;
-import static org.lwjgl.system.MemoryUtil.memAddress;
 
 import dev.hearthside.core.compositor.FrameNames;
 import dev.hearthside.core.compositor.ImageDescription;
@@ -11,11 +10,11 @@ import dev.hearthside.core.compositor.SlotTable;
 import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
 import dev.hearthside.fabric.client.compositor.backend.ExportedSlot;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
-import org.lwjgl.system.MemoryStack;
 
 /**
- * Zero-copy frame slots: each slot is an image the {@link ExportDevice} allocates and exports under a name, imported
- * into GL on both sides (by handle in the guest, by name in the host). Both GL contexts then use the same GPU memory.
+ * Zero-copy frame slots, guest side: each slot is an image the {@link ExportDevice} allocates and exports under a name,
+ * imported into this guest's GL by handle. The host imports the same memory by name through its own backend's
+ * {@link SharedImages} ({@code GuestImport}), so both games use the same GPU memory.
  */
 public final class GpuSharedTransport implements FrameTransport {
 	private final int width, height;
@@ -46,28 +45,6 @@ public final class GpuSharedTransport implements FrameTransport {
 						FrameNames.gpuMemory(controlFile, table.generation(), slot), table);
 			}
 			table.setDescription(description);
-		} catch (RuntimeException e) {
-			transport.close();
-			throw e;
-		}
-		return transport;
-	}
-
-	/** Host: imports the guest's slots by name, using the sizes the guest recorded in the table. */
-	public static GpuSharedTransport importByName(String controlFile, SlotTable table, int width, int height) {
-		GpuSharedTransport transport = new GpuSharedTransport(width, height, table.slots());
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			for (int slot = 0; slot < table.slots(); slot++) {
-				drainGlErrors();
-				int memory = glCreateMemoryObjectsEXT();
-				transport.memoryObjects[slot] = memory;
-				glMemoryObjectParameteriEXT(memory, GL_DEDICATED_MEMORY_OBJECT_EXT, GL_TRUE);
-				String name = FrameNames.gpuMemory(controlFile, table.generation(), slot);
-				glImportMemoryWin32NameEXT(memory, table.memorySize(slot), GL_HANDLE_TYPE_OPAQUE_WIN32_EXT,
-						memAddress(stack.UTF16(name)));
-				transport.textures[slot] = transport.textureOn(memory);
-				glCheck("importing " + name);
-			}
 		} catch (RuntimeException e) {
 			transport.close();
 			throw e;

@@ -4,13 +4,14 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
-import com.mojang.renderpearl.backend.opengl.GlTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.ViewFrame;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.mixin.GameRendererAccessor;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -60,9 +61,9 @@ public final class OverlayPass {
 		return target;
 	}
 
-	/** The GL texture holding this frame's overlay, or 0 when nothing was drawn. */
-	public static int textureId() {
-		return drawn && target != null ? ((GlTexture) target.getColorTexture()).glId() : 0;
+	/** The texture holding this frame's overlay, or empty when nothing was drawn. */
+	public static Optional<GpuTextureView> texture() {
+		return drawn && target != null ? Optional.ofNullable(target.getColorTextureView()) : Optional.empty();
 	}
 
 	/** At the end of the host's frame: renders every layer at the window's size, while compositing. */
