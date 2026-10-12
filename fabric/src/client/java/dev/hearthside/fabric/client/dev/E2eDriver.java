@@ -6,6 +6,8 @@ import dev.hearthside.core.input.Action;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
+import dev.hearthside.core.config.Preset;
+import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.core.config.SplitScreenConfig;
 import dev.hearthside.core.config.VulkanOffer;
 import dev.hearthside.core.input.PadButton;
@@ -149,7 +151,7 @@ public final class E2eDriver {
 			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
-			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"}, {"Q2", "1"},
+			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"}, {"Q2", "1"}, {"E3", "1"},
 			// The in-world pad block (fake pads).
 			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
@@ -318,6 +320,7 @@ public final class E2eDriver {
 			step("D8 a guest whose game dies while joining keeps their card on the plank wall", this::gaveUpWhileJoining);
 			// Last in the composited session: it opens the world twice more, leaving it as it was with player 1 alone.
 			step("Q2 a stacked two-player layout from config/hearthside.json", this::stackedLayoutFromConfig);
+			step("E3 presetForPlayer1 gives player 1's own game the preset for the session, and saves keep their own", this::presetForPlayerOne);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				long dropInSounds = System.nanoTime();
@@ -516,9 +519,24 @@ public final class E2eDriver {
 		long maxMb = Long.parseLong(m.group(1));
 		int renderDistance = Integer.parseInt(m.group(2));
 		check(maxMb <= 1536 * 105 / 100, "the guest's max heap " + maxMb + " MB is the configured 1536 MB");
-		check(renderDistance <= 8, "the guest's render distance " + renderDistance + " is capped at 8");
+		// The cap is the party's preset's (Spec D section 3.3), or the config's own number.
+		Preset preset = partyPreset();
+		int cap = SessionTuning.of(preset, SplitScreenConfigFile.load(minecraft.gameDirectory.toPath())).renderDistanceCap();
+		log("   party preset " + preset + ", guest render distance cap " + cap);
+		check(cap == 0 || renderDistance <= cap, "the guest's render distance " + renderDistance + " is capped at " + cap);
 		log("   memory host=" + workingSetMb(ProcessHandle.current().pid()) + " MB guest="
 				+ workingSetMb(satellites().getFirst().pid()) + " MB");
+	}
+
+	/** The preset the current party resolved, from its log line (Auto's choice, or the config's own preset). */
+	private Preset partyPreset() throws IOException {
+		Matcher m = Pattern.compile("hearthside preset (?:auto → )?([a-z]+)").matcher(hostLogSince(0));
+		String last = null;
+		while (m.find()) {
+			last = m.group(1);
+		}
+		check(last != null && !last.equals("auto"), "the party logged its preset");
+		return Preset.valueOf(last.toUpperCase(Locale.ROOT));
 	}
 
 	/**
@@ -531,6 +549,8 @@ public final class E2eDriver {
 		guestLeaves();
 		String before = Files.exists(options) ? Files.readString(options) : null;
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
+		// Balanced's cap of 8, whatever Auto chose for this machine: the step is about a cap holding through a save.
+		System.setProperty("hearthside.e2e.preset", "balanced");
 		try {
 			writeOption(options, "renderDistance", "12");
 			guestRejoins();
@@ -552,6 +572,7 @@ public final class E2eDriver {
 					"the guest's options.txt keeps its own 12");
 		} finally {
 			System.clearProperty("hearthside.e2e.guestSaveOptions");
+			System.clearProperty("hearthside.e2e.preset");
 			if (before != null) {
 				Files.writeString(options, before);
 			}
@@ -1058,7 +1079,12 @@ public final class E2eDriver {
 		Map<String, String> own = optionValues(options);
 		System.setProperty("hearthside.e2e.preset", "performance");
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
+		long handle = onRender(() -> minecraft.getWindow().handle());
 		try {
+			// Views big enough for a GUI scale of 3, where Performance renders the guest at 2/3 (plan R3); a smaller
+			// screen clamps the window, and the frame check below then expects full resolution.
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2560, 1440));
+			Thread.sleep(2000);
 			long mark = hostLogLength();
 			guestRejoins();
 			waitFor("the guest's session options", Duration.ofSeconds(30),
@@ -1102,6 +1128,7 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.e2e.preset");
 			System.clearProperty("hearthside.e2e.guestSaveOptions");
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
 			guestLeaves();
 			if (before != null) {
 				Files.writeString(options, before);
@@ -1331,6 +1358,86 @@ public final class E2eDriver {
 				Files.deleteIfExists(file);
 			}
 			reopenWorld();
+		}
+	}
+
+	/**
+	 * E3 (Spec D section 3.3; plan R4): with {@code presetForPlayer1}, player 1's own game takes the Performance preset's
+	 * render distance, lighter graphics and frame-rate cap while split-screen is on (not a lower resolution). A save
+	 * writes player 1's own values, and leaving split-screen puts them back.
+	 */
+	private void presetForPlayerOne() throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("config").resolve("hearthside.json");
+		byte[] before = Files.exists(file) ? Files.readAllBytes(file) : null;
+		Path hostOptions = minecraft.gameDirectory.toPath().resolve("options.txt");
+		int[] original = onRender(() -> new int[] {minecraft.options.renderDistance().get(), minecraft.options.framerateLimit().get(),
+				minecraft.options.cutoutLeaves().get() ? 1 : 0});
+		try {
+			// Player 1's own settings, each unlike what Performance sets.
+			onRender(() -> {
+				minecraft.options.renderDistance().set(12);
+				minecraft.options.framerateLimit().set(120);
+				minecraft.options.cutoutLeaves().set(true);
+				minecraft.options.save();
+				return null;
+			});
+			Map<String, String> own = optionValues(hostOptions);
+			SplitScreenConfig config = before == null ? SplitScreenConfig.DEFAULTS
+					: SplitScreenConfig.read(new java.io.StringReader(new String(before, StandardCharsets.UTF_8)));
+			try (java.io.Writer out = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+				new SplitScreenConfig(config.guestMemoryMb(), config.guestRenderDistance(), config.layout(), Preset.PERFORMANCE,
+						true, config.vulkanOffer()).write(out);
+			}
+			reopenWorld();
+			check(hostLogSince(0).contains("hearthside preset performance (config)"), "the party took Performance from the config");
+			onRender(() -> {
+				Party.current().join(GUEST);
+				return null;
+			});
+			waitFor("2 players", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitInWorld(1);
+			waitFor("player 1's session options", Duration.ofSeconds(10), () -> onRender(() -> minecraft.options.renderDistance().get() <= 6));
+			String session = onRender(() -> "renderDistance " + minecraft.options.renderDistance().get() + ", maxFps "
+					+ minecraft.options.framerateLimit().get() + ", cutoutLeaves " + minecraft.options.cutoutLeaves().get() + ", clouds "
+					+ minecraft.options.cloudStatus().get() + ", particles " + minecraft.options.particles().get());
+			log("   player 1 in split-screen: " + session);
+			check(onRender(() -> minecraft.options.framerateLimit().get() <= 45 && !minecraft.options.cutoutLeaves().get()
+					&& minecraft.options.cloudStatus().get().name().equals("OFF")
+					&& minecraft.options.particles().get().name().equals("DECREASED")), "player 1 has Performance's lighter graphics and 45 fps");
+
+			onRender(() -> {
+				minecraft.options.save();
+				return null;
+			});
+			Map<String, String> saved = optionValues(hostOptions);
+			for (String key : TUNED_OPTIONS) {
+				check(java.util.Objects.equals(own.get(key), saved.get(key)),
+						key + " is still player 1's own " + own.get(key) + " in options.txt (saved " + saved.get(key) + ")");
+			}
+			check(onRender(() -> minecraft.options.renderDistance().get() <= 6), "the session values hold after a save");
+
+			onRender(() -> {
+				Party.current().leave(GUEST);
+				return null;
+			});
+			waitFor("the guest gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			waitFor("player 1's own settings back", Duration.ofSeconds(10), () -> onRender(
+					() -> minecraft.options.renderDistance().get() == 12 && minecraft.options.framerateLimit().get() == 120
+							&& minecraft.options.cutoutLeaves().get()));
+		} finally {
+			if (before != null) {
+				Files.write(file, before);
+			} else {
+				Files.deleteIfExists(file);
+			}
+			reopenWorld();
+			onRender(() -> {
+				minecraft.options.renderDistance().set(original[0]);
+				minecraft.options.framerateLimit().set(original[1]);
+				minecraft.options.cutoutLeaves().set(original[2] == 1);
+				minecraft.options.save();
+				return null;
+			});
 		}
 	}
 
