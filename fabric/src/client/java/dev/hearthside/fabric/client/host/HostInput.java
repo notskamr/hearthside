@@ -95,6 +95,7 @@ final class HostInput implements Runnable {
 		}
 		InputRouter.Update update = router.update(pads);
 		takeTitlePad(pads);
+		takeAnsweringPad(pads);
 		autoClaimHost(pads);
 		int free = 0;
 		PadStyle freeKind = null;
@@ -389,8 +390,10 @@ final class HostInput implements Runnable {
 	private void handle(RouterEvent event) {
 		switch (event) {
 			case RouterEvent.UnassignedPress press -> {
-				// A press from a controller assigned this frame (player 1's from the title) is not a join.
-				if (router.playerFor(press.instanceId()).isEmpty()) {
+				// A press from a controller assigned this frame (player 1's from the title) is not a join, nor is the
+				// one that answered the card before the lobby.
+				if (router.playerFor(press.instanceId()).isEmpty()
+						&& !Integer.valueOf(press.instanceId()).equals(answering)) {
 					session.onUnassignedPress(press.instanceId(), press.button(), guids.get(press.instanceId()));
 				}
 			}
@@ -443,6 +446,20 @@ final class HostInput implements Runnable {
 				heldFromCard.put(0, pad.frame().buttons());
 				return;
 			}
+		}
+	}
+
+	/** The controller that answered a card before the lobby, until it lets go of everything: its press isn't a join. */
+	private Integer answering;
+
+	private void takeAnsweringPad(List<PadSnapshot> pads) {
+		Integer id = session.answeringPad;
+		if (id != null) {
+			session.answeringPad = null;
+			answering = id;
+		}
+		if (answering != null && pads.stream().noneMatch(p -> p.instanceId() == answering && p.frame().buttons() != 0)) {
+			answering = null;
 		}
 	}
 

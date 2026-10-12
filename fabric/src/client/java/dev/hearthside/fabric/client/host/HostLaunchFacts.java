@@ -34,4 +34,9 @@ final class HostLaunchFacts {
 				loader.getGameDir().toAbsolutePath(),
 				Runtime.getRuntime().maxMemory());
 	}
+
+	/** The directory the launcher started this game in ({@code user.dir}), where a relaunch starts too. */
+	static Path workingDirectory() {
+		return Path.of(System.getProperty("user.dir")).toAbsolutePath();
+	}
 }
