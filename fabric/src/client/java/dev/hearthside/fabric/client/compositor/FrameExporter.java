@@ -225,7 +225,7 @@ public final class FrameExporter {
 			try {
 				current = new CopiedFrames(controlFile, table, width, height, pattern, FrameHooks.slowCopyMs(),
 						this::deleteOldFiles);
-			} catch (RuntimeException e) {
+			} catch (IOException | RuntimeException e) {
 				HearthsideMod.LOGGER.error("Could not set up the copy transport at {}", controlFile, e);
 				table.close();
 				return;
@@ -440,17 +440,17 @@ public final class FrameExporter {
 
 	/**
 	 * The fallback: each frame is drawn into a texture of this game's own, read back into a slot's buffer, and copied
-	 * into that slot's region of the shared {@link PixelFile} from the readback's callback, which then publishes the slot.
-	 * A readback that lands after the generation was retired drops its frame; the pixel file, buffers and table are only
-	 * closed once no readback is still on its way (Review Focus 2).
+	 * into that slot's region of the shared {@link PixelMemory} from the readback's callback, which then publishes the
+	 * slot. A readback that lands after the generation was retired drops its frame; the pixel memory, buffers and table
+	 * are only closed once no readback is still on its way (Review Focus 2).
 	 */
 	private static final class CopiedFrames extends Frames {
-		private final PixelFile pixels;
+		private final PixelMemory pixels;
 		private final GpuTexture staging;
 		private final GpuTextureView stagingView;
 		private final GpuBuffer[] buffers;
 		private final boolean pattern;
-		/** E2E: the pause halfway through writing a frame into the pixel file ({@link FrameHooks#SLOW_COPY_MS}). */
+		/** E2E: the pause halfway through writing a frame into the pixel memory ({@link FrameHooks#SLOW_COPY_MS}). */
 		private final int slowCopyMs;
 		private final Runnable afterClose;
 		private int inFlight;
@@ -458,13 +458,14 @@ public final class FrameExporter {
 		private boolean closed;
 
 		CopiedFrames(Path controlFile, SegmentSlotTable table, int width, int height, boolean pattern, int slowCopyMs,
-				Runnable afterClose) {
+				Runnable afterClose) throws IOException {
 			super(table, width, height);
 			this.pattern = pattern;
 			this.slowCopyMs = slowCopyMs;
 			this.afterClose = afterClose;
 			GpuDevice device = RenderSystem.getDevice();
-			PixelFile file = PixelFile.open(PixelFile.forControlFile(controlFile), width, height, table.slots());
+			// Created before FrameSlotsReady goes out: the host only ever opens it.
+			PixelMemory file = PixelMemory.create(controlFile.toString(), width, height, table.slots());
 			GpuTexture texture = null;
 			GpuBuffer[] readbacks = new GpuBuffer[table.slots()];
 			try {
@@ -500,7 +501,7 @@ public final class FrameExporter {
 		void draw(int slot, GpuTextureView source, CommandEncoder encoder, long frame) {
 			drawFrame(encoder, source, staging, stagingView, pattern);
 			inFlight++;
-			// Rows land bottom-up, as the texture stores them: the pixel file's layout.
+			// Rows land bottom-up, as the texture stores them: the pixel memory's layout.
 			encoder.copyTextureToBuffer(staging, buffers[slot], 0, () -> landed(slot, frame), 0);
 		}
 

@@ -16,16 +16,16 @@ import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.fabric.client.compositor.backend.ImportFailed;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.compositor.backend.SlotMemory;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.OptionalInt;
 
 /**
  * One guest's frames for one generation, on the host (Spec C sections 3.3 and 4.2). Each new frame is copied at once
  * into the host's own texture, which is all the compose pass ever reads: a GPU-shared slot is copied on the GPU and
- * given back once that copy's fence signals; a copy-transport slot is uploaded from the pixel file and given back at
+ * given back once that copy's fence signals; a copy-transport slot is uploaded from the pixel memory and given back at
  * once. The guest never waits for the host, and the host never waits for the GPU. Render thread only.
  */
 public final class GuestImport implements AutoCloseable {
@@ -39,8 +39,8 @@ public final class GuestImport implements AutoCloseable {
 	private final SharedImages images;
 	/** GPU sharing: every slot's shared image as a texture of this game's own backend; null when copying. */
 	private final GpuTexture[] shared;
-	/** Copying: the guest's pixel file; null when sharing. */
-	private final PixelFile pixels;
+	/** Copying: the guest's pixel memory; null when sharing. */
+	private final PixelMemory pixels;
 	private final GpuTexture hostTexture;
 	private final GpuTextureView hostView;
 	private final ArrayDeque<Release> releases = new ArrayDeque<>();
@@ -52,7 +52,7 @@ public final class GuestImport implements AutoCloseable {
 	private ByteBuffer slowCopy;
 
 	private GuestImport(ControlMessage.FrameSlotsReady ready, SegmentSlotTable table, SharedImages images,
-			GpuTexture[] shared, PixelFile pixels, GpuTexture hostTexture) {
+			GpuTexture[] shared, PixelMemory pixels, GpuTexture hostTexture) {
 		this.generation = ready.generation();
 		this.width = ready.width();
 		this.height = ready.height();
@@ -68,14 +68,14 @@ public final class GuestImport implements AutoCloseable {
 	}
 
 	/**
-	 * Imports a generation's slots: GPU-shared ones by name through {@code images}, or the copy transport's pixel file.
+	 * Imports a generation's slots: GPU-shared ones by name through {@code images}, or the copy transport's pixel memory.
 	 * Takes over {@code table} on success; on failure the caller still owns it.
 	 */
 	public static GuestImport open(ControlMessage.FrameSlotsReady ready, SegmentSlotTable table, SharedImages images)
 			throws ImportFailed {
 		GpuDevice device = RenderSystem.getDevice();
 		GpuTexture[] shared = null;
-		PixelFile pixels = null;
+		PixelMemory pixels = null;
 		GpuTexture hostTexture = null;
 		try {
 			if (ready.transport() == Transport.GPU_SHARED) {
@@ -92,8 +92,12 @@ public final class GuestImport implements AutoCloseable {
 							new SlotMemory.Source.ByName(name)), "hearthside guest slot " + name);
 				}
 			} else {
-				pixels = PixelFile.open(PixelFile.forControlFile(Path.of(ready.controlFile())), ready.width(), ready.height(),
-						table.slots());
+				try {
+					// Only ever opened: memory the guest has let go of fails here rather than showing black.
+					pixels = PixelMemory.open(ready.controlFile(), ready.width(), ready.height(), table.slots());
+				} catch (IOException e) {
+					throw new ImportFailed("Opening " + ready.controlFile() + "'s pixel memory: " + e.getMessage(), e);
+				}
 			}
 			// A render attachment too, only so it can be cleared when created (OpenGL clears through a framebuffer).
 			hostTexture = device.createTexture("hearthside guest " + ready.generation(),

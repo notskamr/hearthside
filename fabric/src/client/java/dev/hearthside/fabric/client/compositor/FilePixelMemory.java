@@ -13,27 +13,28 @@ import java.nio.file.StandardOpenOption;
 /**
  * The copy transport's shared pixel file: one {@code width × height × 4} region per slot, each holding a frame's RGBA
  * rows as the guest's readback writes them (bottom-up, as Minecraft stores its render targets). Both sides map it.
+ * Used off Windows only, until phase 2 brings {@code shm_open}: on Windows the file's pages are written back to disk.
  */
-public final class PixelFile implements AutoCloseable {
+public final class FilePixelMemory implements PixelMemory {
 	// Mapped through an arena so close() unmaps it at once (a MappedByteBuffer waits for GC, and on Windows a mapped file
 	// cannot be deleted).
 	private final Arena arena;
 	private final MemorySegment pixels;
 	private final long bytesPerSlot;
 
-	private PixelFile(Arena arena, MemorySegment pixels, long bytesPerSlot) {
+	private FilePixelMemory(Arena arena, MemorySegment pixels, long bytesPerSlot) {
 		this.arena = arena;
 		this.pixels = pixels;
 		this.bytesPerSlot = bytesPerSlot;
 	}
 
 	/** Maps (creating it if needed) a file of {@code slots} regions for {@code width}×{@code height} frames. */
-	public static PixelFile open(Path file, int width, int height, int slots) {
+	public static FilePixelMemory open(Path file, int width, int height, int slots) {
 		long bytesPerSlot = (long) width * height * 4;
 		Arena arena = Arena.ofShared();
 		try (FileChannel channel = FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.READ,
 				StandardOpenOption.WRITE)) {
-			return new PixelFile(arena, channel.map(FileChannel.MapMode.READ_WRITE, 0, bytesPerSlot * slots, arena),
+			return new FilePixelMemory(arena, channel.map(FileChannel.MapMode.READ_WRITE, 0, bytesPerSlot * slots, arena),
 					bytesPerSlot);
 		} catch (IOException e) {
 			arena.close();
@@ -47,6 +48,7 @@ public final class PixelFile implements AutoCloseable {
 	}
 
 	/** Slot {@code slot}'s frame, as a direct buffer over the mapping (valid until {@link #close}). */
+	@Override
 	public ByteBuffer region(int slot) {
 		return pixels.asSlice(slot * bytesPerSlot, bytesPerSlot).asByteBuffer().order(ByteOrder.nativeOrder());
 	}
