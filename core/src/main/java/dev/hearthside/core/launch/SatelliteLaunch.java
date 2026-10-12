@@ -1,5 +1,7 @@
 package dev.hearthside.core.launch;
 
+import dev.hearthside.core.config.Preset;
+import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.core.config.SplitScreenConfig;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -32,10 +34,12 @@ public record SatelliteLaunch(int playerIndex, int controlPort, Path gameDir, St
 		Objects.requireNonNull(graphicsBackend, "graphicsBackend");
 	}
 
+	/** The default heap, and Balanced's render-distance cap (8), which every guest had before presets. */
 	public SatelliteLaunch(int playerIndex, int controlPort, Path gameDir, String guestName, String launchSecret,
 			Presentation presentation, GraphicsBackend graphicsBackend) {
 		this(playerIndex, controlPort, gameDir, guestName, launchSecret, presentation, graphicsBackend,
-				SplitScreenConfig.DEFAULTS.guestMemoryMb(), SplitScreenConfig.DEFAULTS.guestRenderDistance());
+				SplitScreenConfig.DEFAULTS.guestMemoryMb(),
+				SessionTuning.of(Preset.BALANCED, SplitScreenConfig.DEFAULTS).renderDistanceCap());
 	}
 
 	public SatelliteLaunch(int playerIndex, int controlPort, Path gameDir, String guestName, String launchSecret,

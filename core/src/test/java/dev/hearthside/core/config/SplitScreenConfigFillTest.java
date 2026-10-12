@@ -49,9 +49,10 @@ class SplitScreenConfigFillTest {
 		Files.createDirectories(file.getParent());
 		Files.writeString(file, "{\"guestMemoryMb\": 2048, \"guestRenderDistance\": \"far\", \"twoPlayerLayout\": \"stacked\"}");
 		SplitScreenConfig config = SplitScreenConfig.loadOrCreate(file);
-		assertThat(config).isEqualTo(new SplitScreenConfig(2048, 8, LayoutSettings.DEFAULTS.withTwo(LayoutSettings.TwoPlayer.STACKED)));
+		assertThat(config).isEqualTo(new SplitScreenConfig(2048, SplitScreenConfig.RENDER_DISTANCE_FROM_PRESET)
+				.withLayout(LayoutSettings.DEFAULTS.withTwo(LayoutSettings.TwoPlayer.STACKED)));
 		String rewritten = Files.readString(file);
-		assertThat(rewritten).contains("\"guestMemoryMb\": 2048").contains("\"guestRenderDistance\": 8")
+		assertThat(rewritten).contains("\"guestMemoryMb\": 2048").contains("\"guestRenderDistance\": \"preset\"")
 				.contains("\"twoPlayerLayout\": \"stacked\"").contains("\"threePlayerLayout\": \"grid_with_panel\"")
 				.contains("\"partyPanel\": true");
 		assertThat(SplitScreenConfig.loadOrCreate(file)).isEqualTo(config);
@@ -68,7 +69,8 @@ class SplitScreenConfigFillTest {
 	void aCompleteFileIsNotRewritten() throws IOException {
 		Path file = dir.resolve("hearthside.json");
 		String mine = "{\"partyPanel\": false, \"threePlayerLayout\": \"wide_top\", \"twoPlayerLayout\": \"side_by_side\","
-				+ " \"guestRenderDistance\": 12, \"guestMemoryMb\": 1024}";
+				+ " \"guestRenderDistance\": 12, \"guestMemoryMb\": 1024, \"preset\": \"balanced\", \"presetForPlayer1\": false,"
+				+ " \"vulkanOffer\": \"declined\"}";
 		Files.writeString(file, mine);
 		SplitScreenConfig.loadOrCreate(file);
 		assertThat(file).hasContent(mine);
