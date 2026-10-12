@@ -28,7 +28,7 @@ class FrameSlotsProperties {
 				case BEGIN_WRITE -> {
 					if (writing < 0) {
 						OptionalInt slot = slots.beginWrite();
-						// The consumer holds at most 2 slots, so with 4 slots the producer always finds one.
+						// The consumer holds at most 2 slots, so with DEFAULT_SLOTS slots the producer always finds one.
 						if (reading.size() <= 2) {
 							assertThat(slot).isPresent();
 						}
