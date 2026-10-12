@@ -1086,8 +1086,8 @@ public final class E2eDriver {
 		System.setProperty("hearthside.e2e.guestSaveOptions", "true");
 		long handle = onRender(() -> minecraft.getWindow().handle());
 		try {
-			// Views big enough for a GUI scale of 3, where Performance renders the guest at 2/3 (plan R3); a smaller
-			// screen clamps the window, and the frame check below then expects full resolution.
+			// Views big enough for a GUI scale of 3, where Performance still renders the guest at full resolution (reduced
+			// only from 4, after Task 8's visual QA); the frame check below expects what GuiScaleRule says either way.
 			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2560, 1440));
 			Thread.sleep(2000);
 			long mark = hostLogLength();

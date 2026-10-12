@@ -49,11 +49,8 @@ class GuiScaleRuleTest {
 
 	@Test
 	void reducedResolutionSnapsToTheGuiScale() {
-		GuiScaleRule.ViewScale three = GuiScaleRule.forView(view(960, 1080), 3, true);
-		assertThat(three.guiScale()).isEqualTo(2);
-		assertThat(three.renderScale()).isCloseTo(2 / 3.0, within(1e-9));
-		assertThat(three.frameWidth()).isEqualTo(640);
-		assertThat(three.frameHeight()).isEqualTo(720);
+		// At 3, 2/3 resolution made hint text visibly soft once stretched (Task 8's visual QA): full resolution there.
+		assertThat(GuiScaleRule.forView(view(960, 1080), 3, true)).isEqualTo(new GuiScaleRule.ViewScale(3, 1.0, 960, 1080));
 
 		GuiScaleRule.ViewScale four = GuiScaleRule.forView(view(1920, 1080), 4, true);
 		assertThat(four.guiScale()).isEqualTo(3);
@@ -64,14 +61,16 @@ class GuiScaleRuleTest {
 
 	@Test
 	void theGuiLooksTheSameSizeAtReducedResolution() {
-		for (int party = 3; party <= 6; party++) {
+		for (int party = 4; party <= 6; party++) {
 			GuiScaleRule.ViewScale scale = GuiScaleRule.forView(view(1920, 1080), party, true);
 			assertThat(scale.guiScale() / scale.renderScale()).isCloseTo(party, within(1e-9));
 		}
 	}
 
 	@Test
-	void noReductionAtTwoOrLess() {
+	void noReductionAtThreeOrLess() {
+		assertThat(GuiScaleRule.forView(view(960, 1080), 3, true).renderScale()).isEqualTo(1.0);
+		assertThat(GuiScaleRule.forView(view(960, 540), 2, true).renderScale()).isEqualTo(1.0);
 		assertThat(GuiScaleRule.forView(view(960, 540), 2, true)).isEqualTo(new GuiScaleRule.ViewScale(2, 1.0, 960, 540));
 		assertThat(GuiScaleRule.forView(view(640, 480), 1, true)).isEqualTo(new GuiScaleRule.ViewScale(1, 1.0, 640, 480));
 	}
@@ -83,7 +82,7 @@ class GuiScaleRuleTest {
 
 	@Test
 	void aTinyViewNeverGetsAZeroFrame() {
-		GuiScaleRule.ViewScale tiny = GuiScaleRule.forView(view(1, 1), 3, true);
+		GuiScaleRule.ViewScale tiny = GuiScaleRule.forView(view(1, 1), 4, true);
 		assertThat(tiny.frameWidth()).isEqualTo(1);
 		assertThat(tiny.frameHeight()).isEqualTo(1);
 		GuiScaleRule.ViewScale empty = GuiScaleRule.forView(view(0, 0), 2, false);
