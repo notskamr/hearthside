@@ -70,8 +70,9 @@ public final class FrameExporter {
 	private boolean copyOnly;
 	private boolean probeLogged;
 	private long frame;
-	// Frames exported, logged as a rate every 5 s.
+	// Frames exported, logged as a rate every 5 s, and frames dropped because the host held every slot.
 	private int exportedFrames;
+	private int droppedFrames;
 	private long fpsWindowStart = System.nanoTime();
 
 	private FrameExporter(Minecraft minecraft, ControlConnection connection) {
@@ -121,6 +122,7 @@ public final class FrameExporter {
 		}
 		OptionalInt claimed = current.slots.beginWrite();
 		if (claimed.isEmpty()) {
+			droppedFrames++;
 			return; // the host still holds every slot; drop this frame
 		}
 		current.draw(claimed.getAsInt(), mainColor, RenderSystem.getDevice().createCommandEncoder(), ++frame);
@@ -131,8 +133,10 @@ public final class FrameExporter {
 	private void logRate() {
 		long now = System.nanoTime();
 		if (now - fpsWindowStart >= FPS_INTERVAL_NANOS) {
-			HearthsideMod.LOGGER.info("Hearthside exporter fps={}", Math.round(exportedFrames * 1e9 / (now - fpsWindowStart)));
+			HearthsideMod.LOGGER.info("Hearthside exporter fps={} dropped={}",
+					Math.round(exportedFrames * 1e9 / (now - fpsWindowStart)), droppedFrames);
 			exportedFrames = 0;
+			droppedFrames = 0;
 			fpsWindowStart = now;
 		}
 	}
@@ -203,7 +207,8 @@ public final class FrameExporter {
 		if (choice == Transport.GPU_SHARED) {
 			try {
 				current = SharedFrames.allocate(images, controlFile, table, width, height, pattern);
-			} catch (ImportFailed | RuntimeException e) {
+			} catch (ImportFailed | RuntimeException | LinkageError e) {
+				// A LinkageError: no Vulkan runtime for the export device (an OpenGL game can still run without one).
 				HearthsideMod.LOGGER.warn("GPU frame sharing failed; copying frames instead", e);
 				choice = Transport.COPY;
 			}
@@ -359,7 +364,7 @@ public final class FrameExporter {
 					table.setMemoryType(slot, memory.memoryType());
 				}
 				table.setDescription(description);
-			} catch (ImportFailed | RuntimeException e) {
+			} catch (ImportFailed | RuntimeException | LinkageError e) {
 				frames.closeImages();
 				throw e;
 			}
