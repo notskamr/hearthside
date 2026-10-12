@@ -1815,6 +1815,27 @@ public final class E2eDriver {
 			check(hostLogSince(mark).contains("hearthside vulkan offer: not offered (vulkan can't share frames)"),
 					"the log says Vulkan can't share");
 			leaveLobby();
+
+			// (f) The real probe on this machine's Vulkan (task review: it never ran otherwise before the laptop): the card
+			// shows exactly when the probe says this machine's Vulkan can share frames, and nothing breaks either way.
+			System.clearProperty("hearthside.e2e.noVulkanLoader");
+			SplitScreenConfigFile.save(gameDir, before.withVulkanOffer(VulkanOffer.PENDING));
+			mark = hostLogLength();
+			Screen opened = pressCoop();
+			String probed = hostLogSince(mark);
+			log("   K1 (f) real probe: " + probed.lines()
+					.filter(l -> l.contains("hearthside vulkan probe") || l.contains("hearthside vulkan offer")).toList());
+			boolean card = onOfferCard(opened);
+			check(card == probed.contains("hearthside vulkan offer: shown"), "the card shows exactly when the log says so");
+			check(card || probed.contains("not offered (vulkan can't share frames)"), "the real probe answered: a card or the reason");
+			if (card) {
+				onRender(() -> {
+					minecraft.gui.screen().onClose();
+					return null;
+				});
+			} else {
+				leaveLobby();
+			}
 		} finally {
 			hooks.forEach(System::clearProperty);
 			SplitScreenConfigFile.save(gameDir, before);
