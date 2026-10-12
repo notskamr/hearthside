@@ -4282,7 +4282,8 @@ public final class E2eDriver {
 
 	/**
 	 * H7 (Spec D section 3.5, plan R8): player 1 on a controller in the survival inventory. Minecraft's toasts never
-	 * cover the hints, which move clear and stay drawn; a keyboard tutorial toast never appears; the screen draws one
+	 * cover the hints, which move clear and stay drawn; a keyboard tutorial toast already up goes when player 1 takes the
+	 * controller, and none appears after; the screen draws one
 	 * hint row; and a bundle offers Choose and Take out, with the right stick choosing.
 	 */
 	private void hintsAndToasts() throws Exception {
@@ -4300,7 +4301,17 @@ public final class E2eDriver {
 			bundle.set(DataComponents.BUNDLE_CONTENTS, contents.toImmutable());
 			server.getPlayerList().getPlayerByName(name).getInventory().setItem(0, bundle);
 		}).join();
+		// A keyboard tutorial toast already up while player 1 plays on the keyboard (user, 2026-10-12: "hold down the mouse
+		// button to mine" stayed stuck once they took a controller): taking the controller clears it.
+		onRender(() -> {
+			minecraft.gui.toastManager().addToast(new TutorialToast(minecraft.font, TutorialToast.Icons.MOUSE,
+					Component.literal("E2E tutorial before the controller"), null, false));
+			return null;
+		});
+		waitFor("the keyboard tutorial toast showing", Duration.ofSeconds(3), () -> onRender(this::hasTutorialToast));
 		claimHostPad();
+		waitFor("taking the controller clears the keyboard tutorial toast", Duration.ofSeconds(3),
+				() -> !onRender(this::hasTutorialToast));
 		long mark = hostLogLength();
 		try {
 			press(HOST_PAD, PadButton.Y);
