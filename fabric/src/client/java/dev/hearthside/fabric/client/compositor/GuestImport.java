@@ -94,8 +94,10 @@ public final class GuestImport implements AutoCloseable {
 				pixels = PixelFile.open(PixelFile.forControlFile(Path.of(ready.controlFile())), ready.width(), ready.height(),
 						table.slots());
 			}
+			// A render attachment too, only so it can be cleared when created (OpenGL clears through a framebuffer).
 			hostTexture = device.createTexture("hearthside guest " + ready.generation(),
-					GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING,
+					GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
+							| GpuTexture.USAGE_RENDER_ATTACHMENT,
 					GpuFormat.RGBA8_UNORM, ready.width(), ready.height(), 1, 1);
 			FrameHooks.poison(hostTexture);
 			return new GuestImport(ready, table, images, shared, pixels, hostTexture);
