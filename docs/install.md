@@ -60,7 +60,7 @@ starting a party); it applies from the next party.
 | `preset` | `auto` | How hard the extra players' games work: `quality`, `balanced`, `performance`, or `auto`, which picks one for this PC each time you open Co-op (it's in the log: `Hearthside preset auto → …`). See **Performance presets** below. |
 | `presetForPlayer1` | `false` | `true` gives player 1's own game the preset's render distance, lighter graphics and frame-rate cap too. |
 | `guestMemoryMb` | 1536 | Memory for each extra player's game, in MB (768–8192). Lower it on a tight machine; raise it for big modpacks. |
-| `guestRenderDistance` | `"preset"` | The most chunks an extra player's game renders (2–32). `"preset"` uses the preset's; `0` lets each player use their own setting. Player 1 keeps theirs. |
+| `guestRenderDistance` | `"preset"` | The most chunks an extra player's game renders (2–32). `"preset"` uses the preset's; `0` lets each player use their own setting. Player 1 keeps theirs, unless `presetForPlayer1` is on. |
 | `vulkanOffer` | `pending` | Your answer to the "runs smoother on Vulkan" card (`accepted` or `declined`). Set it back to `pending` to see the card again. |
 | `twoPlayerLayout` | `side_by_side` | `side_by_side` or `stacked` (top and bottom). |
 | `threePlayerLayout` | `grid_with_panel` | `grid_with_panel` (a party map in the fourth corner), `wide_top` or `tall_left`. |
@@ -77,8 +77,10 @@ The preset applies for the session only; nobody's own settings are changed.
 | World simulation distance | your own | your own | at most 6 |
 | Extra players' resolution | full | full | slightly lower on big views, with text the same size as yours |
 
-`auto` picks **Performance** on integrated graphics (most laptops) or under 12 GB of memory, **Balanced** on a
-graphics card with 3–4 players or a window bigger than 1440p, and **Quality** otherwise.
+`auto` picks **Performance** on integrated graphics (most laptops), on graphics it can't identify, or under 12 GB of
+memory; **Balanced** on a graphics card with 3–4 players (it counts the connected controllers) or a window bigger than
+1440p; and **Quality** otherwise. The lower resolution only applies to views big enough to keep text sharp: on a 1080p
+TV with three or four players, Performance saves through render distance, lighter graphics and the frame-rate cap.
 
 **Graphics.** Minecraft's own **Options → Video Settings → Graphics API** picks OpenGL or Vulkan; the other players
 follow player 1. On some PCs (most Intel laptops) OpenGL can't hand each player's picture straight to player 1's
@@ -97,6 +99,10 @@ their pause menu; they stay theirs. Fullscreen is player 1's alone.
 - If a controller disconnects mid-game, reconnect it to carry on; a proper "Reconnect your controller" screen comes next.
 - Skins: Minecraft's built-in skins only. Your own skin file or a player's skin by name comes soon.
 - On the lobby's name keyboard, type with the controller; the PC keyboard can't type into it yet.
+- Each player's own Minecraft settings (brightness, FOV, volumes…) belong to the seat they sit in, not their profile;
+  per-profile settings and controller sensitivity come with the next update.
+- **Switch and restart** starts Minecraft again the way your launcher started it. If it doesn't come back (some
+  launchers can't be restarted from inside the game), start Minecraft yourself: it's already set to Vulkan.
 - Windows only.
 
 ## When something goes wrong
