@@ -294,15 +294,20 @@ public final class Compositor {
 	 */
 	public GpuTextureView compose(GpuTextureView hostView, CommandEncoder encoder, int surfaceWidth, int surfaceHeight) {
 		long start = System.nanoTime();
-		if (!canvas.ensure(surfaceWidth, surfaceHeight)) {
-			return hostView;
-		}
-		if (surfaceWidth != layoutWidth || surfaceHeight != layoutHeight) {
-			layoutWidth = surfaceWidth;
-			layoutHeight = surfaceHeight;
-			minecraft.execute(onWindowResized);
-		}
 		try {
+			if (!canvas.ensure(surfaceWidth, surfaceHeight)) {
+				return hostView;
+			}
+			if (surfaceWidth != layoutWidth || surfaceHeight != layoutHeight) {
+				layoutWidth = surfaceWidth;
+				layoutHeight = surfaceHeight;
+				// Runs at once here (the render thread, outside a task): the new layout this very frame.
+				minecraft.execute(onWindowResized);
+				if (active != this) {
+					// The last guest had just left: the new layout ended split-screen, and closed the canvas with it.
+					return hostView;
+				}
+			}
 			releaseFinished();
 			if (!framesFresh) {
 				frames = views.frames(System.nanoTime());

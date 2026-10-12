@@ -1068,6 +1068,7 @@ public final class E2eDriver {
 	 */
 	private void forcedPerformancePreset() throws Exception {
 		Path options = minecraft.gameDirectory.toPath().resolve("hearthside/satellite-1/options.txt");
+		long stepMark = hostLogLength();
 		guestLeaves();
 		String before = Files.exists(options) ? Files.readString(options) : null;
 		// The guest's own settings, each unlike what Performance sets for the session.
@@ -1135,6 +1136,9 @@ public final class E2eDriver {
 			}
 			guestRejoins();
 		}
+		// The last guest left as the window went back to its size (just above): compose never failed over it.
+		check(!hostLogSince(stepMark).contains("hearthside could not compose the canvas"),
+				"the canvas was composed throughout, the window resizing as the last guest left");
 	}
 
 	/** Every {@code key:value} line of an options.txt. */
@@ -1258,6 +1262,7 @@ public final class E2eDriver {
 
 	/** V3: when a guest's GPU or driver differs from the host's, its frames are copied and the host says why (Spec C 3.7). */
 	private void deviceMismatchCopies() throws Exception {
+		long stepMark = hostLogLength();
 		System.setProperty("hearthside.e2e.fakeDeviceMismatch", "true");
 		try {
 			onRender(() -> {
@@ -1279,6 +1284,9 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.e2e.fakeDeviceMismatch");
 		}
+		// The guest left as C12's window went back to its size: compose never failed over it.
+		check(!hostLogSince(stepMark).contains("hearthside could not compose the canvas"),
+				"the canvas was composed throughout, the last guest leaving as the window resized");
 	}
 
 	/** V9: a guest whose machine has no Vulkan runtime copies its frames instead of crashing (final review M6). */
