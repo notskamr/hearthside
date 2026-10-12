@@ -61,14 +61,15 @@ loom {
 			def backend = project.findProperty('e2eBackend')
 			if (backend) {
 				programArgs '--graphicsBackend', e2eBackendName(backend, 'e2eBackend')
-				if (backend == 'vulkan') {
-					// Iris 1.11.7 is OpenGL-only: it calls OpenGL while Minecraft starts and aborts the JVM on Vulkan.
-					vmArg '-Dfabric.debug.disableModIds=iris'
-				}
 			}
 			def guestBackend = project.findProperty('e2eGuestBackend')
 			if (guestBackend) {
 				vmArg "-Dhearthside.e2e.guestBackend=${e2eBackendName(guestBackend, 'e2eGuestBackend')}"
+			}
+			if (backend == 'vulkan' || guestBackend == 'vulkan') {
+				// Iris 1.11.7 is OpenGL-only: it calls OpenGL while Minecraft starts and aborts the JVM on Vulkan. Guests
+				// inherit the host's -D options, so this reaches them too.
+				vmArg '-Dfabric.debug.disableModIds=iris'
 			}
 			if (project.findProperty('e2eValidation') == 'true') {
 				programArg '--vulkanValidation'

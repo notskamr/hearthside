@@ -16,7 +16,8 @@ import org.spongepowered.asm.mixin.injection.At;
 /**
  * Minecraft's one blit of its finished frame to the window, on either backend. A compositing host hands over its
  * canvas, with every player's view drawn in, instead of player 1's frame (Spec C section 3.3). Satellites pass through
- * untouched: their exporter still takes the frame at the OpenGL present ({@code PresentMixin}).
+ * untouched: an exporting satellite never acquires a window image, so it never reaches the blit; its exporter takes the
+ * frame there instead ({@code SatelliteFrameMixin}, which also wraps the acquire; the two conditions never overlap).
  */
 @Mixin(Minecraft.class)
 abstract class HostPresentMixin {

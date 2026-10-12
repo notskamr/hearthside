@@ -110,8 +110,8 @@ public final class E2eDriver {
 			{"B8", "L2"}, {"B10", "B4"}, {"B9", "B4"}, {"L4", "B9"}, {"L8", "L4"}, {"L10", "L8"}, {"L3", "L10"},
 			{"B5", "L3"}, {"W1", "B5"}, {"S1", "L2", "W1"}, {"W2", "B5"},
 			// The in-world session: the world opens with the host alone.
-			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
-			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"},
+			{"1"}, {"2", "1"}, {"C1", "1"}, {"C2", "1"}, {"V1", "C2"}, {"V6", "1"}, {"O1", "C2"}, {"C3", "1"}, {"C4", "C2"},
+			{"V2", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
 			{"C6", "C2"}, {"C12", "1"}, {"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"D5", "C7b"}, {"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
 			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"},
@@ -221,6 +221,8 @@ public final class E2eDriver {
 			step("2 satellite loads Sodium and Iris", this::satelliteHasCompatMods);
 			step("C1 guest window is hidden", this::guestWindowHidden);
 			step("C2 guest frames reach the host's window", this::guestFramesComposited);
+			step("V1 frames are shared zero-copy on this backend", this::zeroCopyOnThisBackend);
+			step("V6 the guest's window is hidden on its backend", this::guestWindowHiddenOnItsBackend);
 			step("O1 the overlay pass draws over every view", this::overlayDrawsOverViews);
 			step("C3 host window is not moved or resized by split-screen", this::hostWindowUntouched);
 			step("C4 host window resize re-lays out the guest", this::resizeRelaysOut);
@@ -230,6 +232,7 @@ public final class E2eDriver {
 			step("V7 minimise, restore and fullscreen keep views composited", this::minimiseRestoreFullscreen);
 			step("V8 a broken view shader falls back to a plain blit", this::brokenViewShaderFallsBack);
 			step("C5 copy transport works", this::copyTransportWorks);
+			step("C5b two quick resizes on the copy transport keep the guest composited", this::quickResizesOnCopy);
 			step("C6 maximise and restore keep the guest composited", () -> sampleGaps(this::maximiseAndRestore));
 			step("C12 a failed GPU import falls back to copying frames", this::failedImportFallsBackToCopy);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
@@ -387,6 +390,31 @@ public final class E2eDriver {
 				"the guest's view went live only once Minecraft's loading screen was gone");
 		check(satelliteLog().contains("hearthside skipped the chat-verification toast"),
 				"a guest arriving isn't greeted with Minecraft's chat-verification warning");
+	}
+
+	/** V1: on a GPU that can share, the guest's frames reach the host zero-copy, whatever the backend (Spec C 3.5). */
+	private void zeroCopyOnThisBackend() throws Exception {
+		String host = hostLogSince(0);
+		Matcher backend = Pattern.compile("hearthside graphics backend=(opengl|vulkan)").matcher(host);
+		check(backend.find(), "the host logged its graphics backend");
+		String expected = "frames gpu_shared";
+		Matcher frames = Pattern.compile("hearthside compositor: player 2 frames ([a-z_]+) [0-9]+x[0-9]+ backend=([a-z]+)").matcher(host);
+		String last = null;
+		while (frames.find()) {
+			last = frames.group(0);
+		}
+		log("   " + last);
+		check(last != null && last.contains(expected) && last.endsWith("backend=" + backend.group(1)),
+				"player 2's frames are shared, not copied, on a " + backend.group(1) + " host");
+	}
+
+	/** V6: the guest's window is created hidden whichever backend its game started on (Spec C 3.4). */
+	private void guestWindowHiddenOnItsBackend() throws Exception {
+		waitFor("satellite window flags line", Duration.ofSeconds(30),
+				() -> satelliteLog().contains("hearthside window flags hidden=true"));
+		Matcher m = Pattern.compile("using graphics backend (opengl|vulkan)").matcher(satelliteLog());
+		check(m.find(), "the guest's game logged its backend");
+		log("   guest backend " + m.group(1));
 	}
 
 	private void overlayDrawsOverViews() throws Exception {
@@ -562,6 +590,21 @@ public final class E2eDriver {
 		} finally {
 			System.clearProperty("hearthside.forceCopy");
 		}
+	}
+
+	/** C5b: two resizes in quick succession while copying frames: readbacks still in flight are dropped (Review Focus 2). */
+	private void quickResizesOnCopy() throws Exception {
+		check(satelliteLog().contains("hearthside frame slots ready transport=copy"), "the guest is copying frames (after C5)");
+		long mark = hostLogLength();
+		int satMark = satelliteLog().length();
+		int before = lastProbeGeneration(2);
+		long handle = onRender(() -> minecraft.getWindow().handle());
+		onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 1280, 720));
+		Thread.sleep(150);
+		onRender(() -> SDLVideo.SDL_SetWindowSize(handle, hostWindowBefore.width(), hostWindowBefore.height()));
+		waitForProbe(2, hostLogLength(), Duration.ofSeconds(20), before);
+		check(!hostLogSince(mark).contains("exception"), "no exception in the host log");
+		check(!satelliteLog().substring(satMark).contains("exception"), "no exception in the guest's log");
 	}
 
 	/** Where the host log stood when gap sampling first started; G1 reads every gap line after it. */
