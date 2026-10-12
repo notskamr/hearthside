@@ -42,11 +42,12 @@ import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
+import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
+import dev.hearthside.core.compositor.TransportDecision;
 import dev.hearthside.fabric.client.compositor.Compositor;
 import dev.hearthside.fabric.client.compositor.OverlayPass;
-import dev.hearthside.fabric.client.compositor.GlInterop;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.window.WindowPlacer;
@@ -170,7 +171,7 @@ public final class Party {
 		HearthsideMod.LOGGER.info("Hearthside session open: control channel on {}", controlServer.port());
 	}
 
-	/** Composite into this window when the GL context supports it; otherwise tile real windows. Render thread. */
+	/** Composite into this window when this game can; otherwise tile real windows. Render thread. */
 	private void choosePresentation() {
 		GraphicsBackend own = "Vulkan".equals(RenderSystem.getDevice().getDeviceInfo().backendName())
 				? GraphicsBackend.VULKAN : GraphicsBackend.OPENGL;
@@ -190,11 +191,12 @@ public final class Party {
 			// E2E: tiled windows, as where the canvas can't be created.
 			composite = !Boolean.getBoolean("hearthside.e2e.forceTiled") && Compositor.canComposite();
 			if (composite) {
-				// Decided once per session here, where the window is; guests follow it (Spec B section 3.5). On Vulkan
-				// there is no GL to probe: what this game's backend can import decides.
-				hostTransport = own == GraphicsBackend.OPENGL
-						? TransportChoice.choose(GlInterop.probe(false))
-						: TransportChoice.decide(SharedImages.forThisGame().facts(), Presentation.forceCopy()).transport();
+				// Decided once per session here, where the window is: a host that can't import launches every guest
+				// copying (Spec C section 3.7, step 1). Each guest's slots are checked against it as they arrive.
+				SharingFacts facts = SharedImages.forThisGame().facts();
+				TransportDecision decision = TransportChoice.decide(facts, Presentation.forceCopy());
+				HearthsideMod.LOGGER.info("Hearthside GPU sharing on this host: {} -> {}", facts, decision);
+				hostTransport = decision.transport();
 			}
 		} catch (RuntimeException | LinkageError e) {
 			HearthsideMod.LOGGER.error("Hearthside could not set up compositing; tiled windows for this session", e);
