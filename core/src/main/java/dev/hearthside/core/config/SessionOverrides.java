@@ -17,6 +17,8 @@ public final class SessionOverrides<K> {
 	private record Override(Object own, Object session) {}
 
 	private final Map<K, Override> overrides = new HashMap<>();
+	/** The value the player last changed each option to, away from the session's. */
+	private final Map<K, Object> choices = new HashMap<>();
 
 	/**
 	 * The session sets {@code key} to {@code session} in place of the player's {@code own}. Applying a key again keeps
@@ -39,6 +41,7 @@ public final class SessionOverrides<K> {
 		}
 		if (!Objects.equals(current, override.session())) {
 			overrides.remove(key);
+			choices.put(key, current);
 			return current;
 		}
 		return override.own();
@@ -48,6 +51,14 @@ public final class SessionOverrides<K> {
 	public Object valueAfterSave(K key) {
 		Override override = overrides.get(key);
 		return override == null ? null : override.session();
+	}
+
+	/**
+	 * The value the player last changed {@code key} to themselves this session (away from the session's), or null if
+	 * they haven't. It stays theirs even if the session sets the option again later.
+	 */
+	public Object playersChoice(K key) {
+		return choices.get(key);
 	}
 
 	/** Whether any option is overridden for the session. */

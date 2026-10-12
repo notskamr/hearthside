@@ -78,6 +78,31 @@ class SessionOverridesTest {
 	}
 
 	@Test
+	void thePlayersChoiceIsRememberedOnceTheyChangeIt() {
+		// The frame rate is set again at each new layout; once the player has chosen their own, pacing follows it.
+		var overrides = new SessionOverrides<String>();
+		assertThat(overrides.playersChoice("maxFps")).isNull();
+		overrides.apply("maxFps", 120, 40);
+		overrides.valueToSave("maxFps", 40);
+		assertThat(overrides.playersChoice("maxFps")).isNull();
+		overrides.valueToSave("maxFps", 90);
+		assertThat(overrides.playersChoice("maxFps")).isEqualTo(90);
+		// Set over again for the session (their 200 is above the host's refresh rate), then changed again: the latest.
+		overrides.apply("maxFps", 200, 140);
+		assertThat(overrides.playersChoice("maxFps")).isEqualTo(90);
+		overrides.valueToSave("maxFps", 30);
+		assertThat(overrides.playersChoice("maxFps")).isEqualTo(30);
+	}
+
+	@Test
+	void anUnchangedOptionHasNoPlayersChoice() {
+		var overrides = new SessionOverrides<String>();
+		overrides.apply("renderDistance", 12, 6);
+		assertThat(overrides.valueToSave("renderDistance", 6)).isEqualTo(12);
+		assertThat(overrides.playersChoice("renderDistance")).isNull();
+	}
+
+	@Test
 	void applyingAgainKeepsTheFirstOwnValue() {
 		// The frame-rate cap is applied again on each new viewport; the player's own value stays the one from before.
 		var overrides = new SessionOverrides<String>();
