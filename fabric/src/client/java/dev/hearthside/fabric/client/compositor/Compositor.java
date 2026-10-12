@@ -68,6 +68,8 @@ public final class Compositor {
 	private final Canvas canvas = new Canvas("hearthside canvas");
 	/** The fallback's per-seat scratch pictures, for views drawn at another size than their frame's. */
 	private final Map<Integer, Canvas> scratch = new HashMap<>();
+	/** The fallback's one opaque texel, which puts the canvas's alpha back to 1 after the views are copied in. */
+	private final Canvas opaqueTexel = new Canvas("hearthside opaque texel");
 	private final CanvasReadback readback = new CanvasReadback();
 	private Rect hostViewport;
 	private double screenPerFb = 1.0;
@@ -141,6 +143,7 @@ public final class Compositor {
 		c.retired.clear();
 		c.scratch.values().forEach(Canvas::close);
 		c.scratch.clear();
+		c.opaqueTexel.close();
 		c.canvas.close();
 	}
 
@@ -299,6 +302,8 @@ public final class Compositor {
 			stale.clear();
 			List<Draw> draws = new ArrayList<>();
 			List<CanvasReadback.GuestView> guests = new ArrayList<>();
+			boolean tearCheck = FrameHooks.tearCheck();
+			List<CanvasReadback.SteadyView> steady = new ArrayList<>();
 			for (ViewFrame view : frames) {
 				Rect rect = view.rect();
 				drawn.put(view.seat(), rect);
@@ -320,10 +325,18 @@ public final class Compositor {
 				draws.add(new Draw(view.seat(), imp.hostTexture(), rect, view.alpha(), waiting, imp.rowsTopDown()));
 				framed.add(view.seat());
 				guests.add(new CanvasReadback.GuestView(view.seat() + 1, imp.generation(), rect));
+				if (tearCheck && view.alpha() >= 1f && !waiting && rect.equals(target)) {
+					// Fully faded in, at its frame's size and not gliding: every pixel is the guest's own.
+					steady.add(new CanvasReadback.SteadyView(view.seat() + 1, imp, rect));
+				}
 			}
-			draw(encoder, draws, OverlayPass.texture());
+			// While checking frames, nothing of Hearthside's (borders, name tags) lands on the sampled points.
+			draw(encoder, draws, tearCheck ? Optional.empty() : OverlayPass.texture());
 			retireGone();
 			readback.afterCompose(encoder, canvas, guests, frames);
+			if (tearCheck) {
+				readback.checkTears(encoder, canvas, steady);
+			}
 		} catch (RuntimeException e) {
 			// Never take the game down for a frame: show player 1's own view instead, and say why once.
 			if (!composeFailed) {
@@ -356,10 +369,11 @@ public final class Compositor {
 			ViewPipeline.drawPlaced(encoder, canvas, d.source(), d.rect(),
 					scratch.computeIfAbsent(d.seat(), seat -> new Canvas("hearthside fallback view " + seat)));
 		}
-		if (overlay.isPresent()) {
-			try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside overlay", canvas.view(), Optional.empty())) {
-				ViewPipeline.drawOverlay(pass, overlay.get(), overlaySameSize);
-			}
+		opaqueTexel.ensure(1, 1); // opaque black from creation
+		try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside overlay", canvas.view(), Optional.empty())) {
+			// The copies brought each frame's alpha with them; views are opaque pictures, as the view pipeline draws them.
+			ViewPipeline.makeOpaque(pass, opaqueTexel.view());
+			overlay.ifPresent(texture -> ViewPipeline.drawOverlay(pass, texture, overlaySameSize));
 		}
 	}
 
