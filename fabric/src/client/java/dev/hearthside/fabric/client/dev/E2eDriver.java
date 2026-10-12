@@ -255,6 +255,14 @@ public final class E2eDriver {
 					openWorld();
 				}
 				waitFor("host session", Duration.ofSeconds(180), () -> Party.current() != null);
+				// In play, not on the world's loading screen: a focused run's first step starts here. Not fatal: a screen
+				// a full run left open is the steps' business.
+				try {
+					waitFor("player 1 in play", Duration.ofSeconds(120),
+							() -> onRender(() -> minecraft.player != null && minecraft.gui.screen() == null));
+				} catch (AssertionError e) {
+					log("   " + e.getMessage());
+				}
 				hostWindowBefore = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 			}
 			step("1 guest joins", this::guestJoins);
