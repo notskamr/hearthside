@@ -53,8 +53,7 @@ tools/e2e/run-e2e.sh full                     # every step, then step 7
 A step that works from its section's starting state (the title screen, or the world with the host alone) needs
 nothing. So a focused run that picks a step which changes the party for later steps (C7, C7b and D5 add players; 1
 adds Guest2) without the step that restores it (C7c, 5) hands the later steps a different party. The lobby's
-leftovers reach the world the same way unless `W2` runs. Both `M1` steps share one id: `-Pe2eOnly=M1` runs both, and
-everything the two need.
+leftovers reach the world the same way unless `W2` runs. Every step id is unique.
 
 ## Results — 2026-10-11 (after final-review fixes), Windows 11, Ryzen 5 7600X, RX 9060 XT, 1920×1080
 
