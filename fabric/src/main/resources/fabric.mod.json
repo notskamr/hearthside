@@ -8,7 +8,8 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": ["dev.hearthside.fabric.HearthsideMod"],
-		"client": ["dev.hearthside.fabric.client.HearthsideClient"]
+		"client": ["dev.hearthside.fabric.client.HearthsideClient"],
+		"sodium:config_api_user": ["dev.hearthside.fabric.client.satellite.SodiumGuestOptions"]
 	},
 	"mixins": [
 		"hearthside.mixins.json",

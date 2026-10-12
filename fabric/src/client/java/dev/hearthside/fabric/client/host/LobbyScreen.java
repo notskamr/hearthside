@@ -65,9 +65,12 @@ public final class LobbyScreen extends Screen {
 		}
 	}
 
-	/** Portrait cards, as in the draft, centred between the title and the hints. */
+	/**
+	 * Portrait cards, as in the draft, centred between the title and the hints. Narrow windows keep only a slim margin,
+	 * so a typing card's keyboard still has room for its whole legend.
+	 */
 	private Card card(int seat) {
-		int w = Math.min(100, (width - 40 - 3 * CARD_GAP) / SEATS);
+		int w = Math.min(100, (width - 20 - 3 * CARD_GAP) / SEATS);
 		int h = Math.max(100, Math.min((int) (w * 1.6), height - HEADER - FOOTER - 8));
 		int left = (width - (SEATS * w + 3 * CARD_GAP)) / 2;
 		int top = HEADER + Math.max(4, (height - HEADER - FOOTER - h) / 2);
@@ -372,8 +375,8 @@ public final class LobbyScreen extends Screen {
 					party.padStyleOf(seat));
 			if (card.nameProblem() != null) {
 				String problem = font.plainSubstrByWidth(card.nameProblem(), c.w - 8);
-				HearthDraw.inkCentred(g, font, Component.literal(problem), c.centre(), y + KeyboardWidget.height() + 3,
-						ERROR_INK);
+				HearthDraw.inkCentred(g, font, Component.literal(problem), c.centre(),
+						y + KeyboardWidget.height(card.keyboard(), c.w - 6) + 3, ERROR_INK);
 			}
 		}
 	}

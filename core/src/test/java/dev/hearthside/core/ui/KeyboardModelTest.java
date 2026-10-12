@@ -74,7 +74,7 @@ class KeyboardModelTest {
 	}
 
 	@Test
-	void nameModeSkipsSymbolsAndSpace() {
+	void nameModeSkipsSymbolsAndSpacesWithUnderscore() {
 		var keyboard = KeyboardModel.forName("");
 		keyboard.nextLayer();
 		keyboard.nextLayer();
@@ -83,7 +83,16 @@ class KeyboardModelTest {
 		assertThat(keyboard.layer()).isEqualTo(Layer.UPPER);
 		keyboard.type();
 		keyboard.space();
-		assertThat(keyboard.text()).isEqualTo("Q");
+		keyboard.type();
+		assertThat(keyboard.text()).isEqualTo("Q_Q");
+		assertThat(keyboard.canConfirm()).isTrue();
+	}
+
+	@Test
+	void spaceReplacesAnUntouchedSuggestion() {
+		var keyboard = KeyboardModel.forName("Hazel");
+		keyboard.space();
+		assertThat(keyboard.text()).isEqualTo("_");
 	}
 
 	@Test
