@@ -2,7 +2,6 @@ package dev.hearthside.fabric.client.mixin.backend;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
-import dev.hearthside.fabric.client.compositor.backend.SlotMemory;
 import dev.hearthside.fabric.client.compositor.backend.VulkanImport;
 import java.nio.LongBuffer;
 import org.lwjgl.PointerBuffer;
@@ -38,12 +37,12 @@ abstract class VulkanGpuTextureImportMixin {
 	private int hearthside$importInstead(long allocator, VkImageCreateInfo imageInfo,
 			VmaAllocationCreateInfo allocationInfo, LongBuffer image, PointerBuffer allocation,
 			VmaAllocationInfo allocationResult) {
-		SlotMemory memory = VulkanImport.take();
-		if (memory == null) {
+		VulkanImport.Request request = VulkanImport.take();
+		if (request == null) {
 			return Vma.vmaCreateImage(allocator, imageInfo, allocationInfo, image, allocation, allocationResult);
 		}
 		// The allocation handle stays 0; a failure throws out of the constructor and leaves nothing behind.
-		hearthside$importedMemory = VulkanImport.createImage(device.vkDevice(), imageInfo, memory, image);
+		hearthside$importedMemory = VulkanImport.createImage(device.vkDevice(), imageInfo, request, image);
 		return VK10.VK_SUCCESS;
 	}
 
