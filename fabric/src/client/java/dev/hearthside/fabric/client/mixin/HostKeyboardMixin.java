@@ -21,7 +21,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * function keys (ruling P-12). On keyboard and mouse, or with a screen open, keys are player 1's as ever. Releases always
  * go through, so a key held down before the keyboard took over is let go. Every event passes here first, on any screen or
  * none, so this is also where a held Esc or Enter that an on-screen keyboard took has its repeats swallowed until it
- * is let go. If anything here fails, the key goes to Minecraft as if Hearthside weren't here.
+ * is let go. Esc in play also cancels player 1's Add player prompt while it is up. If anything here fails, the key goes
+ * to Minecraft as if Hearthside weren't here.
  */
 @Mixin(KeyboardHandler.class)
 abstract class HostKeyboardMixin {
@@ -35,7 +36,8 @@ abstract class HostKeyboardMixin {
 		try {
 			int key = event.key();
 			boolean taken = KeyboardFocus.heldRepeat(action, key)
-					|| action != InputConstants.RELEASE && KeyboardFocus.keyPressed(hearthside$newcomerKeyboard(), key);
+					|| action != InputConstants.RELEASE && KeyboardFocus.keyPressed(hearthside$newcomerKeyboard(), key)
+					|| action == InputConstants.PRESS && key == InputConstants.KEY_ESCAPE && hearthside$cancelAddPlayer();
 			if (taken) {
 				ci.cancel();
 			}
@@ -58,6 +60,20 @@ abstract class HostKeyboardMixin {
 		} catch (RuntimeException e) {
 			hearthside$failed(e);
 		}
+	}
+
+	/**
+	 * Esc in play while player 1's Add player prompt is up cancels it, and only that: no pause menu (plan P-9). Its
+	 * repeats are swallowed until it is let go. With a screen open, Esc is that screen's as ever.
+	 */
+	private static boolean hearthside$cancelAddPlayer() {
+		Party party = Party.current();
+		if (party == null || Minecraft.getInstance().gui.screen() != null || !party.addPlayerShowing()) {
+			return false;
+		}
+		party.cancelAddPlayer();
+		KeyboardFocus.swallowRepeats(InputConstants.KEY_ESCAPE);
+		return true;
 	}
 
 	private static Optional<KeyboardFocus.Target> hearthside$newcomerKeyboard() {

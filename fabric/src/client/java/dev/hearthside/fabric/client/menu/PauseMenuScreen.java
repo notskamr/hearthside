@@ -15,6 +15,7 @@ import dev.hearthside.fabric.client.ui.HintChip;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 import net.minecraft.client.InputType;
 import net.minecraft.client.Minecraft;
@@ -39,7 +40,7 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	private static final Component TITLE = Component.literal("Paused");
 	private static final Component RESUME = Component.literal("Resume"), OPTIONS = Component.literal("Options…"),
 			GAME_MENU = Component.literal("Game menu…"), LEAVE = Component.literal("Leave game"),
-			SPLIT_SCREEN = Component.literal("Split-screen…");
+			SPLIT_SCREEN = Component.literal("Split-screen…"), ADD_PLAYER = Component.literal("Add player");
 	private static final int BUTTON_W = 150, BUTTON_H = 20, GAP = 4, PAD = 10, MARGIN = 6, HINT_GAP = 4;
 	/** The hotbar and experience bar at the bottom of the view, kept clear. */
 	private static final int HUD = 30;
@@ -59,8 +60,12 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	private static WeakReference<PauseScreen> gameMenu = new WeakReference<>(null);
 	private static WeakReference<PauseMenuScreen> gameMenuFrom = new WeakReference<>(null);
 
-	/** One entry in the column. */
-	private record Entry(Component label, Runnable action, boolean active) {}
+	/** One entry in the column; whether it can be chosen is asked each time the menu is shown. */
+	private record Entry(Component label, Runnable action, BooleanSupplier active) {
+		Entry(Component label, Runnable action, boolean active) {
+			this(label, action, () -> active);
+		}
+	}
 
 	private final List<Entry> entries = new ArrayList<>();
 	private final List<GlassButton> buttons = new ArrayList<>();
@@ -87,8 +92,23 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		entries.add(new Entry(GAME_MENU, this::openGameMenu, true));
 		entries.add(new Entry(LEAVE, this::leave, true));
 		if (!guest) {
+			// Player 1 asks for another player (Spec E section 3.4): greyed out with a full party (plan R3), as it is each
+			// time the menu shows (the same menu comes back from Options… and Game menu…).
+			addEntry(1, ADD_PLAYER, this::addPlayer, () -> {
+				Party party = Party.current();
+				return party != null && !party.partyFull();
+			});
 			// Player 1's split-screen settings, applied live (Spec E section 3.5); guests' menus don't have them.
-			addEntry(1, SPLIT_SCREEN, () -> minecraft.gui.setScreen(new SplitScreenScreen(this)), true);
+			addEntry(2, SPLIT_SCREEN, () -> minecraft.gui.setScreen(new SplitScreenScreen(this)), true);
+		}
+	}
+
+	/** Back to play, with the join prompt up for a new controller's single A. */
+	private void addPlayer() {
+		resume();
+		Party party = Party.current();
+		if (party != null) {
+			party.openAddPlayer();
 		}
 	}
 
@@ -134,6 +154,11 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	 * each time, so adding from an "on show" hook would add the entry again.
 	 */
 	public void addEntry(int index, Component label, Runnable action, boolean active) {
+		addEntry(index, label, action, () -> active);
+	}
+
+	/** As {@link #addEntry(int, Component, Runnable, boolean)}, with {@code active} asked each time the menu is shown. */
+	public void addEntry(int index, Component label, Runnable action, BooleanSupplier active) {
 		entries.add(Math.clamp(index, 0, entries.size()), new Entry(label, action, active));
 		// Shown already: lay the column out again (before then, init does).
 		if (minecraft != null && minecraft.gui != null && minecraft.gui.screen() == this) {
@@ -179,7 +204,7 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		buttons.clear();
 		for (Entry entry : entries) {
 			GlassButton button = new GlassButton(0, 0, BUTTON_W, BUTTON_H, entry.label(), b -> choose(entry));
-			button.active = entry.active();
+			button.active = entry.active().getAsBoolean();
 			buttons.add(addRenderableWidget(button));
 		}
 		// Its own hints: Minecraft's screens get ButtonGuideRenderer's, Hearthside's draw their own.

@@ -154,7 +154,10 @@ final class HostInput implements Runnable {
 		hostApplier.shareWithMouse(true);
 		long now = System.nanoTime();
 		update.frames().forEach((player, padFrame) -> {
-			InputFrame frame = withoutTakeoverPress(player, padFrame);
+			if (player == 0) {
+				cancelAddPlayerOnB(padFrame);
+			}
+			InputFrame frame = withoutHeldPress(player, padFrame);
 			if (player == 0) {
 				hostApplier.accept(frame);
 			} else if (session.hasSeatCard(player)) {
@@ -356,7 +359,7 @@ final class HostInput implements Runnable {
 		lastSent.remove(player);
 		lastSentAt.remove(player);
 		styles.remove(player);
-		heldFromTakeover.remove(player);
+		heldPresses.remove(player);
 	}
 
 	private final Map<Integer, PadStyle> padStyles = new java.util.concurrent.ConcurrentHashMap<>();
@@ -416,7 +419,7 @@ final class HostInput implements Runnable {
 					RealMouse.resync(minecraft);
 				} else {
 					// An A still held from a take-over went with the controller: the next one is a real press.
-					heldFromTakeover.remove(lost.player());
+					heldPresses.remove(lost.player());
 					session.sendToGuest(lost.player(), new ControlMessage.Lifecycle(LifecycleCommand.PAUSE));
 					session.onPadLost(lost.player());
 				}
@@ -597,11 +600,30 @@ final class HostInput implements Runnable {
 	 */
 	void takeOver(int instanceId, int player) {
 		assignPad(instanceId, player);
-		heldFromTakeover.put(player, InputFrame.buttons(PadButton.A));
+		heldPresses.put(player, InputFrame.buttons(PadButton.A));
 	}
 
-	/** Buttons a guest's controller still holds from taking them over; their game gets them only once released. */
-	private final Map<Integer, Integer> heldFromTakeover = new HashMap<>();
+	/**
+	 * Buttons a controller still holds from a press Hearthside took (a guest's A that took them over, player 1's B that
+	 * cancelled Add player); their game gets them only once released.
+	 */
+	private final Map<Integer, Integer> heldPresses = new HashMap<>();
+	/** Player 1's controller's buttons last frame in the world, for press edges. */
+	private int hostButtons;
+
+	/**
+	 * Player 1's B in play while the Add player prompt is up cancels it (plan P-9), and presses nothing else until let
+	 * go. With a screen open, B is that screen's as ever.
+	 */
+	private void cancelAddPlayerOnB(InputFrame frame) {
+		int b = InputFrame.buttons(PadButton.B);
+		boolean pressed = (frame.buttons() & ~hostButtons & b) != 0;
+		hostButtons = frame.buttons();
+		if (pressed && minecraft.gui.screen() == null && session.addPlayerShowing()) {
+			session.cancelAddPlayer();
+			heldPresses.merge(0, b, (x, y) -> x | y);
+		}
+	}
 
 	void assignPad(int instanceId, int player) {
 		if (player > 0) {
@@ -625,18 +647,18 @@ final class HostInput implements Runnable {
 		minecraft.gui.chatListener().handleSystemMessage(message, false);
 	}
 
-	/** A guest's frame without the buttons still held from taking them over (see {@link #takeOver}). */
-	private InputFrame withoutTakeoverPress(int player, InputFrame frame) {
-		Integer held = heldFromTakeover.get(player);
+	/** A player's frame without the buttons still held from a press Hearthside took (see {@link #heldPresses}). */
+	private InputFrame withoutHeldPress(int player, InputFrame frame) {
+		Integer held = heldPresses.get(player);
 		if (held == null) {
 			return frame;
 		}
 		int still = held & frame.buttons();
 		if (still == 0) {
-			heldFromTakeover.remove(player);
+			heldPresses.remove(player);
 			return frame;
 		}
-		heldFromTakeover.put(player, still);
+		heldPresses.put(player, still);
 		return new InputFrame(frame.sequence(), frame.buttons() & ~still, frame.leftX(), frame.leftY(), frame.rightX(),
 				frame.rightY(), frame.leftTrigger(), frame.rightTrigger());
 	}
