@@ -72,6 +72,7 @@ import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.events.ContainerEventHandler;
 import net.minecraft.client.gui.components.events.GuiEventListener;
@@ -95,6 +96,7 @@ import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.PreferredGraphicsApi;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.client.gui.components.toasts.Toast;
@@ -138,7 +140,7 @@ public final class E2eDriver {
 			{"X1"}, {"X1b"},
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
-			{"K1"}, {"E2"}, {"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
+			{"K1"}, {"E2"}, {"N8"}, {"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
 			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"},
 			{"W10", "L5"}, {"W11", "L5"}, {"W9", "L5"}, {"L6", "W9"},
 			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"R2", "R1"}, {"L11", "R1"},
@@ -155,10 +157,10 @@ public final class E2eDriver {
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
 			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"}, {"Q2", "1"}, {"E3", "1"},
 			// The in-world pad block (fake pads).
-			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
+			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
-			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
 			{"D9"}, {"7"},
@@ -218,6 +220,7 @@ public final class E2eDriver {
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("K1 Vulkan is offered once where it lets frames be shared, never with Iris, and relaunches the game", this::vulkanOffer);
 				step("E2 Auto chooses a preset from the machine when a party is created", this::autoChoosesFromTheMachine);
+				step("N8 player 1's PC keyboard types into a lobby card's name keyboard", this::pcKeyboardTypesIntoTheLobbyCard);
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
 				step("T4 with Minecraft in the background, a controller does nothing on the title screen", this::titleIgnoresBackgroundPad);
@@ -326,6 +329,7 @@ public final class E2eDriver {
 			step("Q2 a stacked two-player layout from config/hearthside.json", this::stackedLayoutFromConfig);
 			step("E3 presetForPlayer1 gives player 1's own game the preset for the session, and saves keep their own", this::presetForPlayerOne);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("N2 alone, the pause key opens vanilla's pause screen, a mod's button and all", this::alonePauseIsVanilla);
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				long dropInSounds = System.nanoTime();
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
@@ -344,11 +348,14 @@ public final class E2eDriver {
 				step("H2 button hints draw glyph sprites for the guest's controller family", this::hintsUseGlyphSprites);
 				step("M2 closing a menu with B does not leak sneak into the world", this::closeWithoutSneakLeak);
 				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
+				step("N1 a guest's START opens Hearthside's pause menu; Options… and Game menu… open vanilla's and come back", this::guestPauseMenu);
+				step("N2b in split-screen player 1 gets Hearthside's menu, and Game menu… keeps every mod's button", this::splitScreenPauseKeepsModButtons);
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
 				step("P10 holding Drop throws the whole stack; a tap throws one", this::dropTapAndHold);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
+				step("N4 player 1's Leave game asks first; a guest's Leave game takes them out and closes their game", this::leaveGame);
 				step("P9 Player2 leaves", this::player2Leaves);
 				step("H3 player 1 on a controller gets a pointer on Minecraft's screens and can respawn", this::hostPointerOnScreens);
 				step("H4 controller hints on Minecraft's screens never cover anything and offer only what works", this::hintsStayClear);
@@ -3777,13 +3784,238 @@ public final class E2eDriver {
 	}
 
 	private void pauseMenuOpensAndCloses() throws Exception {
-		int pausesBefore = count("hearthside controller: menu mode (pausescreen)");
+		// Vanilla's pause screen before Spec E, Hearthside's pause menu after: either is "(pause…".
+		int pausesBefore = count("hearthside controller: menu mode (pause");
 		int worldBefore = count("hearthside controller: world mode");
 		press(102, PadButton.START);
 		waitFor("pause menu on the guest", Duration.ofSeconds(10),
-				() -> count("hearthside controller: menu mode (pausescreen)") > pausesBefore);
+				() -> count("hearthside controller: menu mode (pause") > pausesBefore);
 		press(102, PadButton.B);
 		waitFor("pause menu closed", Duration.ofSeconds(10), () -> count("hearthside controller: world mode") > worldBefore);
+	}
+
+	/**
+	 * N1 (Spec E section 3.1, plan R7): a guest's START opens Hearthside's pause menu in its own game, focus on Resume.
+	 * The D-pad and A open Options… and Game menu…, which are vanilla's screens and come back to the menu; Resume closes
+	 * it. The guest's screens are read from its log.
+	 */
+	private void guestPauseMenu() throws Exception {
+		String entries = "hearthside pause menu opened entries=resume,options…,game menu…,leave game";
+		int opened = count(entries);
+		press(102, PadButton.START);
+		waitFor("Hearthside's pause menu in the guest's game", Duration.ofSeconds(10), () -> count(entries) > opened);
+
+		int options = count("hearthside screen optionsscreen");
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.A);
+		waitFor("vanilla's Options in the guest's game", Duration.ofSeconds(10),
+				() -> count("hearthside screen optionsscreen") > options);
+		int back = count("hearthside screen pausemenuscreen");
+		press(102, PadButton.B);
+		waitFor("B from Options back to Hearthside's menu", Duration.ofSeconds(10),
+				() -> count("hearthside screen pausemenuscreen") > back);
+
+		int vanilla = count("hearthside screen pausescreen");
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.A);
+		waitFor("vanilla's pause screen under Game menu…", Duration.ofSeconds(10),
+				() -> count("hearthside screen pausescreen") > vanilla);
+		int backAgain = count("hearthside screen pausemenuscreen");
+		press(102, PadButton.B);
+		waitFor("B from vanilla's pause screen back to Hearthside's menu", Duration.ofSeconds(10),
+				() -> count("hearthside screen pausemenuscreen") > backAgain);
+
+		int world = count("hearthside controller: world mode");
+		press(102, PadButton.A);
+		waitFor("Resume (focused when the menu opens) closes it", Duration.ofSeconds(10),
+				() -> count("hearthside controller: world mode") > world);
+	}
+
+	/** A stand-in for a mod that adds a button to vanilla's pause screen, as Mod Menu does (Spec E goal 5). */
+	private static final String STAND_IN = "E2E mod button";
+	private static boolean standInRegistered;
+
+	private static void addStandInModButton() {
+		if (standInRegistered) {
+			return;
+		}
+		standInRegistered = true;
+		ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
+			if (screen instanceof PauseScreen) {
+				Screens.getWidgets(screen).add(Button.builder(Component.literal(STAND_IN), b -> {}).bounds(4, 4, 98, 20).build());
+			}
+		});
+	}
+
+	/** The labels of a screen's buttons. Render thread. */
+	private static List<String> buttonLabels(Screen screen) {
+		return screen == null ? List.of() : Screens.getWidgets(screen).stream().map(w -> w.getMessage().getString()).toList();
+	}
+
+	/** Presses the open screen's button labelled {@code label}. Render thread. */
+	private void pressLabelled(String label) {
+		Screens.getWidgets(minecraft.gui.screen()).stream().filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals(label)).map(w -> (AbstractButton) w).findFirst()
+				.orElseThrow(() -> new AssertionError("missing: a button labelled " + label + " on "
+						+ minecraft.gui.screen().getClass().getSimpleName()))
+				.onPress(new KeyEvent(0, 0, 0));
+	}
+
+	private static boolean onPauseMenu(Screen screen) {
+		return screen != null && screen.getClass().getSimpleName().equals("PauseMenuScreen");
+	}
+
+	/** N2 (Spec E section 3.1, goal 5): playing alone, the pause key opens vanilla's pause screen, a mod's button and all. */
+	private void alonePauseIsVanilla() throws Exception {
+		addStandInModButton();
+		waitFor("player 1 in play", Duration.ofSeconds(60), () -> onRender(() -> minecraft.player != null && minecraft.gui.screen() == null));
+		try {
+			Screen opened = onRender(() -> {
+				minecraft.pauseGame(false);
+				return minecraft.gui.screen();
+			});
+			check(opened instanceof PauseScreen, "alone, the pause key opens vanilla's pause screen (got "
+					+ (opened == null ? "nothing" : opened.getClass().getSimpleName()) + ")");
+			check(onRender(() -> buttonLabels(minecraft.gui.screen())).contains(STAND_IN), "with the mod's button on it");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
+	}
+
+	/**
+	 * N2b (Spec E section 3.1, goal 5): in split-screen, player 1's pause key opens Hearthside's menu, which other mods
+	 * still see as a pause screen; Game menu… opens vanilla's pause screen with the mod's button; closing it returns to
+	 * Hearthside's menu.
+	 */
+	private void splitScreenPauseKeepsModButtons() throws Exception {
+		addStandInModButton();
+		long mark = hostLogLength();
+		try {
+			Screen opened = onRender(() -> {
+				minecraft.pauseGame(false);
+				return minecraft.gui.screen();
+			});
+			check(onPauseMenu(opened), "in split-screen, player 1's pause key opens Hearthside's menu (got "
+					+ (opened == null ? "nothing" : opened.getClass().getSimpleName()) + ")");
+			check(opened.isPauseScreen(), "Hearthside's menu still counts as a pause screen for other mods");
+			check(hostLogSince(mark).contains("hearthside pause menu opened entries=") && hostLogSince(mark).contains("game menu…"),
+					"player 1's menu logged its entries, Game menu… among them");
+			onRender(() -> {
+				pressLabelled("Game menu…");
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.screen() instanceof PauseScreen), "Game menu… opens vanilla's pause screen");
+			check(onRender(() -> buttonLabels(minecraft.gui.screen())).contains(STAND_IN), "with the mod's button on it");
+			onRender(() -> {
+				minecraft.gui.screen().onClose();
+				return null;
+			});
+			check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "closing vanilla's pause screen returns to Hearthside's menu");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
+	}
+
+	/**
+	 * N4 (Spec E section 3.1): player 1's Leave game asks first ("Keep playing" goes back); a guest's Leave game (D-pad
+	 * to it, A) takes them out of the world and closes their game.
+	 */
+	private void leaveGame() throws Exception {
+		onRender(() -> {
+			minecraft.pauseGame(false);
+			return null;
+		});
+		check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "player 1's pause menu is Hearthside's");
+		onRender(() -> {
+			pressLabelled("Leave game");
+			return null;
+		});
+		check(onRender(() -> buttonLabels(minecraft.gui.screen())).containsAll(List.of("Leave", "Keep playing")),
+				"player 1's Leave game asks first");
+		check(onRender(() -> minecraft.gui.screen().getTitle().getString()).contains("Leave the world? Everyone's game will close."),
+				"and says everyone's game will close");
+		onRender(() -> {
+			pressLabelled("Keep playing");
+			return null;
+		});
+		check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "Keep playing goes back to the pause menu");
+		onRender(() -> {
+			minecraft.gui.setScreen(null);
+			return null;
+		});
+
+		int menus = count("hearthside pause menu opened");
+		press(102, PadButton.START);
+		waitFor("the guest's pause menu", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > menus);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.A);
+		waitFor("Player2 out of the world", Duration.ofSeconds(30), () -> playerCount() == 1);
+		waitFor("Player2's game closed", Duration.ofSeconds(15), () -> satellites().isEmpty());
+	}
+
+	/**
+	 * N8, the lobby half (Spec E section 3.6): player 1's PC keyboard types into a lobby card's name keyboard alongside
+	 * the controller. Letters replace the suggestion, Backspace deletes, a character a name can't have changes nothing,
+	 * Enter accepts the name. The in-world half is N8b.
+	 */
+	private void pcKeyboardTypesIntoTheLobbyCard() throws Exception {
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		openLobby();
+		try {
+			press(LOBBY_PAD, PadButton.A);
+			waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+			toNew(1, LOBBY_PAD);
+			press(LOBBY_PAD, PadButton.A);
+			waitFor("the name keyboard", Duration.ofSeconds(5), () -> onRender(() -> card(1) != null && card(1).keyboard() != null));
+			pcType("Robin");
+			pcKey(InputConstants.KEY_BACKSPACE);
+			pcType("#");
+			String typed = onRender(() -> card(1).keyboard().text());
+			check(typed.equals("Robi"), "the PC keyboard typed Robin, deleted the n and refused # (got " + typed + ")");
+			pcKey(InputConstants.KEY_RETURN);
+			check(onRender(() -> card(1).setup().step()) == QuickSetup.Step.SKIN, "Enter accepts the typed name");
+		} finally {
+			for (int i = 0; i < 5 && onRender(() -> Party.current() != null && Party.current().seatedCount() > 0); i++) {
+				press(LOBBY_PAD, PadButton.B);
+			}
+			waitFor("the seat given up", Duration.ofSeconds(30),
+					() -> satellites().isEmpty() && onRender(() -> Party.current() == null || Party.current().seatedCount() == 0));
+			Files.deleteIfExists(satelliteLogFile());
+			if (onRender(() -> minecraft.gui.screen() instanceof LobbyScreen)) {
+				leaveLobby();
+			}
+			PADS.unplug(LOBBY_PAD);
+		}
+	}
+
+	/** Player 1's PC keyboard typing {@code text}, as the window's character events arrive. */
+	private void pcType(String text) throws Exception {
+		onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			text.chars().forEach(c -> minecraft.keyboardHandler.charTyped(window, new CharacterEvent(c)));
+			return null;
+		});
+		Thread.sleep(100);
+	}
+
+	/** Player 1's PC keyboard pressing and releasing {@code key}. */
+	private void pcKey(int key) throws Exception {
+		onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, new KeyEvent(key, 0, 0));
+			minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, new KeyEvent(key, 0, 0));
+			return null;
+		});
+		Thread.sleep(100);
 	}
 
 	/** Survival on a cleared platform, looking 30° down at the block two ahead (0 250 2). */
@@ -4566,10 +4798,13 @@ public final class E2eDriver {
 	}
 
 	private void player2Leaves() throws Exception {
-		onRender(() -> {
-			Party.current().leave("Player2");
-			return null;
-		});
+		// N4 may already have taken Player2 out through their own Leave game.
+		if (guest("Player2") != null) {
+			onRender(() -> {
+				Party.current().leave("Player2");
+				return null;
+			});
+		}
 		PADS.unplug(102);
 		waitFor("1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
 		waitFor("satellite exit", Duration.ofSeconds(15), () -> satellites().isEmpty());
