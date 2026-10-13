@@ -78,6 +78,35 @@ class JoinFlowTakeoverTest {
 	}
 
 	@Test
+	void theNextTakeOverIsTheSeatAFreeAWouldTake() {
+		// Review Minor 1: only that seat's card offers it.
+		JoinFlow flow = new JoinFlow(Mode.IN_GAME, 3, clock);
+		playing(flow, "pad-1", alex);
+		playing(flow, "pad-2", UUID.randomUUID());
+		assertThat(flow.nextTakeover()).isEmpty();
+		flow.disconnected("pad-2");
+		flow.disconnected("pad-1");
+		assertThat(flow.nextTakeover()).as("not offered yet").isEmpty();
+		clock.advance(Duration.ofSeconds(60));
+		flow.tick();
+		assertThat(flow.nextTakeover()).hasValue("pad-1");
+		flow.press("pad-9", Control.A);
+		assertThat(flow.nextTakeover()).hasValue("pad-2");
+		flow.reconnected("pad-2");
+		assertThat(flow.nextTakeover()).isEmpty();
+	}
+
+	@Test
+	void nothingIsNextInTheLobby() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.disconnected("pad-1");
+		clock.advance(Duration.ofSeconds(60));
+		flow.tick();
+		assertThat(flow.nextTakeover()).isEmpty();
+	}
+
+	@Test
 	void theDelayIsConfigurable() {
 		JoinFlow flow = playing(new JoinFlow(Mode.IN_GAME, 3, clock, Duration.ofSeconds(2)), "pad-1", alex);
 		flow.disconnected("pad-1");

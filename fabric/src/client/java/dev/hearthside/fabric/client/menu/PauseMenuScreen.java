@@ -119,6 +119,9 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	 * Render thread.
 	 */
 	public static void setControllerAway(boolean away) {
+		if (away && !controllerAway) {
+			HearthsideMod.LOGGER.info("Hearthside pause menu hidden under the reconnect card");
+		}
 		controllerAway = away;
 	}
 

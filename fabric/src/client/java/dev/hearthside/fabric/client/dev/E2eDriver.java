@@ -169,7 +169,7 @@ public final class E2eDriver {
 			// The in-world pad block (fake pads).
 			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"N5", "P5"}, {"N9", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"N5", "P5"}, {"N9", "P5"}, {"N5b", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
 			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"N8b"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
@@ -367,6 +367,7 @@ public final class E2eDriver {
 				step("N3 the world freezes only when everyone in it is paused, and every menu says so", this::pauseTogether);
 				step("N5 a dropped controller dims its player's view and pauses them; replugging undoes it; after a minute another controller takes over", this::droppedController);
 				step("N9 a joining view's fade never dims player 1's border", this::joinFadeKeepsBorders);
+				step("N5b a controller dropping while its player picks a profile dims the picker under the reconnect card", this::droppedWhilePicking);
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
@@ -2325,7 +2326,7 @@ public final class E2eDriver {
 		}
 	}
 
-	private static final int TILED_PAD = 130;
+	private static final int TILED_PAD = 130, TILED_TAKEOVER_PAD = 131;
 
 	/** D9: with tiled windows nothing would draw a card, so A, A joins straight away as that controller's profile. */
 	private void tiledDropIn() throws Exception {
@@ -2339,12 +2340,37 @@ public final class E2eDriver {
 			check(onRender(() -> Party.current().seatCard(1)) == null, "no card: nothing would draw it");
 			check(onRender(() -> Party.current().profileOf(1)) != null, "a profile was picked for the controller");
 			waitFor("the newcomer in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("their game in world mode", Duration.ofSeconds(60),
+					() -> satelliteLog().contains("hearthside controller: world mode"));
+
+			// Their controller drops (review Important 1): with tiled windows nothing draws a reconnect card, so their
+			// pause menu shows, and the chat offers the take-over and says when it happened.
+			int paused = count("hearthside satellite paused");
+			int menus = count("hearthside pause menu opened");
+			int hidden = count("hearthside pause menu hidden");
+			long mark = hostLogLength();
+			PADS.unplug(TILED_PAD);
+			waitFor("their game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > paused);
+			waitFor("their pause menu opened", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > menus);
+			Thread.sleep(500);
+			check(count("hearthside pause menu hidden") == hidden, "their pause menu shows: no card would stand in for it");
+			jumpJoinClock(61);
+			waitFor("the take-over offered in chat", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("[chat] player 2's controller is still disconnected"));
+			PADS.plug(TILED_TAKEOVER_PAD, "fake-tiled-takeover-pad", PadStyle.XBOX);
+			Thread.sleep(300);
+			press(TILED_TAKEOVER_PAD, PadButton.A);
+			waitFor("another controller took over", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("hearthside take-over player=2 controller=fake-tiled-takeover-pad"));
+			waitFor("and the chat says so", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("[chat] player 2 is playing on another controller now"));
 		} finally {
 			onRender(() -> {
 				Party.current().leaveAll();
 				return null;
 			});
 			PADS.unplug(TILED_PAD);
+			PADS.unplug(TILED_TAKEOVER_PAD);
 			waitFor("back to 1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
 		}
 	}
@@ -4512,9 +4538,13 @@ public final class E2eDriver {
 		PADS.unplug(102);
 		waitFor("Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > dropped);
 		try {
+			int aPresses = count("hearthside input a down");
 			takeOverWith(TAKEOVER_PAD, TAKEOVER_GUID, PadStyle.XBOX);
 			waitFor("(c) Player2's game got the new controller's style", Duration.ofSeconds(5),
 					() -> satelliteLog().contains("hearthside setpadstyle xbox"));
+			Thread.sleep(500);
+			check(count("hearthside input a down") == aPresses,
+					"(c) the A that took Player2 over never pressed anything in their game");
 			check(guest("Player2").position().distanceTo(where) < 0.5, "(c) Player2 is where they were");
 			GuestProfile profile = profiles().load().stream().filter(p -> p.name().equals("Player2")).findFirst().orElseThrow();
 			check(TAKEOVER_GUID.equals(profile.preferredControllerGuid()), "(c) and the new controller is now their profile's");
@@ -4536,6 +4566,40 @@ public final class E2eDriver {
 				PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
 			}
 			PADS.set(102, InputFrame.NEUTRAL);
+		}
+	}
+
+	/**
+	 * N5b (review Minor 2): a newcomer's controller dropping while they pick a profile in their own view dims their
+	 * picker under the same reconnect card, so a take-over of their seat is never unseen; replugging it brings it back.
+	 */
+	private void droppedWhilePicking() throws Exception {
+		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			press(PICKING_PAD, PadButton.A);
+			press(PICKING_PAD, PadButton.A);
+			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+			Thread.sleep(1500); // their view glides in and fades up
+			Rect r = onRender(() -> Compositor.active().overlayViews().stream().filter(v -> v.seat() == 2).findFirst()
+					.orElseThrow(() -> new AssertionError("missing: seat 2's view")).rect());
+			int x = r.x() + 8, y = r.y() + 8;
+			int bright = probePixel(x, y);
+			check(luminance(bright) > 15, "the picker's corner shows the plank wall (" + Integer.toHexString(bright) + ")");
+			PADS.unplug(PICKING_PAD);
+			waitFor("the picker dimmed under the reconnect card", Duration.ofSeconds(5),
+					() -> luminance(probePixel(x, y)) < 0.6 * luminance(bright));
+			windowShot("reconnect-over-picker");
+			PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+			waitFor("the picker bright again", Duration.ofSeconds(5),
+					() -> luminance(probePixel(x, y)) > 0.85 * luminance(bright));
+		} finally {
+			if (onRender(() -> card(2) != null)) {
+				press(PICKING_PAD, PadButton.B);
+			}
+			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+			PADS.unplug(PICKING_PAD);
+			Thread.sleep(1000); // the views settle back before the next step
 		}
 	}
 

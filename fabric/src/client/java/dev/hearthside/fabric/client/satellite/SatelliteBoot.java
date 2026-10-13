@@ -62,7 +62,20 @@ public final class SatelliteBoot {
 	 */
 	private static Screen pausedFor;
 
+	private static final boolean E2E = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
+	/** E2E: the buttons of the last input frame from the host. The control channel's reading thread. */
+	private static int lastInputButtons;
+
 	private SatelliteBoot() {}
+
+	/** E2E: logs each press of A that reaches this game (the E2E checks a take-over's A never does). */
+	private static void logAPress(dev.hearthside.core.input.InputFrame frame) {
+		int a = dev.hearthside.core.input.InputFrame.buttons(dev.hearthside.core.input.PadButton.A);
+		if ((frame.buttons() & ~lastInputButtons & a) != 0) {
+			HearthsideMod.LOGGER.info("Hearthside input A down");
+		}
+		lastInputButtons = frame.buttons();
+	}
 
 	public static void register() {
 		ClientLoginNetworking.registerGlobalReceiver(GuestLoginHooks.GUEST_TOKEN, (client, handler, buf, listenerAdder) -> {
@@ -245,7 +258,12 @@ public final class SatelliteBoot {
 					minecraft.gui.setScreen(null);
 				}
 			});
-			case ControlMessage.Input m -> applier.accept(m.frame());
+			case ControlMessage.Input m -> {
+				if (E2E) {
+					logAPress(m.frame());
+				}
+				applier.accept(m.frame());
+			}
 			case ControlMessage.UseCopyTransport m -> minecraft.execute(() -> {
 				FrameExporter exporter = FrameExporter.instance();
 				if (exporter != null) {

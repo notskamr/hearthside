@@ -329,6 +329,11 @@ public final class JoinFlow {
 		return seat == null ? Result.NONE : new Result(List.of(new Effect.StopGuestGame(controller, seat)));
 	}
 
+	/** The dropped controller whose player a free controller's A would take over now, if any. */
+	public java.util.Optional<String> nextTakeover() {
+		return java.util.Optional.empty();
+	}
+
 	/** The controller of the lowest seat offered for take-over, or null if none is. */
 	private String lowestTakeoverOffered() {
 		String lowest = null;
