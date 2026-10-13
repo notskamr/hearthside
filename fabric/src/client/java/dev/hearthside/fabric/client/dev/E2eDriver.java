@@ -69,6 +69,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
+import net.minecraft.client.CameraType;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
@@ -117,6 +118,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.sdl.SDLKeyboard;
 import org.lwjgl.sdl.SDLMouse;
 import org.lwjgl.sdl.SDLVideo;
 import net.minecraft.util.HttpUtil;
@@ -3967,7 +3969,8 @@ public final class E2eDriver {
 	/**
 	 * N8, the lobby half (Spec E section 3.6): player 1's PC keyboard types into a lobby card's name keyboard alongside
 	 * the controller. Letters replace the suggestion, Backspace deletes, a character a name can't have changes nothing,
-	 * Enter accepts the name. The in-world half is N8b.
+	 * Enter accepts the name. SDL text input is on while the card types (else no characters arrive), a space never presses
+	 * a focused lobby button, and a held Esc backs out of the keyboard once. The in-world half is N8b.
 	 */
 	private void pcKeyboardTypesIntoTheLobbyCard() throws Exception {
 		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
@@ -3979,13 +3982,45 @@ public final class E2eDriver {
 			toNew(1, LOBBY_PAD);
 			press(LOBBY_PAD, PadButton.A);
 			waitFor("the name keyboard", Duration.ofSeconds(5), () -> onRender(() -> card(1) != null && card(1).keyboard() != null));
+			// Characters arrive from the OS only while SDL text input is on (vanilla turns it on for a focused text box).
+			waitFor("text input on while the card types", Duration.ofSeconds(2), this::textInputActive);
 			pcType("Robin");
+			// A space is "_" in the name, and nothing else: not a press of the lobby button that has vanilla's focus.
+			onRender(() -> {
+				minecraft.gui.screen().setFocused(widgetLabelled("+ Controller"));
+				return null;
+			});
+			pcKey(InputConstants.KEY_SPACE);
+			pcType(" ");
+			String spaced = onRender(() -> card(1).keyboard().text());
+			check(spaced.equals("Robin_"), "a space typed _ into the name (got " + spaced + ")");
+			check(!onRender(() -> Party.current().hostClaimArmed() || Party.current().hostHasController()),
+					"and didn't press + Controller, which had focus");
+			pcKey(InputConstants.KEY_BACKSPACE);
 			pcKey(InputConstants.KEY_BACKSPACE);
 			pcType("#");
 			String typed = onRender(() -> card(1).keyboard().text());
 			check(typed.equals("Robi"), "the PC keyboard typed Robin, deleted the n and refused # (got " + typed + ")");
 			pcKey(InputConstants.KEY_RETURN);
 			check(onRender(() -> card(1).setup().step()) == QuickSetup.Step.SKIN, "Enter accepts the typed name");
+			waitFor("text input off once the keyboard closed", Duration.ofSeconds(2), () -> !textInputActive());
+			// Held Esc: one press, two repeats and the release back out of the keyboard once, not the lobby too.
+			press(LOBBY_PAD, PadButton.B);
+			check(onRender(() -> card(1).keyboard() != null && card(1).setup().step() == QuickSetup.Step.NAME),
+					"B on Skin goes back to the name keyboard");
+			onRender(() -> {
+				long window = minecraft.getWindow().handle();
+				KeyEvent esc = new KeyEvent(InputConstants.KEY_ESCAPE, 0, 0);
+				minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, esc);
+				minecraft.keyboardHandler.keyPress(window, InputConstants.REPEAT, esc);
+				minecraft.keyboardHandler.keyPress(window, InputConstants.REPEAT, esc);
+				minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, esc);
+				return null;
+			});
+			Thread.sleep(200);
+			check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.CAROUSEL),
+					"a held Esc closes the keyboard");
+			check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen), "and only that: no \"End the party?\"");
 		} finally {
 			for (int i = 0; i < 5 && onRender(() -> Party.current() != null && Party.current().seatedCount() > 0); i++) {
 				press(LOBBY_PAD, PadButton.B);
@@ -4004,7 +4039,8 @@ public final class E2eDriver {
 	 * N8b, the in-world half (Spec E section 3.6, ruling R8): a newcomer's name keyboard in their own view takes player
 	 * 1's PC keyboard only while player 1 plays on a controller with no screen open. On keyboard and mouse their keys stay
 	 * theirs: W reaches their forward key and nothing is typed. On a controller W never reaches it; characters type,
-	 * Backspace deletes, and Esc closes the keyboard as B does (no pause menu).
+	 * Backspace deletes, and Esc closes the keyboard as B does (no pause menu); function keys stay player 1's, and SDL text
+	 * input is on only while the keyboard takes their keys (ruling P-12).
 	 */
 	private void pcKeyboardTypesIntoANewcomersKeyboard() throws Exception {
 		onRender(() -> {
@@ -4037,11 +4073,23 @@ public final class E2eDriver {
 			pcType("w");
 			String kept = onRender(() -> card(s).keyboard().text());
 			check(kept.equals(suggested), "and nothing is typed into the newcomer's keyboard (got " + kept + ")");
+			Thread.sleep(200);
+			check(!textInputActive(), "and text input stays off");
 
 			claimHostPad();
 			check(onRender(() -> minecraft.gui.screen() == null), "player 1 is on a controller with no screen open");
 			check(!pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
 					"on a controller, W doesn't reach player 1's forward key");
+			// Function keys never type: they stay player 1's (F5 changes the camera; put back after).
+			boolean f5 = pcPressReaches(InputConstants.KEY_F5, minecraft.options.keyTogglePerspective);
+			Thread.sleep(200);
+			onRender(() -> {
+				minecraft.options.setCameraType(CameraType.FIRST_PERSON);
+				return null;
+			});
+			check(f5, "F5 still reaches player 1's camera key");
+			waitFor("text input on while the newcomer's keyboard takes player 1's keys", Duration.ofSeconds(2),
+					this::textInputActive);
 			pcType("Robin");
 			pcKey(InputConstants.KEY_BACKSPACE);
 			String typed = onRender(() -> card(s).keyboard().text());
@@ -4051,6 +4099,7 @@ public final class E2eDriver {
 			check(onRender(() -> card(s) != null && card(s).stage() == SeatCard.Stage.CAROUSEL),
 					"Esc closes the newcomer's keyboard, as B does");
 			check(onRender(() -> minecraft.gui.screen() == null), "and doesn't pause player 1's game");
+			waitFor("text input off once the newcomer's keyboard closed", Duration.ofSeconds(2), () -> !textInputActive());
 		} finally {
 			if (onRender(() -> Party.current().hostHasController())) {
 				releaseHostPad();
@@ -4077,6 +4126,11 @@ public final class E2eDriver {
 			}
 		}
 		return seats;
+	}
+
+	/** Whether SDL delivers typed characters to player 1's window now (text input on). */
+	private boolean textInputActive() throws Exception {
+		return onRender(() -> SDLKeyboard.SDL_TextInputActive(minecraft.getWindow().handle()));
 	}
 
 	/** Player 1's PC keyboard pressing {@code key}: whether {@code mapping} went down. Then the key is let go. */
