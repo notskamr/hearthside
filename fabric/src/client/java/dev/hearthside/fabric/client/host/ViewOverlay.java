@@ -219,7 +219,10 @@ final class ViewOverlay implements OverlayLayer {
 			g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_PANEL, r.x(), r.y(), r.width(), r.height(), FROST);
 		}
 		SeatCard card = party.drawnCard(seat);
-		if (card != null) {
+		if (card != null && party.reconnect(seat) != null) {
+			// Their controller is away: only the plank wall under the reconnect card; the picker comes back as it was.
+			CardPainter.board(g, r, 1f);
+		} else if (card != null) {
 			// Dropping in: they pick their profile right here, while everyone else plays on.
 			drawPicker(g, font, r, seat, card);
 		} else if (cover > 0f) {
