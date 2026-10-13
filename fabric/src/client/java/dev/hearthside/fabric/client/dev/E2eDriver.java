@@ -160,7 +160,7 @@ public final class E2eDriver {
 			{"V2", "C2"}, {"U1", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
 			{"F1", "1"}, {"F2", "1"}, {"F3", "1"}, {"E1", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
-			{"N7", "C2"},
+			{"N7", "C2"}, {"N7b", "C2"},
 			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
@@ -318,6 +318,7 @@ public final class E2eDriver {
 			step("Q4b an untested Sodium version leaves Sodium's options alone instead of crashing guests", this::untestedSodiumLeftAlone);
 			step("N7 Split-screen options apply live: layout glides, borders and name tags at once, swap views, saved, title style next time",
 					() -> sampleGaps(this::splitScreenOptions));
+			step("N7b a preset chosen on Split-screen leaves guests already in the world as they were", this::presetWaitsForTheNextJoin);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
@@ -1826,6 +1827,13 @@ public final class E2eDriver {
 			check(saved.layout().two() == LayoutSettings.TwoPlayer.STACKED && saved.layout().borders() == BorderStyle.OFF
 					&& !saved.layout().nameTags(), "config/hearthside.json has the new values");
 
+			// Back on, long after the layout change's tags would have faded: they show at once, as after a layout change.
+			Thread.sleep(4600);
+			applySplitScreen(c -> c.withLayout(c.layout().withBorders(BorderStyle.THIN).withNameTags(true)));
+			Thread.sleep(200);
+			check(probeAt(tagX, tagY) == colour, "name tags back on: the tag shows at once");
+			check(probeAt(borderX, borderY) != 0xFF00FF, "borders back on: the border shows at once");
+
 			// Layout animation off: back to side by side in one step.
 			java.util.Set<Rect> snap = recordSeatOne(() -> applySplitScreen(c -> c.withLayout(
 					c.layout().withLayoutAnimation(false).withTwo(LayoutSettings.TwoPlayer.SIDE_BY_SIDE))), 1200);
@@ -1854,6 +1862,23 @@ public final class E2eDriver {
 			});
 			Thread.sleep(600);
 			check(TitleStyle.drewBackground && TitleStyle.drewButtons, "and Hearthside's again when switched back");
+
+			// Shown again, the same title screen takes the new style: Mod Menu's Configure goes back to the one it came from.
+			TitleScreen same = onRender(() -> (TitleScreen) minecraft.gui.screen());
+			onRender(() -> {
+				minecraft.gui.setScreen(new dev.hearthside.fabric.client.host.SplitScreenScreen(same));
+				return null;
+			});
+			applySplitScreen(c -> c.withTitleStyle(TitleStyleSetting.VANILLA));
+			TitleStyle.drewBackground = false;
+			TitleStyle.drewButtons = false;
+			onRender(() -> {
+				minecraft.gui.screen().onClose();
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.screen() == same), "Split-screen goes back to the title screen it came from");
+			Thread.sleep(600);
+			check(!TitleStyle.drewBackground && !TitleStyle.drewButtons, "that same title screen is now Minecraft's own");
 		} finally {
 			onRender(() -> {
 				minecraft.gui.setScreen(null);
@@ -1863,6 +1888,68 @@ public final class E2eDriver {
 			});
 			OverlayPass.unregister(recorder);
 			Thread.sleep(1000); // the views settle back before the next step
+			if (before != null) {
+				Files.write(file, before);
+			} else {
+				Files.deleteIfExists(file);
+			}
+		}
+	}
+
+	/**
+	 * N7b (Spec E sections 3.5 and 5): a preset chosen on the Split-screen screen waits for the next player to join. In a
+	 * window big enough for Performance to reduce a guest's resolution, Guest2 (already in the world) keeps their frame
+	 * size through a relayout after player 1 picks a preset whose resolution differs from theirs.
+	 */
+	private void presetWaitsForTheNextJoin() throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("config").resolve("hearthside.json");
+		byte[] before = Files.exists(file) ? Files.readAllBytes(file) : null;
+		SplitScreenConfig start = onRender(() -> Party.current().config());
+		List<Integer> order = onRender(() -> Party.current().viewOrder());
+		Rect window = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
+		long handle = onRender(() -> minecraft.getWindow().handle());
+		try {
+			// Views big enough for a GUI scale of 4, where Performance renders guests at a reduced resolution.
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2560, 1440));
+			String[] seen = {""};
+			waitFor("Guest2's frame at the bigger window", Duration.ofSeconds(10), () -> {
+				GuiScaleLine guest = lastGuiScale(satelliteLog(), 2);
+				seen[0] = String.valueOf(guest);
+				return guest != null && guest.viewWidth() >= 1200;
+			});
+			Thread.sleep(1500);
+			GuiScaleLine launched = lastGuiScale(satelliteLog(), 2);
+			boolean reduced = launched.frameWidth() < launched.viewWidth();
+			Preset other = reduced ? Preset.QUALITY : Preset.PERFORMANCE;
+			log("   Guest2 at launch: " + launched + (reduced ? " (reduced)" : " (full)") + "; player 1 picks " + other);
+			GuiScaleRule.ViewScale wouldBe = GuiScaleRule.forView(new Rect(0, 0, launched.viewWidth(), launched.viewHeight()),
+					reduced ? launched.scale() + 1 : launched.scale(), !reduced);
+			check(wouldBe.frameWidth() != launched.frameWidth(), "that preset would size Guest2's frame differently (" + wouldBe + ")");
+			applySplitScreen(c -> c.withPreset(other));
+			// A relayout: player 1 swaps views and back.
+			onRender(() -> {
+				Party.current().setViewOrder(ViewOrder.later(Party.current().viewOrder(), 0));
+				return null;
+			});
+			Thread.sleep(800);
+			onRender(() -> {
+				Party.current().setViewOrder(order);
+				return null;
+			});
+			Thread.sleep(1500);
+			GuiScaleLine now = lastGuiScale(satelliteLog(), 2);
+			log("   Guest2 after the relayout: " + now);
+			check(now.frameWidth() == launched.frameWidth() && now.frameHeight() == launched.frameHeight(),
+					"Guest2, already in the world, keeps their frame size (" + launched.frameWidth() + "x"
+							+ launched.frameHeight() + ", now " + now.frameWidth() + "x" + now.frameHeight() + ")");
+		} finally {
+			onRender(() -> {
+				Party.current().setViewOrder(order);
+				Party.current().applySettings(start);
+				SDLVideo.SDL_SetWindowSize(handle, window.width(), window.height());
+				return null;
+			});
+			Thread.sleep(2000); // the views settle back before the next step
 			if (before != null) {
 				Files.write(file, before);
 			} else {
