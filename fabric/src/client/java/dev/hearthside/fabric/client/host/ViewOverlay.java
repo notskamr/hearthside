@@ -171,6 +171,20 @@ final class ViewOverlay implements OverlayLayer {
 				guestView(g, font, view, compositor, context);
 			}
 		}
+		// A dropped controller (Spec E section 3.3): their view (their game, or the card they pick or join on) dims under
+		// a card until it's back or taken over. In a stratum of its own: a stratum draws its text after all its shapes, so
+		// the picker's or joining card's words would otherwise show through the veil and over the card.
+		boolean ownStratum = false;
+		for (ViewFrame view : context.views()) {
+			CardPainter.Reconnect reconnect = view.seat() == 0 ? null : party.reconnect(view.seat());
+			if (reconnect != null) {
+				if (!ownStratum) {
+					g.nextStratum();
+					ownStratum = true;
+				}
+				CardPainter.reconnect(g, font, view.rect(), reconnect);
+			}
+		}
 		// The free quarter with three players: the party panel and its live map, fading in and out with the layout.
 		party.panelAt(context.nanos(), context.reduceMotion()).ifPresent(panel -> {
 			Rect inGui = dev.hearthside.fabric.client.compositor.OverlayPass.inGui(panel.rect(), context.guiScale());
@@ -194,8 +208,8 @@ final class ViewOverlay implements OverlayLayer {
 
 	/**
 	 * What a guest's view shows over their game: their card until their game is in the world (never the bare window),
-	 * the frost over a picture at the wrong size, the reconnect card while their controller is away, and the fade of a
-	 * view with no picture yet.
+	 * the frost over a picture at the wrong size, and the fade of a view with no picture yet. (A dropped controller's
+	 * card is drawn over all of it afterwards.)
 	 */
 	private void guestView(GuiGraphicsExtractor g, Font font, ViewFrame view, Compositor compositor, OverlayContext context) {
 		Rect r = view.rect();
@@ -208,16 +222,9 @@ final class ViewOverlay implements OverlayLayer {
 		if (card != null) {
 			// Dropping in: they pick their profile right here, while everyone else plays on.
 			drawPicker(g, font, r, seat, card);
-		} else {
-			if (cover > 0f) {
-				CardPainter.joining(g, font, r, party.who(seat), party.cardStatus(seat, context.nanos()), cover,
-						context.nanos(), context.reduceMotion());
-			}
-			// Their controller dropped (Spec E section 3.3): their view dims under a card until it's back or taken over.
-			CardPainter.Reconnect reconnect = party.reconnect(seat);
-			if (reconnect != null) {
-				CardPainter.reconnect(g, font, r, reconnect);
-			}
+		} else if (cover > 0f) {
+			CardPainter.joining(g, font, r, party.who(seat), party.cardStatus(seat, context.nanos()), cover,
+					context.nanos(), context.reduceMotion());
 		}
 		// The compositor fades a view's picture itself; with no picture yet, fade the card drawn there instead, over
 		// whatever is under it (a view still gliding out of this place, or the divider).

@@ -111,7 +111,7 @@ public final class JoinFlow {
 		if (control == Control.A) {
 			if (!seats.containsKey(controller)) {
 				// Only in the world (plan ruling P-10): in the lobby a free controller's A takes a free seat as ever.
-				String dropped = mode == Mode.IN_GAME ? lowestTakeoverOffered() : null;
+				String dropped = nextTakeover().orElse(null);
 				if (dropped != null) {
 					int seat = seats.get(dropped);
 					List<Effect> effects = new ArrayList<>(reassign(dropped, controller).effects());
@@ -331,7 +331,7 @@ public final class JoinFlow {
 
 	/** The dropped controller whose player a free controller's A would take over now, if any. */
 	public java.util.Optional<String> nextTakeover() {
-		return java.util.Optional.empty();
+		return java.util.Optional.ofNullable(mode == Mode.IN_GAME ? lowestTakeoverOffered() : null);
 	}
 
 	/** The controller of the lowest seat offered for take-over, or null if none is. */

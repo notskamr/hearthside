@@ -156,6 +156,7 @@ public final class SatelliteBoot {
 			pauseLine = "";
 			PauseMenuScreen.setStatus("");
 			PauseMenuScreen.setControllerAway(false);
+			pausedFor = null;
 		}
 		wasInWorld = inWorld;
 		ControlConnection connection = control;
@@ -240,7 +241,10 @@ public final class SatelliteBoot {
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.PAUSE -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite paused (controller disconnected)");
 				applier.release();
-				PauseMenuScreen.setControllerAway(true);
+				if (!Presentation.satelliteTiled()) {
+					// Player 1's game draws the reconnect card over this view. A tiled window has none: its menu stays.
+					PauseMenuScreen.setControllerAway(true);
+				}
 				Screen before = minecraft.gui.screen();
 				minecraft.pauseGame(false);
 				Screen opened = minecraft.gui.screen();

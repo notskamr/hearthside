@@ -1444,6 +1444,9 @@ public final class Party {
 		Integer index = slotOfController(from);
 		Integer instanceId = instanceOf.get(to);
 		if (index == null || instanceId == null) {
+			// Not expected: the press that took over recorded its controller, and the seat's slot lives as long as it.
+			HearthsideMod.LOGGER.warn("Hearthside could not hand {}'s player to {}: seat {}, controller {}", from, to,
+					index, instanceId);
 			return;
 		}
 		controllerOfSlot.put(index, to);
@@ -1459,6 +1462,10 @@ public final class Party {
 		sendToGuest(index, new ControlMessage.SetPadStyle(style));
 		sendToGuest(index, new ControlMessage.Lifecycle(LifecycleCommand.RESUME));
 		HearthsideMod.LOGGER.info("Hearthside take-over player={} controller={}", index + 1, guid);
+		if (!composite) {
+			// No card went away to show it: the chat says so.
+			chat(Component.literal("Player " + (index + 1) + " is playing on another controller now."));
+		}
 		Slot slot = slots.get(index);
 		GuestProfile profile = slot == null ? null : slot.profile;
 		if (profile != null && guid != null && !guid.equals(profile.preferredControllerGuid())) {
@@ -1666,16 +1673,17 @@ public final class Party {
 
 	/**
 	 * What a guest's reconnect card shows while their controller is disconnected (Spec E section 3.3), or null while
-	 * it's connected: who they are, and once the take-over is offered, the family of the free controllers that could
-	 * take them over (generic with none or a mix). Render thread.
+	 * it's connected: who they are, and while a free controller's A would take them over (the lowest seat offered, as
+	 * {@link JoinFlow#nextTakeover}), the family of the free controllers (generic with none or a mix). Render thread.
 	 */
 	dev.hearthside.fabric.client.ui.CardPainter.Reconnect reconnect(int seat) {
 		String controller = controllerOfSlot.get(seat);
 		dev.hearthside.core.session.SeatState state = controller == null ? null : flow.seats().get(controller);
-		boolean offered = state instanceof dev.hearthside.core.session.SeatState.TakeoverOffered;
-		if (!offered && !(state instanceof dev.hearthside.core.session.SeatState.Disconnected)) {
+		if (!(state instanceof dev.hearthside.core.session.SeatState.TakeoverOffered)
+				&& !(state instanceof dev.hearthside.core.session.SeatState.Disconnected)) {
 			return null;
 		}
+		boolean offered = flow.nextTakeover().filter(controller::equals).isPresent();
 		HostInput current = input;
 		PadStyle free = current == null || current.freePadCount() == 0 ? null : current.freePadStyle();
 		return new dev.hearthside.fabric.client.ui.CardPainter.Reconnect(who(seat), offered,
@@ -1747,10 +1755,15 @@ public final class Party {
 					}
 				}
 				case JoinFlow.Effect.OfferTakeover offer -> {
-					// Their reconnect card offers it from now on (it reads the seat's state each frame).
+					// Their reconnect card offers it from now on (it reads the seat's state each frame); with tiled windows
+					// nothing draws that card, so the chat says it.
 					Integer index = slotOfController(offer.controller());
 					if (index != null) {
 						HearthsideMod.LOGGER.info("Hearthside take-over offered player={}", index + 1);
+						if (!composite) {
+							chat(Component.literal("Player " + (index + 1) + "'s controller is still disconnected. "
+									+ "Press A on another controller to take over.").withStyle(ChatFormatting.YELLOW));
+						}
 					}
 				}
 				case JoinFlow.Effect.TookOver took -> takeOver(took.from(), took.to());

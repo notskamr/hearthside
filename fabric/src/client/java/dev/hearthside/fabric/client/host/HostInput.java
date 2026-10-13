@@ -415,6 +415,8 @@ final class HostInput implements Runnable {
 					RealMouse.handOff().padGone();
 					RealMouse.resync(minecraft);
 				} else {
+					// An A still held from a take-over went with the controller: the next one is a real press.
+					heldFromTakeover.remove(lost.player());
 					session.sendToGuest(lost.player(), new ControlMessage.Lifecycle(LifecycleCommand.PAUSE));
 					session.onPadLost(lost.player());
 				}

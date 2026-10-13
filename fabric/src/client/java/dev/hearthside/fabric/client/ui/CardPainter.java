@@ -122,8 +122,15 @@ public final class CardPainter {
 		int inner = cw - 12;
 		List<FormattedCharSequence> ask = font.split(Component.literal(RECONNECT), inner);
 		List<List<String>> offer = card.offerTakeover() ? wrap(font, TAKE_OVER, inner) : List.of();
-		int ch = 8 + 12 + 6 + ICON_H + 6 + ask.size() * 10 + (offer.isEmpty() ? 0 : 4 + offer.size() * 12) + 6;
-		Rect c = new Rect(view.x() + (view.width() - cw) / 2, view.y() + (view.height() - ch) / 2, cw, ch);
+		// Kept inside a short view (a small window, four players): first without the icon, then with the take-over line's
+		// first row only, cut short after it (the A and what it presses on stay).
+		int room = view.height() - 8;
+		boolean icon = height(ask.size(), offer.size(), true) <= room;
+		if (!icon && offer.size() > 1 && height(ask.size(), offer.size(), false) > room) {
+			offer = List.of(firstRowCut(font, offer.getFirst(), inner));
+		}
+		int ch = height(ask.size(), offer.size(), icon);
+		Rect c = new Rect(view.x() + (view.width() - cw) / 2, view.y() + Math.max(0, (view.height() - ch) / 2), cw, ch);
 		int colour = card.who().colour() & 0xFFFFFF;
 		cardBack(g, c, colour, 1f);
 		int centre = c.x() + cw / 2;
@@ -131,10 +138,12 @@ public final class CardPainter {
 		String name = font.plainSubstrByWidth(card.who().name(), inner - 10);
 		HearthDraw.colourPill(g, font, Component.literal(name), centre, y, colour);
 		y += 12 + 6;
-		// Their controller, lit in their colour as the real one is.
-		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.CONTROLLER, centre - ICON_W / 2, y, ICON_W, ICON_H,
-				0xFF000000 | colour);
-		y += ICON_H + 6;
+		if (icon) {
+			// Their controller, lit in their colour as the real one is.
+			g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.CONTROLLER, centre - ICON_W / 2, y, ICON_W, ICON_H,
+					0xFF000000 | colour);
+			y += ICON_H + 6;
+		}
 		for (FormattedCharSequence line : ask) {
 			g.text(font, line, centre - font.width(line) / 2, y, HearthDraw.INK, false);
 			y += 10;
@@ -157,6 +166,28 @@ public final class CardPainter {
 
 	/** The controller icon on a reconnect card: the 13×9 sprite at twice its size. */
 	private static final int ICON_W = 26, ICON_H = 18;
+
+	/** A reconnect card's height: its pill, the icon if shown, the ask's lines and the take-over's rows. */
+	private static int height(int askLines, int offerRows, boolean icon) {
+		return 8 + 12 + 6 + (icon ? ICON_H + 6 : 0) + askLines * 10 + (offerRows == 0 ? 0 : 4 + offerRows * 12) + 6;
+	}
+
+	/** A take-over row that has to stand alone, ending in "…" (words dropped from its end until it fits). */
+	private static List<String> firstRowCut(Font font, List<String> row, int width) {
+		List<String> cut = new ArrayList<>(row);
+		while (true) {
+			List<String> shown = new ArrayList<>(cut);
+			if (shown.getLast().isEmpty()) {
+				shown.add("…");
+			} else {
+				shown.set(shown.size() - 1, shown.getLast() + "…");
+			}
+			if (cut.size() == 1 || lineWidth(font, shown) <= width) {
+				return shown;
+			}
+			cut.removeLast();
+		}
+	}
 
 	/** Words (the empty one a button glyph) in lines no wider than {@code width}. */
 	private static List<List<String>> wrap(Font font, List<String> words, int width) {

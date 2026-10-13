@@ -4342,7 +4342,10 @@ public final class E2eDriver {
 	 * N3 (Spec E section 3.2, plan R5): the world freezes only when everyone in it is paused. (a) Player 1 paused while
 	 * Player2 plays: the world runs and player 1's menu says who is still playing. (b) Player2 pausing too freezes it
 	 * within a second, and both menus say so; (d) a newcomer still choosing a profile doesn't count. (c) Player2 resuming
-	 * starts it again. Player 1's status is read from their menu's narration, Player2's from its log.
+	 * starts it again. Player 1's status is read from their menu's narration, Player2's from its log. First, Player2
+	 * pauses alone (START, then B) while player 1 plays: their menu draws "The world keeps going — <player 1> is still
+	 * playing" whole, wrapped as it needs and never cut short (from its layout log line; the status-line screenshot), and
+	 * player 1's menu draws its own status whole at (a) and (b).
 	 */
 	private void pauseTogether() throws Exception {
 		IntegratedServer server = minecraft.getSingleplayerServer();
