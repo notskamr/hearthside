@@ -69,6 +69,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractButton;
@@ -160,7 +161,7 @@ public final class E2eDriver {
 			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
 			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
-			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
+			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"N8b"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
 			{"D9"}, {"7"},
@@ -357,6 +358,8 @@ public final class E2eDriver {
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
 				step("N4 player 1's Leave game asks first; a guest's Leave game takes them out and closes their game", this::leaveGame);
 				step("P9 Player2 leaves", this::player2Leaves);
+				step("N8b player 1's PC keyboard types into a newcomer's keyboard only while player 1 plays on a controller",
+						this::pcKeyboardTypesIntoANewcomersKeyboard);
 				step("H3 player 1 on a controller gets a pointer on Minecraft's screens and can respawn", this::hostPointerOnScreens);
 				step("H4 controller hints on Minecraft's screens never cover anything and offer only what works", this::hintsStayClear);
 				step("H5 player 1 can switch between the controller pointer and the mouse at any time", this::pointerOrMouse);
@@ -3995,6 +3998,75 @@ public final class E2eDriver {
 			}
 			PADS.unplug(LOBBY_PAD);
 		}
+	}
+
+	/**
+	 * N8b, the in-world half (Spec E section 3.6, ruling R8): a newcomer's name keyboard in their own view takes player
+	 * 1's PC keyboard only while player 1 plays on a controller with no screen open. On keyboard and mouse their keys stay
+	 * theirs: W reaches their forward key and nothing is typed. On a controller W never reaches it; characters type,
+	 * Backspace deletes, and Esc closes the keyboard as B does (no pause menu).
+	 */
+	private void pcKeyboardTypesIntoANewcomersKeyboard() throws Exception {
+		onRender(() -> {
+			if (minecraft.gui.screen() != null) {
+				minecraft.gui.setScreen(null);
+			}
+			return null;
+		});
+		PADS.plug(101, PAD_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		try {
+			press(101, PadButton.A);
+			press(101, PadButton.A);
+			waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+			toNew(1, 101);
+			press(101, PadButton.A);
+			waitFor("the newcomer's name keyboard", Duration.ofSeconds(5),
+					() -> onRender(() -> card(1) != null && card(1).keyboard() != null));
+			String suggested = onRender(() -> card(1).keyboard().text());
+
+			check(!onRender(() -> Party.current().hostHasController()), "player 1 is on keyboard and mouse");
+			check(pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
+					"on keyboard and mouse, W reaches player 1's forward key");
+			pcType("w");
+			String kept = onRender(() -> card(1).keyboard().text());
+			check(kept.equals(suggested), "and nothing is typed into the newcomer's keyboard (got " + kept + ")");
+
+			claimHostPad();
+			check(onRender(() -> minecraft.gui.screen() == null), "player 1 is on a controller with no screen open");
+			check(!pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
+					"on a controller, W doesn't reach player 1's forward key");
+			pcType("Robin");
+			pcKey(InputConstants.KEY_BACKSPACE);
+			String typed = onRender(() -> card(1).keyboard().text());
+			check(typed.equals("Robi"), "the PC keyboard typed Robin into the newcomer's keyboard and deleted the n (got "
+					+ typed + ")");
+			pcKey(InputConstants.KEY_ESCAPE);
+			check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.CAROUSEL),
+					"Esc closes the newcomer's keyboard, as B does");
+			check(onRender(() -> minecraft.gui.screen() == null), "and doesn't pause player 1's game");
+		} finally {
+			if (onRender(() -> Party.current().hostHasController())) {
+				releaseHostPad();
+			}
+			// The newcomer backs out (B closes their keyboard, B again leaves), as before the step.
+			for (int i = 0; i < 3 && onRender(() -> card(1) != null); i++) {
+				press(101, PadButton.B);
+			}
+			PADS.unplug(101);
+			waitFor("the newcomer gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+		}
+	}
+
+	/** Player 1's PC keyboard pressing {@code key}: whether {@code mapping} went down. Then the key is let go. */
+	private boolean pcPressReaches(int key, KeyMapping mapping) throws Exception {
+		return onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, new KeyEvent(key, 0, 0));
+			boolean down = mapping.isDown();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, new KeyEvent(key, 0, 0));
+			return down;
+		});
 	}
 
 	/** Player 1's PC keyboard typing {@code text}, as the window's character events arrive. */
