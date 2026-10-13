@@ -4594,6 +4594,8 @@ public final class E2eDriver {
 			waitFor("the picker bright again", Duration.ofSeconds(5),
 					() -> luminance(probePixel(x, y)) > 0.85 * luminance(bright));
 		} finally {
+			PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX); // back, if a failed check left it out
+			Thread.sleep(300);
 			if (onRender(() -> card(2) != null)) {
 				press(PICKING_PAD, PadButton.B);
 			}
