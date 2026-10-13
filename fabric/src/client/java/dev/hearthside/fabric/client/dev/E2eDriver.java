@@ -1909,13 +1909,13 @@ public final class E2eDriver {
 		Rect window = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
 		long handle = onRender(() -> minecraft.getWindow().handle());
 		try {
-			// Views big enough for a GUI scale of 4, where Performance renders guests at a reduced resolution.
-			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2560, 1440));
+			// Views big enough for a GUI scale of 4 (over 1280 wide), where Performance renders guests at a reduced resolution.
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2720, 1440));
 			String[] seen = {""};
 			waitFor("Guest2's frame at the bigger window", Duration.ofSeconds(10), () -> {
 				GuiScaleLine guest = lastGuiScale(satelliteLog(), 2);
 				seen[0] = String.valueOf(guest);
-				return guest != null && guest.viewWidth() >= 1200;
+				return guest != null && guest.viewWidth() >= 1300;
 			});
 			Thread.sleep(1500);
 			GuiScaleLine launched = lastGuiScale(satelliteLog(), 2);
