@@ -4008,19 +4008,23 @@ public final class E2eDriver {
 			press(LOBBY_PAD, PadButton.B);
 			check(onRender(() -> card(1).keyboard() != null && card(1).setup().step() == QuickSetup.Step.NAME),
 					"B on Skin goes back to the name keyboard");
-			onRender(() -> {
+			// The screen after each event (a second repeat would answer "End the party?" itself, hiding the first).
+			List<String> screens = onRender(() -> {
 				long window = minecraft.getWindow().handle();
 				KeyEvent esc = new KeyEvent(InputConstants.KEY_ESCAPE, 0, 0);
-				minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, esc);
-				minecraft.keyboardHandler.keyPress(window, InputConstants.REPEAT, esc);
-				minecraft.keyboardHandler.keyPress(window, InputConstants.REPEAT, esc);
-				minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, esc);
-				return null;
+				List<String> seen = new ArrayList<>();
+				for (int action : new int[] {InputConstants.PRESS, InputConstants.REPEAT, InputConstants.REPEAT,
+						InputConstants.RELEASE}) {
+					minecraft.keyboardHandler.keyPress(window, action, esc);
+					seen.add(minecraft.gui.screen().getClass().getSimpleName());
+				}
+				return seen;
 			});
 			Thread.sleep(200);
 			check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.CAROUSEL),
 					"a held Esc closes the keyboard");
-			check(onRender(() -> minecraft.gui.screen() instanceof LobbyScreen), "and only that: no \"End the party?\"");
+			check(screens.stream().allMatch("LobbyScreen"::equals),
+					"and only that: no \"End the party?\" (screens " + screens + ")");
 		} finally {
 			for (int i = 0; i < 5 && onRender(() -> Party.current() != null && Party.current().seatedCount() > 0); i++) {
 				press(LOBBY_PAD, PadButton.B);
