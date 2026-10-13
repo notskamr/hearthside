@@ -4490,6 +4490,17 @@ public final class E2eDriver {
 		check(onRender(() -> minecraft.gui.screen() == null), "Add player closes the menu");
 	}
 
+	/** The join prompt as last drawn overlaps none of Minecraft's toasts in player 1's view (it sits below them). */
+	private void promptClearOfToasts(String shot) throws Exception {
+		var toast = onRender(() -> Party.current().joinToast());
+		var drawn = onRender(toast::e2eDrawn);
+		var toasts = onRender(toast::e2eToasts);
+		HearthsideMod.LOGGER.info("Hearthside E2E {} prompt={} toasts={}", shot, drawn, toasts);
+		check(drawn != null, shot + ": the prompt was drawn");
+		check(!toasts.isEmpty(), shot + ": it saw the tutorial toast");
+		check(toasts.stream().noneMatch(drawn::intersects), shot + ": the prompt " + drawn + " overlaps a toast " + toasts);
+	}
+
 	/** Backs a newcomer out of their profile picker and waits until their seat is free. */
 	private void backOut(int pad) throws Exception {
 		if (onRender(() -> card(2) != null)) {
@@ -4505,12 +4516,28 @@ public final class E2eDriver {
 	 */
 	private void addPlayer() throws Exception {
 		long mark = hostLogLength();
+		// Minecraft's keyboard tutorial toast in player 1's view, by the window's centre where the prompt hangs: the prompt
+		// sits below it, never over it. The new world's own is still up unless an earlier step took a controller.
+		TutorialToast tutorial = onRender(() -> {
+			if (hasTutorialToast()) {
+				return null;
+			}
+			TutorialToast t = new TutorialToast(minecraft.font, TutorialToast.Icons.MOVEMENT_KEYS,
+					Component.literal("Move with W, A, S and D"), Component.literal("Jump with Space"), false);
+			minecraft.gui.toastManager().addToast(t);
+			return t;
+		});
+		waitFor("the keyboard tutorial toast showing", Duration.ofSeconds(3), () -> onRender(this::hasTutorialToast));
+		Thread.sleep(1000); // slid in
 		try {
 			// (b) The prompt expires after 15 s.
 			chooseAddPlayer();
 			waitFor("the add-player prompt", Duration.ofSeconds(5), () -> hostLogSince(mark).contains("hearthside add player prompt shown"));
-			Thread.sleep(400); // slid into place
+			Thread.sleep(50);
+			promptClearOfToasts("add-player coming in"); // its slide doesn't cross the tutorial toast either
+			Thread.sleep(400); // in place
 			windowShot("add-player-connect"); // no free controller yet: "Connect a controller, then press A"
+			promptClearOfToasts("add-player-connect");
 			jumpJoinClock(16);
 			waitFor("(b) the prompt expired", Duration.ofSeconds(5),
 					() -> hostLogSince(mark).contains("hearthside add player prompt expired"));
@@ -4522,6 +4549,7 @@ public final class E2eDriver {
 			chooseAddPlayer();
 			Thread.sleep(400);
 			windowShot("add-player"); // "Press A on a new controller to join"
+			promptClearOfToasts("add-player");
 			press(ADD_PAD, PadButton.A);
 			waitFor("(a) one A joins: a newcomer choosing a profile", Duration.ofSeconds(5),
 					() -> onRender(() -> card(2) != null));
@@ -4544,9 +4572,27 @@ public final class E2eDriver {
 			waitFor("Esc cancelled the prompt", Duration.ofSeconds(5),
 					() -> hostLogSince(cancel).contains("hearthside add player prompt cancelled"));
 			check(onRender(() -> minecraft.gui.screen() == null), "and didn't open the pause menu");
+
+			// B on player 1's controller cancels it too (after the screenshots: taking a controller clears the keyboard
+			// tutorial toast).
+			claimHostPad();
+			try {
+				long padCancel = hostLogLength();
+				chooseAddPlayer();
+				press(HOST_PAD, PadButton.B);
+				waitFor("B on player 1's controller cancelled the prompt", Duration.ofSeconds(5),
+						() -> hostLogSince(padCancel).contains("hearthside add player prompt cancelled"));
+				check(onRender(() -> minecraft.gui.screen() == null && !Party.current().addPlayerShowing()),
+						"and opened nothing");
+			} finally {
+				releaseHostPad();
+			}
 		} finally {
 			onRender(() -> {
 				minecraft.gui.setScreen(null);
+				if (tutorial != null) {
+					tutorial.hide();
+				}
 				return null;
 			});
 			backOut(ADD_PAD);
