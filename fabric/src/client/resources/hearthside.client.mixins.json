@@ -36,6 +36,8 @@
 		"SatelliteInputMixin",
 		"SatelliteResyncMixin",
 		"SessionOptionsSaveMixin",
+		"SoundEngineAccessor",
+		"SoundManagerAccessor",
 		"SatelliteWindowMixin",
 		"TextFieldStyleMixin",
 		"TitleButtonStyleMixin",
@@ -45,7 +47,8 @@
 		"ToastManagerAccessor",
 		"UnpublishMixin",
 		"WindowAccessor",
-		"WindowSizeMixin"
+		"WindowSizeMixin",
+		"WorldFreezeMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

@@ -7,6 +7,8 @@ import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.protocol.ControlCodec;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.protocol.LifecycleCommand;
+import dev.hearthside.core.session.PauseLine;
+import dev.hearthside.core.session.PausePolicy;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.compositor.FrameExporter;
 import dev.hearthside.fabric.client.compositor.Presentation;
@@ -24,6 +26,7 @@ import java.io.IOException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientLoginNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.User;
@@ -45,6 +48,15 @@ import net.minecraft.sounds.SoundSource;
 public final class SatelliteBoot {
 	private static volatile String loginToken;
 	private static InputApplier applier;
+	/** The host's control channel, once connected. */
+	private static volatile ControlConnection control;
+	/** The pause state last told to the host (null: not yet). Render thread. */
+	private static Boolean toldPaused;
+	/** The pause menu's status line from the host's last PauseStatus in this world ("" for none). Render thread. */
+	private static String pauseLine = "";
+	private static boolean wasInWorld;
+	/** Telling the host failed once; not tried again. Render thread. */
+	private static boolean pauseFailed;
 
 	private SatelliteBoot() {}
 
@@ -82,6 +94,7 @@ public final class SatelliteBoot {
 		ButtonGuideRenderer.enable(applier::scheme);
 		// Before any screen opens, so the guest's first pause menu is driven exactly like later ones.
 		MenuNavigator.register();
+		ClientTickEvents.END_CLIENT_TICK.register(SatelliteBoot::tickPause);
 		if ("1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"))) {
 			logScreens(minecraft);
 		}
@@ -103,6 +116,49 @@ public final class SatelliteBoot {
 		});
 	}
 
+	/**
+	 * Pausing together (Spec E section 3.2): tells the host whenever a pausing screen opens or closes in this game (any
+	 * screen, Hearthside's, vanilla's or a mod's), and forgets the host's status line once the world closes.
+	 */
+	private static void tickPause(Minecraft minecraft) {
+		if (pauseFailed) {
+			return;
+		}
+		try {
+			tellPause(minecraft);
+		} catch (RuntimeException e) {
+			// Never break Minecraft: the host just stops hearing this game's pause state.
+			pauseFailed = true;
+			HearthsideMod.LOGGER.error("Hearthside could not tell the host this game's pause state; no longer trying", e);
+		}
+	}
+
+	private static void tellPause(Minecraft minecraft) {
+		boolean inWorld = minecraft.level != null;
+		if (wasInWorld && !inWorld) {
+			pauseLine = "";
+			PauseMenuScreen.setStatus("");
+		}
+		wasInWorld = inWorld;
+		ControlConnection connection = control;
+		boolean paused = minecraft.gui.isPausing();
+		if (connection == null || toldPaused != null && toldPaused == paused) {
+			return;
+		}
+		toldPaused = paused;
+		HearthsideMod.LOGGER.info("Hearthside pause state {}", paused ? "paused" : "playing");
+		try {
+			connection.send(new ControlMessage.PauseState(paused));
+		} catch (IOException e) {
+			HearthsideMod.LOGGER.warn("Could not tell the Hearthside host this game's pause state: {}", e.toString());
+		}
+	}
+
+	/** The status line the host last sent for this world, for a pause menu as it opens ("" for none). Render thread. */
+	public static String pauseLine() {
+		return pauseLine;
+	}
+
 	private static void connect(Minecraft minecraft, int port, int index, String secret) {
 		ControlConnection connection;
 		try {
@@ -122,6 +178,7 @@ public final class SatelliteBoot {
 			FrameExporter.install(minecraft, connection, index + 1);
 		}
 		connection.onMessage(message -> handle(minecraft, message));
+		control = connection;
 		connection.onClose(() -> {
 			HearthsideMod.LOGGER.info("Hearthside host closed the control channel; quitting");
 			minecraft.execute(minecraft::stop);
@@ -187,6 +244,12 @@ public final class SatelliteBoot {
 						scheme.controlFor(dev.hearthside.core.input.Action.JUMP).map(Enum::name).orElse("none"));
 				applier.setScheme(scheme);
 				applier.applyOptions();
+			});
+			case ControlMessage.PauseStatus m -> minecraft.execute(() -> {
+				HearthsideMod.LOGGER.info("Hearthside world {} still playing={}", m.frozen() ? "frozen" : "running",
+						String.join(",", m.stillPlaying()));
+				pauseLine = PauseLine.of(new PausePolicy.Decision(m.frozen(), m.stillPlaying()));
+				PauseMenuScreen.setStatus(pauseLine);
 			});
 			case ControlMessage.SetPadStyle m -> {
 				HearthsideMod.LOGGER.info("Hearthside SetPadStyle {}", m.style());

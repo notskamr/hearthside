@@ -3945,6 +3945,43 @@ public final class E2eDriver {
 		return server.overworld().getGameTime();
 	}
 
+	/**
+	 * A silent looping sound in player 1's game. Its channel is paused and resumed with every other world sound, so it
+	 * shows whether player 1's game's sounds are paused (N3).
+	 */
+	private static final class SoundProbe extends net.minecraft.client.resources.sounds.AbstractSoundInstance {
+		SoundProbe() {
+			super(net.minecraft.sounds.SoundEvents.MINECART_RIDING, net.minecraft.sounds.SoundSource.AMBIENT,
+					net.minecraft.client.resources.sounds.SoundInstance.createUnseededRandom());
+			looping = true;
+			volume = 0.0F;
+			relative = true;
+			attenuation = Attenuation.NONE;
+		}
+
+		@Override
+		public boolean canStartSilent() {
+			return true;
+		}
+	}
+
+	/** The probe's channel: "playing", "paused", "stopped", or "none" (not started: no sound device). */
+	private String soundState(SoundProbe probe) throws Exception {
+		java.util.concurrent.CompletableFuture<String> state = new java.util.concurrent.CompletableFuture<>();
+		boolean asked = onRender(() -> {
+			var engine = ((dev.hearthside.fabric.client.mixin.SoundManagerAccessor) minecraft.getSoundManager())
+					.hearthside$soundEngine();
+			var handle = ((dev.hearthside.fabric.client.mixin.SoundEngineAccessor) engine).hearthside$instanceToChannel()
+					.get(probe);
+			if (handle == null) {
+				return false;
+			}
+			handle.execute(channel -> state.complete(channel.playing() ? "playing" : channel.stopped() ? "stopped" : "paused"));
+			return true;
+		});
+		return asked ? state.completeOnTimeout("none", 2, TimeUnit.SECONDS).get() : "none";
+	}
+
 	/** The open screen's narration, which carries the pause menu's status line. Render thread. */
 	private String narration() {
 		Screen screen = minecraft.gui.screen();
@@ -3961,7 +3998,21 @@ public final class E2eDriver {
 		IntegratedServer server = minecraft.getSingleplayerServer();
 		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
 		Thread.sleep(300);
+		SoundProbe probe = new SoundProbe();
 		try {
+			// Player 1's game is the couch's only audio (guests are muted): its sounds follow the world, not their menu.
+			onRender(() -> {
+				minecraft.getSoundManager().play(probe);
+				return null;
+			});
+			long probeUntil = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+			while (!soundState(probe).equals("playing") && System.nanoTime() < probeUntil) {
+				Thread.sleep(100);
+			}
+			boolean sound = soundState(probe).equals("playing");
+			if (!sound) {
+				log("   no sound device: N3's sound checks are skipped");
+			}
 			press(PICKING_PAD, PadButton.A);
 			press(PICKING_PAD, PadButton.A);
 			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
@@ -3980,6 +4031,10 @@ public final class E2eDriver {
 					"player 1's game logs that Player2 is still playing");
 			check(onRender(this::narration).contains("The world keeps going — Player2 is still playing"),
 					"player 1's menu says Player2 is still playing (got \"" + onRender(this::narration) + "\")");
+			if (sound) {
+				String state = soundState(probe);
+				check(state.equals("playing"), "player 1's game's sounds play on while the world runs (got " + state + ")");
+			}
 
 			int pausedLines = count("hearthside pause state paused");
 			int frozenLines = count("hearthside world frozen");
@@ -3994,6 +4049,10 @@ public final class E2eDriver {
 			check(hostLogSince(mark).contains("hearthside world frozen"), "player 1's game logs the world frozen");
 			check(onRender(this::narration).contains("Everyone's paused — the world is frozen"),
 					"player 1's menu says the world is frozen (got \"" + onRender(this::narration) + "\")");
+			if (sound) {
+				String state = soundState(probe);
+				check(state.equals("paused"), "player 1's game's sounds pause with the world (got " + state + ")");
+			}
 			waitFor("Player2's menu told the world is frozen", Duration.ofSeconds(5),
 					() -> count("hearthside world frozen") > frozenLines);
 
@@ -4006,9 +4065,15 @@ public final class E2eDriver {
 			Thread.sleep(1000);
 			check(gameTime(server) > resumed, "(c) Player2 resuming starts the world again");
 			check(onRender(this::narration).contains("Player2 is still playing"), "and player 1's menu says so");
+			if (sound) {
+				String state = soundState(probe);
+				check(state.equals("playing"),
+						"player 1's game's sounds play again with the world, their menu still open (got " + state + ")");
+			}
 		} finally {
 			onRender(() -> {
 				minecraft.gui.setScreen(null);
+				minecraft.getSoundManager().stop(probe);
 				return null;
 			});
 			if (onRender(() -> card(2) != null)) {

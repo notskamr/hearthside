@@ -7,6 +7,7 @@ import dev.hearthside.core.input.PadButton;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.HearthsideClient;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.satellite.SatelliteBoot;
 import dev.hearthside.fabric.client.ui.GlassButton;
 import dev.hearthside.fabric.client.ui.HearthDraw;
 import dev.hearthside.fabric.client.ui.HintChip;
@@ -21,6 +22,7 @@ import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -40,7 +42,7 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	private static final int HUD = 30;
 	/** A guest's focus outline: the ember accent (their game doesn't know their profile's colour). */
 	private static final int EMBER = 0xFFB35A;
-	/** What every pause menu in this game says under "Paused" (Task 3's pause states); empty until then. */
+	/** What every pause menu in this game says under "Paused": who is still playing, or that the world is frozen. */
 	private static volatile String status = "";
 	/** Vanilla's pause screen opened by Game menu…, and the menu that closing it to play goes back to. Render thread. */
 	private static WeakReference<PauseScreen> gameMenu = new WeakReference<>(null);
@@ -124,8 +126,17 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	@Override
 	public void added() {
 		super.added();
+		// Fresh for this party and world: player 1's from who is paused now, a guest's from the host's last word.
+		setStatus(guest ? SatelliteBoot.pauseLine() : Party.pauseLine());
 		HearthsideMod.LOGGER.info("Hearthside pause menu opened entries={}",
 				entries.stream().map(e -> e.label().getString()).collect(Collectors.joining(",")));
+	}
+
+	/** "Paused" and the status line, so a screen reader hears who is still playing. */
+	@Override
+	public Component getNarrationMessage() {
+		String line = status;
+		return line.isEmpty() ? title : CommonComponents.joinForNarration(title, Component.literal(line));
 	}
 
 	@Override
