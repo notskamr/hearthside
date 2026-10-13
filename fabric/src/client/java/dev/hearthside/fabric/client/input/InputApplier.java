@@ -15,6 +15,7 @@ import dev.hearthside.core.input.MenuIntent;
 import dev.hearthside.core.input.PointerHandOff;
 import dev.hearthside.core.input.SlotGeometry;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.mixin.ContainerScreenAccessor;
 import dev.hearthside.fabric.client.mixin.KeyMappingAccessor;
 import java.util.ArrayList;
@@ -152,7 +153,12 @@ public final class InputApplier {
 					PadMovement.clear();
 					VirtualCursor.centre(minecraft.getWindow());
 				}
-				applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt), now);
+				if (screen instanceof PadScreen padScreen && minecraft.level != null) {
+					// Hearthside's screens in the world (the pause menu) take this controller by focus: no pointer.
+					padScreen.padInput(0, frame, now);
+				} else {
+					applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt), now);
+				}
 			}
 		} finally {
 			// Even if applying failed, never replay the same button edge on the next frame.

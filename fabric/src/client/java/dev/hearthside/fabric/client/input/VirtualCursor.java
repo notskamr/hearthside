@@ -1,6 +1,7 @@
 package dev.hearthside.fabric.client.input;
 
 import com.mojang.blaze3d.platform.Window;
+import dev.hearthside.fabric.client.menu.PadScreen;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -38,6 +39,10 @@ public final class VirtualCursor {
 	}
 
 	private static void drawOn(Screen screen, Minecraft minecraft) {
+		if (screen instanceof PadScreen) {
+			// Hearthside's own screens are driven by focus, never a pointer (a guest's pause menu).
+			return;
+		}
 		ScreenEvents.afterExtract(screen).register((s, graphics, mouseX, mouseY, delta) -> draw(graphics, minecraft.getWindow()));
 	}
 

@@ -133,6 +133,11 @@ public final class ButtonGuideRenderer {
 		style = padStyle;
 	}
 
+	/** This game's controller family (the guest's, or player 1's), for screens that draw their own hints. */
+	public static PadStyle style() {
+		return style;
+	}
+
 	public static void setReduceMotion(boolean reduce) {
 		reduceMotion = reduce;
 	}
