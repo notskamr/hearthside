@@ -15,14 +15,15 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * The title screen's buttons are wooden (Spec A section 4.1); every other screen's buttons stay vanilla. Buttons other
- * mods add to the title look the same.
+ * The title screen's buttons are wooden (Spec A section 4.1), unless player 1 chose Minecraft's own title screen (Spec E
+ * section 3.5); every other screen's buttons stay vanilla. Buttons other mods add to the title look the same.
  */
 @Mixin(AbstractButton.class)
 public abstract class TitleButtonStyleMixin {
 	@Inject(method = "extractDefaultSprite", at = @At("HEAD"), cancellable = true)
 	private void hearthside$wood(GuiGraphicsExtractor g, CallbackInfo ci) {
-		if (HearthsideClient.role() != Role.HOST || !(Minecraft.getInstance().gui.screen() instanceof TitleScreen)) {
+		if (HearthsideClient.role() != Role.HOST || !(Minecraft.getInstance().gui.screen() instanceof TitleScreen)
+				|| !TitleStyle.applies()) {
 			return;
 		}
 		AbstractButton self = (AbstractButton) (Object) this;

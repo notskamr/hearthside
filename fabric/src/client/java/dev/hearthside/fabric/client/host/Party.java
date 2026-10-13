@@ -21,6 +21,7 @@ import dev.hearthside.core.launch.LaunchCommand;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.launch.SatelliteLaunch;
 import dev.hearthside.core.launch.UnsupportedLauncherException;
+import dev.hearthside.core.layout.BorderStyle;
 import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
@@ -79,6 +80,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -156,10 +158,21 @@ public final class Party {
 	private volatile Transport hostTransport = Transport.COPY;
 	/** The graphics API guests render with: this game's own, so its compositor can take their frames (decided at session start). */
 	private volatile GraphicsBackend guestBackend = GraphicsBackend.OPENGL;
-	/** Each guest's heap and render-distance cap, from {@code config/hearthside.json} as it was when this session opened. */
-	private final SplitScreenConfig config;
-	/** The party's preset: the configured one, or what Auto chose for this machine when the party was created (plan R5). */
-	private final Preset preset;
+	/**
+	 * Player 1's split-screen settings: {@code config/hearthside.json} as it was when this session opened, then as their
+	 * Split-screen screen changes it ({@link #applySettings}). Each guest's heap and render-distance cap come from here
+	 * as they launch.
+	 */
+	private volatile SplitScreenConfig config;
+	/**
+	 * The party's preset: the configured one, or what Auto chose for this machine when the party was created (plan R5);
+	 * one chosen on the Split-screen screen replaces it for the next guest to launch.
+	 */
+	private volatile Preset preset;
+	/** What Auto chose for this party, once it has chosen (going back to Auto keeps it). */
+	private Preset autoChoice;
+	/** The tuning player 1's own game took for this split-screen run, or null (plan R4). Render thread. */
+	private SessionTuning player1Tuning;
 	/** Whether this party lowered the world's simulation distance below player 1's own. Server thread. */
 	private boolean simulationLowered;
 	/**
@@ -179,6 +192,11 @@ public final class Party {
 		volatile int announcedGeneration;
 		/** A pausing screen is open in this guest's game, as it last said (pausing together, Spec E section 3.2). */
 		volatile boolean paused;
+		/**
+		 * Whether this guest renders at a reduced resolution: the party's preset as their game launched. A preset player 1
+		 * chooses later waits for the next player to join (Spec E section 5).
+		 */
+		volatile boolean reducedResolution;
 
 		Slot(int index, GuestProfile profile) {
 			this.index = index;
@@ -267,6 +285,7 @@ public final class Party {
 			choice = new PresetChooser.Choice(Preset.BALANCED, List.of("machine unknown"));
 		}
 		HearthsideMod.LOGGER.info("Hearthside preset auto → {} ({})", name(choice.preset()), String.join(", ", choice.reasons()));
+		autoChoice = choice.preset();
 		return choice.preset();
 	}
 
@@ -609,9 +628,60 @@ public final class Party {
 		return slots.size();
 	}
 
-	/** How this session shares the screen, from {@code config/hearthside.json} as it was when the session opened. */
+	/** How this session shares the screen: {@code config/hearthside.json}, as player 1's Split-screen screen left it. */
 	public LayoutSettings layout() {
 		return config.layout();
+	}
+
+	/** Player 1's split-screen settings now (see {@link #applySettings}). */
+	public SplitScreenConfig config() {
+		return config;
+	}
+
+	/**
+	 * Player 1's Split-screen screen (Spec E section 3.5): saves {@code next} and applies it. A new layout glides the
+	 * views there at once (showing the name tags again, as any layout change does); borders and name tags apply from the
+	 * next frame, the title style the next time the title screen opens. The preset, preset for player 1 and guests'
+	 * render distance and memory apply from the next guest to launch: players already in the world keep theirs (section
+	 * 5). Render thread.
+	 */
+	public void applySettings(SplitScreenConfig next) {
+		SplitScreenConfig before = config;
+		if (SplitScreenConfigFile.apply(gameDir, before, next).isEmpty()) {
+			return;
+		}
+		config = next;
+		if (next.preset() != before.preset()) {
+			// A chosen preset replaces Auto's choice; back to Auto, the party's own Auto choice again (plan R5).
+			preset = next.preset() != Preset.AUTO ? next.preset() : autoChoice != null ? autoChoice : choosePreset();
+		}
+		LayoutSettings was = before.layout(), now = next.layout();
+		views.settings(now);
+		if (!sameArrangement(was, now)) {
+			afterGuestsChanged();
+		} else if (!was.nameTags() && now.nameTags() || was.borders() == BorderStyle.OFF && now.borders() != BorderStyle.OFF) {
+			// Back on: shown at once, so player 1 sees the setting take.
+			views.showTags(System.nanoTime());
+		}
+	}
+
+	/** Whether two layouts put the views in the same places (they may differ in borders, name tags or animation). */
+	private static boolean sameArrangement(LayoutSettings a, LayoutSettings b) {
+		return a.withBorders(b.borders()).withNameTags(b.nameTags()).withLayoutAnimation(b.layoutAnimation()).equals(b);
+	}
+
+	/** The seats in the order they fill the views, player 1 (0) included; for this session only. Render thread. */
+	public List<Integer> viewOrder() {
+		return views.order();
+	}
+
+	/** Swap views (Spec E section 3.5): the views glide to this order, for this session only. Render thread. */
+	public void setViewOrder(List<Integer> order) {
+		if (order.equals(views.order())) {
+			return;
+		}
+		views.setOrder(order);
+		afterGuestsChanged();
 	}
 
 	public static Party current() {
@@ -662,6 +732,7 @@ public final class Party {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
 				// The party's preset, for this game's session: a drop-in gets the same as everyone (plan R5).
 				SessionTuning tuning = tuning();
+				slot.reducedResolution = tuning.reducedResolution();
 				LaunchCommand command = LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
 						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
@@ -705,6 +776,7 @@ public final class Party {
 		if (slots.isEmpty()) {
 			enterSplitScreen();
 		}
+		tunePlayer1();
 		slots.put(index, slot);
 		try {
 			slot.supervisor.start();
@@ -1982,10 +2054,25 @@ public final class Party {
 		pauseOnLostFocusBefore = minecraft.options.pauseOnLostFocus;
 		// Other players keep playing while this window is in the background; the host must not pause because of it.
 		minecraft.options.pauseOnLostFocus = false;
-		if (config.presetForPlayer1()) {
-			// Player 1's game takes the preset too, for as long as the screen is shared (never its render scale: plan R4).
-			SessionOptions.applyForPlayer1(minecraft.options, tuning());
+	}
+
+	/**
+	 * Player 1's game takes the preset too, for as long as the screen is shared, when the setting says so (never its
+	 * render scale: plan R4): from the first guest's launch, and anew at a later launch if player 1 changed the setting or
+	 * the preset since (Spec E section 3.5). Render thread.
+	 */
+	private void tunePlayer1() {
+		SessionTuning wanted = config.presetForPlayer1() ? tuning() : null;
+		if (Objects.equals(wanted, player1Tuning)) {
+			return;
 		}
+		if (player1Tuning != null) {
+			SessionOptions.restore(minecraft.options);
+		}
+		if (wanted != null) {
+			SessionOptions.applyForPlayer1(minecraft.options, wanted);
+		}
+		player1Tuning = wanted;
 	}
 
 	/** How each guest's view reaches the screen, for its launch command. */
@@ -2024,6 +2111,7 @@ public final class Party {
 		}
 		minecraft.options.pauseOnLostFocus = pauseOnLostFocusBefore;
 		SessionOptions.restore(minecraft.options);
+		player1Tuning = null;
 	}
 
 	/**
@@ -2058,8 +2146,7 @@ public final class Party {
 			minecraft.resizeGui();
 		}
 		views.target(0).ifPresent(host -> GuiScaleOverride.log(1, window, host.width(), host.height()));
-		// Guests only, even when player 1 takes the preset (plan R4).
-		boolean reducedResolution = tuning().reducedResolution();
+		// Guests only, even when player 1 takes the preset (plan R4); each at the resolution they launched with.
 		for (Slot guest : guests) {
 			ControlConnection connection = guest.connection;
 			Rect target = views.target(guest.index).orElse(null);
@@ -2067,7 +2154,7 @@ public final class Party {
 				continue;
 			}
 			ControlMessage.SetViewport viewport = partyScale < 1 ? new ControlMessage.SetViewport(target, refresh)
-					: viewport(target, refresh, GuiScaleRule.forView(target, partyScale, reducedResolution));
+					: viewport(target, refresh, GuiScaleRule.forView(target, partyScale, guest.reducedResolution));
 			views.sentFrame(guest.index, new Rect(0, 0, viewport.frameWidth(), viewport.frameHeight()));
 			send(connection, viewport);
 		}

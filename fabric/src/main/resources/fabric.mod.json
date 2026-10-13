@@ -9,7 +9,8 @@
 	"entrypoints": {
 		"main": ["dev.hearthside.fabric.HearthsideMod"],
 		"client": ["dev.hearthside.fabric.client.HearthsideClient"],
-		"sodium:config_api_user": ["dev.hearthside.fabric.client.satellite.SodiumGuestOptions"]
+		"sodium:config_api_user": ["dev.hearthside.fabric.client.satellite.SodiumGuestOptions"],
+		"modmenu": ["dev.hearthside.fabric.client.compat.ModMenuEntry"]
 	},
 	"mixins": [
 		"hearthside.mixins.json",

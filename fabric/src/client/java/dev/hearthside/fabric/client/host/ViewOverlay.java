@@ -4,6 +4,7 @@ import com.mojang.renderpearl.api.pipeline.BlendFactor;
 import com.mojang.renderpearl.api.pipeline.BlendFunction;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.ViewFrame;
 import dev.hearthside.fabric.client.compositor.Compositor;
@@ -104,19 +105,30 @@ final class ViewOverlay implements OverlayLayer {
 		CardPainter.skin(g, party.pickerSkin(seat), c.x() + c.width() / 2 - height / 4, c.y() + 19, height / 2, height, 30f);
 	}
 
-	/** A thin border in the player's colour, and for a while their name in an Ember-glass tag (Spec A 4.1, 6). */
+	/**
+	 * A border in the player's colour (thin, 2 px for "colour", or none: plan R2), and for a while their name in an
+	 * Ember-glass tag unless name tags are off (Spec A 4.1, 6; Spec E 3.5). Both follow the settings from the next frame.
+	 */
 	private void borderAndTag(GuiGraphicsExtractor g, Font font, ViewFrame view, OverlayContext context) {
 		Rect r = view.rect();
 		int seat = view.seat();
 		boolean live = seat == 0 || party.viewPhase(seat) == dev.hearthside.core.session.ViewPhase.LIVE;
 		int colour = party.colorOf(seat) & 0xFFFFFF;
-		int edge = Math.round(0xD9 * view.alpha()) << 24 | colour;
-		g.fill(r.x(), r.y(), r.x() + r.width(), r.y() + 1, edge);
-		g.fill(r.x(), r.y() + r.height() - 1, r.x() + r.width(), r.y() + r.height(), edge);
-		g.fill(r.x(), r.y() + 1, r.x() + 1, r.y() + r.height() - 1, edge);
-		g.fill(r.x() + r.width() - 1, r.y() + 1, r.x() + r.width(), r.y() + r.height() - 1, edge);
-		if (!live) {
-			return; // their card already says who they are
+		LayoutSettings settings = party.layout();
+		int edgeWidth = switch (settings.borders()) {
+			case COLOUR -> 2;
+			case THIN -> 1;
+			case OFF -> 0;
+		};
+		if (edgeWidth > 0) {
+			int edge = Math.round(0xD9 * view.alpha()) << 24 | colour;
+			g.fill(r.x(), r.y(), r.x() + r.width(), r.y() + edgeWidth, edge);
+			g.fill(r.x(), r.y() + r.height() - edgeWidth, r.x() + r.width(), r.y() + r.height(), edge);
+			g.fill(r.x(), r.y() + edgeWidth, r.x() + edgeWidth, r.y() + r.height() - edgeWidth, edge);
+			g.fill(r.x() + r.width() - edgeWidth, r.y() + edgeWidth, r.x() + r.width(), r.y() + r.height() - edgeWidth, edge);
+		}
+		if (!live || !settings.nameTags()) {
+			return; // their card already says who they are, or player 1 turned name tags off
 		}
 		long since = Math.max(party.layoutChangedAt(), seat == 0 ? Long.MIN_VALUE : party.liveSince(seat));
 		long age = context.nanos() - since;
