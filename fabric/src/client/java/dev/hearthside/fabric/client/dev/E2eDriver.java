@@ -4013,23 +4013,28 @@ public final class E2eDriver {
 			}
 			return null;
 		});
-		PADS.plug(101, PAD_GUID, PadStyle.PLAYSTATION);
+		// Its own controller, so the step works whoever else is in the party (Player2 is still there in a focused run).
+		int gamesBefore = satellites().size();
+		PADS.plug(N8B_PAD, "fake-n8b-pad", PadStyle.PLAYSTATION);
 		Thread.sleep(300);
+		int seat = 0;
 		try {
-			press(101, PadButton.A);
-			press(101, PadButton.A);
-			waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
-			toNew(1, 101);
-			press(101, PadButton.A);
+			press(N8B_PAD, PadButton.A);
+			press(N8B_PAD, PadButton.A);
+			waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(this::newcomerSeat) > 0);
+			seat = onRender(this::newcomerSeat);
+			int s = seat;
+			toNew(s, N8B_PAD);
+			press(N8B_PAD, PadButton.A);
 			waitFor("the newcomer's name keyboard", Duration.ofSeconds(5),
-					() -> onRender(() -> card(1) != null && card(1).keyboard() != null));
-			String suggested = onRender(() -> card(1).keyboard().text());
+					() -> onRender(() -> card(s) != null && card(s).keyboard() != null));
+			String suggested = onRender(() -> card(s).keyboard().text());
 
 			check(!onRender(() -> Party.current().hostHasController()), "player 1 is on keyboard and mouse");
 			check(pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
 					"on keyboard and mouse, W reaches player 1's forward key");
 			pcType("w");
-			String kept = onRender(() -> card(1).keyboard().text());
+			String kept = onRender(() -> card(s).keyboard().text());
 			check(kept.equals(suggested), "and nothing is typed into the newcomer's keyboard (got " + kept + ")");
 
 			claimHostPad();
@@ -4038,11 +4043,11 @@ public final class E2eDriver {
 					"on a controller, W doesn't reach player 1's forward key");
 			pcType("Robin");
 			pcKey(InputConstants.KEY_BACKSPACE);
-			String typed = onRender(() -> card(1).keyboard().text());
+			String typed = onRender(() -> card(s).keyboard().text());
 			check(typed.equals("Robi"), "the PC keyboard typed Robin into the newcomer's keyboard and deleted the n (got "
 					+ typed + ")");
 			pcKey(InputConstants.KEY_ESCAPE);
-			check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.CAROUSEL),
+			check(onRender(() -> card(s) != null && card(s).stage() == SeatCard.Stage.CAROUSEL),
 					"Esc closes the newcomer's keyboard, as B does");
 			check(onRender(() -> minecraft.gui.screen() == null), "and doesn't pause player 1's game");
 		} finally {
@@ -4050,12 +4055,26 @@ public final class E2eDriver {
 				releaseHostPad();
 			}
 			// The newcomer backs out (B closes their keyboard, B again leaves), as before the step.
-			for (int i = 0; i < 3 && onRender(() -> card(1) != null); i++) {
-				press(101, PadButton.B);
+			int s = seat;
+			for (int i = 0; i < 3 && s > 0 && onRender(() -> card(s) != null); i++) {
+				press(N8B_PAD, PadButton.B);
 			}
-			PADS.unplug(101);
-			waitFor("the newcomer gone", Duration.ofSeconds(30), () -> playerCount() == 1 && satellites().isEmpty());
+			PADS.unplug(N8B_PAD);
+			waitFor("the newcomer gone", Duration.ofSeconds(30),
+					() -> satellites().size() <= gamesBefore && onRender(this::newcomerSeat) == 0);
 		}
+	}
+
+	private static final int N8B_PAD = 111;
+
+	/** The first seat with a card open (a newcomer choosing), or 0. Render thread. */
+	private int newcomerSeat() {
+		for (int seat = 1; seat < 4; seat++) {
+			if (card(seat) != null) {
+				return seat;
+			}
+		}
+		return 0;
 	}
 
 	/** Player 1's PC keyboard pressing {@code key}: whether {@code mapping} went down. Then the key is let go. */
