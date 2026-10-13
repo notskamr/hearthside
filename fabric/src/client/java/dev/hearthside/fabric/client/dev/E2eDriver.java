@@ -4213,7 +4213,7 @@ public final class E2eDriver {
 		}
 	}
 
-	private static final int N8B_PAD = 111;
+	private static final int N8B_PAD = 114;
 
 	/** Seats with a card open (newcomers choosing) and not in {@code known}, as bits by seat. Render thread. */
 	private int newCardSeats(int known) {
