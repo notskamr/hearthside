@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -284,6 +285,11 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 		}
 	}
 
+	/** The on-screen keyboard while it is open, for player 1's PC keyboard; otherwise empty. */
+	Optional<KeyboardFocus.Target> pcKeyboard() {
+		return keyboard != null ? Optional.of(pcKeys) : Optional.empty();
+	}
+
 	/** Menu (or Enter): the typed name goes into the name box, and the keyboard closes. */
 	private void keepTyped() {
 		name = keyboard.text();
@@ -305,14 +311,10 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 		return super.charTyped(event);
 	}
 
-	/** Backspace, Enter and Esc work the open on-screen keyboard; no other key reaches the screen under it. */
+	/** Backspace, Enter and Esc work the open on-screen keyboard; no other key but the function keys reaches the screen. */
 	@Override
 	public boolean keyPressed(KeyEvent event) {
-		if (keyboard != null) {
-			KeyboardFocus.keyPressed(pcKeys, event.key());
-			return true;
-		}
-		return super.keyPressed(event);
+		return KeyboardFocus.keyPressed(pcKeyboard(), event.key()) || super.keyPressed(event);
 	}
 
 	/** The button that closed the keyboard is still down: a fresh MenuNav ignores it, so it doesn't also press here. */

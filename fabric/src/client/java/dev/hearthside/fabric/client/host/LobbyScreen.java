@@ -16,8 +16,6 @@ import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.HintChip;
 import dev.hearthside.fabric.client.ui.KeyboardWidget;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -139,24 +137,17 @@ public final class LobbyScreen extends Screen {
 		return super.charTyped(event);
 	}
 
-	/** On a typing card, Backspace deletes, Enter accepts the name and Esc closes the keyboard (as B does). */
+	/**
+	 * On a typing card, Backspace deletes, Enter accepts the name and Esc closes the keyboard (as B does). No other key
+	 * but the function keys reaches the lobby meanwhile: a space typed into a name must not press a focused button.
+	 */
 	@Override
 	public boolean keyPressed(KeyEvent event) {
-		Optional<KeyboardFocus.Target> card = typingCard();
-		if (card.isPresent() && KeyboardFocus.keyPressed(card.get(), event.key())) {
-			return true;
-		}
-		return super.keyPressed(event);
+		return KeyboardFocus.keyPressed(typingCard(), event.key()) || super.keyPressed(event);
 	}
 
 	private Optional<KeyboardFocus.Target> typingCard() {
-		List<SeatCard> typing = new ArrayList<>();
-		for (int seat = 1; seat < SEATS; seat++) {
-			if (typing(seat)) {
-				typing.add(party.seatCard(seat));
-			}
-		}
-		return KeyboardFocus.among(typing);
+		return KeyboardFocus.among(party.openNameKeyboards());
 	}
 
 	/** On to choosing a world, with the party kept. */
@@ -297,7 +288,7 @@ public final class LobbyScreen extends Screen {
 
 	private boolean typing(int seat) {
 		SeatCard card = seat == 0 ? null : party.seatCard(seat);
-		return card != null && card.setup() != null && card.setup().step() == QuickSetup.Step.NAME;
+		return card != null && card.keyboardOpen();
 	}
 
 	private void drawTaken(GuiGraphicsExtractor g, int seat, Card c) {
