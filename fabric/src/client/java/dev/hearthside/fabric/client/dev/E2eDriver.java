@@ -4271,6 +4271,41 @@ public final class E2eDriver {
 		return asked ? state.completeOnTimeout("none", 2, TimeUnit.SECONDS).get() : "none";
 	}
 
+	/** Whether a menu's drawn status lines are {@code expected} whole: every word there, nothing cut short. */
+	private static boolean wholeStatus(List<String> drawn, String expected) {
+		return drawn != null && String.join(" ", drawn).replace(" ", "").toLowerCase(Locale.ROOT)
+				.equals(expected.replace(" ", "").toLowerCase(Locale.ROOT));
+	}
+
+	/** Player 1's open pause menu draws {@code expected} as its status, whole (wrapped as it needs, never cut). */
+	private void waitForMenuStatusDrawnWhole(String expected) throws Exception {
+		List<String>[] drawn = new List[1];
+		try {
+			waitFor("player 1's menu draws \"" + expected + "\" whole", Duration.ofSeconds(3), () -> {
+				drawn[0] = onRender(() -> dev.hearthside.fabric.client.menu.PauseMenuScreen.e2eDrawnStatus(minecraft));
+				return wholeStatus(drawn[0], expected);
+			});
+		} catch (AssertionError e) {
+			throw new AssertionError(e.getMessage() + " (drawn " + drawn[0] + ")");
+		}
+	}
+
+	/**
+	 * A guest's pause-menu layouts logged after its {@code skip} first ones, each as its drawn lines: only those not cut
+	 * short (the satellite logs them in E2E runs).
+	 */
+	private static List<List<String>> drawnStatuses(String satelliteLog, int skip) {
+		Matcher m = Pattern.compile("hearthside pause status lines=\\d+ truncated=(true|false) drawn=([^\\r\\n]*)")
+				.matcher(satelliteLog);
+		List<List<String>> layouts = new ArrayList<>();
+		for (int n = 0; m.find(); n++) {
+			if (n >= skip && m.group(1).equals("false")) {
+				layouts.add(List.of(m.group(2).split("\\|")));
+			}
+		}
+		return layouts;
+	}
+
 	/** The open screen's narration, which carries the pause menu's status line. Render thread. */
 	private String narration() {
 		Screen screen = minecraft.gui.screen();
@@ -4302,6 +4337,22 @@ public final class E2eDriver {
 			if (!sound) {
 				log("   no sound device: N3's sound checks are skipped");
 			}
+			// Player2 paused while player 1 plays: their menu's status names player 1 in full, wrapped, never cut short.
+			String host = minecraft.getUser().getName();
+			int statusLines = count("hearthside pause status lines=");
+			int ownPaused = count("hearthside pause state paused");
+			press(102, PadButton.START);
+			waitFor("Player2's game says it's paused", Duration.ofSeconds(10),
+					() -> count("hearthside pause state paused") > ownPaused);
+			String guestLine = "The world keeps going — " + host + " is still playing";
+			waitFor("Player2's menu laid out for \"" + guestLine + "\"", Duration.ofSeconds(10),
+					() -> drawnStatuses(satelliteLog(), statusLines).stream().anyMatch(d -> wholeStatus(d, guestLine)));
+			windowShot("status-line");
+			int ownPlaying = count("hearthside pause state playing");
+			press(102, PadButton.B);
+			waitFor("Player2's game says it's playing", Duration.ofSeconds(10),
+					() -> count("hearthside pause state playing") > ownPlaying);
+
 			press(PICKING_PAD, PadButton.A);
 			press(PICKING_PAD, PadButton.A);
 			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
@@ -4320,6 +4371,7 @@ public final class E2eDriver {
 					"player 1's game logs that Player2 is still playing");
 			check(onRender(this::narration).contains("The world keeps going — Player2 is still playing"),
 					"player 1's menu says Player2 is still playing (got \"" + onRender(this::narration) + "\")");
+			waitForMenuStatusDrawnWhole("The world keeps going — Player2 is still playing");
 			if (sound) {
 				String state = soundState(probe);
 				check(state.equals("playing"), "player 1's game's sounds play on while the world runs (got " + state + ")");
@@ -4338,6 +4390,7 @@ public final class E2eDriver {
 			check(hostLogSince(mark).contains("hearthside world frozen"), "player 1's game logs the world frozen");
 			check(onRender(this::narration).contains("Everyone's paused — the world is frozen"),
 					"player 1's menu says the world is frozen (got \"" + onRender(this::narration) + "\")");
+			waitForMenuStatusDrawnWhole("Everyone's paused — the world is frozen");
 			if (sound) {
 				String state = soundState(probe);
 				check(state.equals("paused"), "player 1's game's sounds pause with the world (got " + state + ")");

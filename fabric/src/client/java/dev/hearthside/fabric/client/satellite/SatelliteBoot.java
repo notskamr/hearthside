@@ -142,6 +142,7 @@ public final class SatelliteBoot {
 		if (wasInWorld && !inWorld) {
 			pauseLine = "";
 			PauseMenuScreen.setStatus("");
+			PauseMenuScreen.setControllerAway(false);
 		}
 		wasInWorld = inWorld;
 		ControlConnection connection = control;
@@ -226,6 +227,7 @@ public final class SatelliteBoot {
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.PAUSE -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite paused (controller disconnected)");
 				applier.release();
+				PauseMenuScreen.setControllerAway(true);
 				Screen before = minecraft.gui.screen();
 				minecraft.pauseGame(false);
 				Screen opened = minecraft.gui.screen();
@@ -236,6 +238,7 @@ public final class SatelliteBoot {
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.RESUME -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite resumed (controller reconnected)");
 				// Only the menu the drop opened, if it's still the one showing: one the player opened is theirs to close.
+				PauseMenuScreen.setControllerAway(false);
 				Screen opened = pausedFor;
 				pausedFor = null;
 				if (opened != null && minecraft.gui.screen() == opened) {

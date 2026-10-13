@@ -25,6 +25,7 @@ import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 
 /**
  * Each player's own pause menu during split-screen (Spec E section 3.1), in their own game: Ember glass over their view
@@ -44,8 +45,16 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	private static final int HUD = 30;
 	/** A guest's focus outline: the ember accent (their game doesn't know their profile's colour). */
 	private static final int EMBER = 0xFFB35A;
+	/** The status line's line height: up to three names (16 characters each) wrap onto more lines, never cut. */
+	private static final int STATUS_LINE = 10;
+	private static final boolean E2E = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
 	/** What every pause menu in this game says under "Paused": who is still playing, or that the world is frozen. */
 	private static volatile String status = "";
+	/**
+	 * A guest's controller is away (between the host's PAUSE and RESUME): the menu draws only its dim, so the reconnect
+	 * card player 1's game draws over this view is the only thing asking anything (Spec E section 3.3). Render thread.
+	 */
+	private static boolean controllerAway;
 	/** Vanilla's pause screen opened by Game menu…, and the menu that closing it to play goes back to. Render thread. */
 	private static WeakReference<PauseScreen> gameMenu = new WeakReference<>(null);
 	private static WeakReference<PauseMenuScreen> gameMenuFrom = new WeakReference<>(null);
@@ -61,6 +70,11 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	private int lastButtons = -1;
 	private int panelX, panelY, panelW, panelH, statusY;
 	private boolean bigHeading;
+	/** The status line as laid out (wrapped to the panel), and the status it was laid out for. Render thread. */
+	private List<String> statusLines = List.of();
+	private String laidOutFor = "";
+	/** The view was too small for every line of the status: its last line is cut short. */
+	private boolean statusTruncated;
 	private PadHints hints;
 	/** A controller's A is pressing an entry right now (not the mouse or the PC keyboard). */
 	private boolean padPressing;
@@ -97,6 +111,15 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	/** The status line under "Paused" for every pause menu in this game, the open one and later ones ("" for none). */
 	public static void setStatus(String line) {
 		status = line == null ? "" : line;
+	}
+
+	/**
+	 * A guest's controller went away (the host's PAUSE) or came back or was taken over (its RESUME): while away, any
+	 * pause menu in this game shows only its dim, and a menu still open when it comes back shows again as it was.
+	 * Render thread.
+	 */
+	public static void setControllerAway(boolean away) {
+		controllerAway = away;
 	}
 
 	/**
@@ -151,34 +174,86 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		nav = new MenuNav();
 		lastButtons = -1;
 		buttons.clear();
-		// The panel with its hints under it, centred above the hotbar (which stays visible through the dim).
-		int room = height - HUD - 2 * MARGIN;
-		bigHeading = blockHeight(true, GAP) <= room;
-		int gap = bigHeading || blockHeight(false, GAP) <= room ? GAP : 2;
-		int heading = bigHeading ? 18 : 9;
-		int column = entries.size() * BUTTON_H + (entries.size() - 1) * gap;
-		panelW = Math.min(BUTTON_W + 2 * PAD + 40, width - 2 * MARGIN);
-		panelH = PAD + heading + 4 + 9 + 8 + column + PAD;
-		panelX = (width - panelW) / 2;
-		panelY = Math.max(MARGIN, MARGIN + (room - blockHeight(bigHeading, gap)) / 2);
-		statusY = panelY + PAD + heading + 4;
-		int buttonW = Math.min(BUTTON_W, panelW - 2 * PAD);
-		int y = statusY + 9 + 8;
 		for (Entry entry : entries) {
-			GlassButton button = new GlassButton((width - buttonW) / 2, y, buttonW, BUTTON_H, entry.label(), b -> choose(entry));
+			GlassButton button = new GlassButton(0, 0, BUTTON_W, BUTTON_H, entry.label(), b -> choose(entry));
 			button.active = entry.active();
 			buttons.add(addRenderableWidget(button));
-			y += BUTTON_H + gap;
 		}
 		// Its own hints: Minecraft's screens get ButtonGuideRenderer's, Hearthside's draw their own.
 		hints = new PadHints(this, RESUME, this::resume);
-		hints.addTo(this::addRenderableWidget, width / 2, panelY + panelH + HINT_GAP);
+		hints.addTo(this::addRenderableWidget, width / 2, 0);
+		layout();
 	}
 
-	/** The panel and its hints, with the heading at twice the font's size or its own, and this gap between buttons. */
-	private int blockHeight(boolean big, int gap) {
+	/**
+	 * Lays the panel out for the status line it shows now, wrapped to the panel in as many lines as it needs (one is
+	 * always kept for it): the panel with its hints under it, centred above the hotbar (which stays visible through the
+	 * dim). Run again whenever the status line changes, moving the buttons and hints without touching the focus. Only a
+	 * view too small for every line cuts the last one short.
+	 */
+	private void layout() {
+		laidOutFor = status;
+		panelW = Math.min(BUTTON_W + 2 * PAD + 40, width - 2 * MARGIN);
+		int room = height - HUD - 2 * MARGIN;
+		List<String> lines = new ArrayList<>();
+		if (!status.isEmpty()) {
+			for (FormattedCharSequence line : font.split(Component.literal(status), panelW - 2 * PAD)) {
+				StringBuilder text = new StringBuilder();
+				line.accept((index, style, codePoint) -> {
+					text.appendCodePoint(codePoint);
+					return true;
+				});
+				lines.add(text.toString());
+			}
+		}
+		int fit = Math.max(1, (room - blockHeight(false, 2, 0)) / STATUS_LINE);
+		statusTruncated = lines.size() > fit;
+		if (statusTruncated) {
+			lines = new ArrayList<>(lines.subList(0, fit));
+			String last = lines.getLast();
+			lines.set(fit - 1, font.plainSubstrByWidth(last, panelW - 2 * PAD - font.width("…")) + "…");
+		}
+		statusLines = List.copyOf(lines);
+		int n = Math.max(1, lines.size());
+		bigHeading = blockHeight(true, GAP, n) <= room;
+		int gap = bigHeading || blockHeight(false, GAP, n) <= room ? GAP : 2;
+		int heading = bigHeading ? 18 : 9;
 		int column = entries.size() * BUTTON_H + (entries.size() - 1) * gap;
-		return PAD + (big ? 18 : 9) + 4 + 9 + 8 + column + PAD + HINT_GAP + HintChip.HEIGHT;
+		panelH = PAD + heading + 4 + statusHeight(n) + 8 + column + PAD;
+		panelX = (width - panelW) / 2;
+		panelY = Math.max(MARGIN, MARGIN + (room - blockHeight(bigHeading, gap, n)) / 2);
+		statusY = panelY + PAD + heading + 4;
+		int buttonW = Math.min(BUTTON_W, panelW - 2 * PAD);
+		int y = statusY + statusHeight(n) + 8;
+		for (GlassButton button : buttons) {
+			button.setRectangle(buttonW, BUTTON_H, (width - buttonW) / 2, y);
+			y += BUTTON_H + gap;
+		}
+		hints.place(width / 2, panelY + panelH + HINT_GAP);
+		if (E2E) {
+			HearthsideMod.LOGGER.info("Hearthside pause status lines={} truncated={} drawn={}", statusLines.size(),
+					statusTruncated, String.join("|", statusLines));
+		}
+	}
+
+	/** The status line's height in {@code lines} lines (one line still takes a line's room when it's empty). */
+	private static int statusHeight(int lines) {
+		return Math.max(1, lines) * STATUS_LINE - 1;
+	}
+
+	/**
+	 * The panel and its hints, with the heading at twice the font's size or its own, this gap between buttons and the
+	 * status in this many lines.
+	 */
+	private int blockHeight(boolean big, int gap, int statusLines) {
+		int column = entries.size() * BUTTON_H + (entries.size() - 1) * gap;
+		int status = statusLines == 0 ? -1 : statusHeight(statusLines);
+		return PAD + (big ? 18 : 9) + 4 + status + 8 + column + PAD + HINT_GAP + HintChip.HEIGHT;
+	}
+
+	/** E2E: the open pause menu's status line as drawn, line by line, or null when none is open. Render thread. */
+	public static List<String> e2eDrawnStatus(Minecraft minecraft) {
+		return minecraft.gui.screen() instanceof PauseMenuScreen menu ? menu.statusLines : null;
 	}
 
 	/** Resume, whenever the menu opens or comes back (plan P-2): the D-pad always starts from the top. */
@@ -275,6 +350,12 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	public void extractBackground(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
 		// The world stays visible through the glass, a little dimmed.
 		g.fill(0, 0, width, height, 0x60000000);
+		if (controllerAway) {
+			return; // only the reconnect card over this view asks anything now
+		}
+		if (!status.equals(laidOutFor)) {
+			layout(); // the host's word changed while the menu was open: the panel fits the new line
+		}
 		// Backed, as the on-screen keyboard is, so the buttons stay readable over a bright world (and the crosshair stays
 		// out of the panel).
 		g.fill(panelX + 2, panelY + 2, panelX + panelW - 2, panelY + panelH - 2, 0xD8201410);
@@ -285,18 +366,18 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		} else {
 			HearthDraw.labelCentred(g, font, title, width / 2, headingY, HearthDraw.CREAM);
 		}
-		String line = status;
-		if (!line.isEmpty()) {
-			String fitted = font.plainSubstrByWidth(line, panelW - 2 * PAD);
-			if (fitted.length() < line.length()) {
-				fitted = font.plainSubstrByWidth(line, panelW - 2 * PAD - font.width("…")) + "…";
-			}
-			HearthDraw.labelCentred(g, font, Component.literal(fitted), width / 2, statusY, 0xFFD8C4A0);
+		int y = statusY;
+		for (String line : statusLines) {
+			HearthDraw.labelCentred(g, font, Component.literal(line), width / 2, y, 0xFFD8C4A0);
+			y += STATUS_LINE;
 		}
 	}
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+		if (controllerAway) {
+			return; // no entries and no hints for a controller that isn't there
+		}
 		hints.update();
 		if (PadHints.controllerDriven()) {
 			// The controller's selection is the only one lit: a guest's game has no mouse (the OS arrow is player 1's,
