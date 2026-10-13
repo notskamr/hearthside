@@ -3572,7 +3572,9 @@ public final class E2eDriver {
 
 	/** Moves a seat's carousel to New. */
 	private void toNew(int seat, int pad) throws Exception {
-		for (int i = 0; i < 6 && !onRender(() -> cardShows(seat)).equals("New"); i++) {
+		// New ends the carousel, after however many profiles earlier steps saved.
+		int entries = onRender(() -> card(seat).carousel().entries().size());
+		for (int i = 0; i < entries && !onRender(() -> cardShows(seat)).equals("New"); i++) {
 			press(pad, PadButton.DPAD_RIGHT);
 		}
 		check(onRender(() -> cardShows(seat)).equals("New"), "seat " + seat + " reached New");
