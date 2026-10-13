@@ -162,7 +162,7 @@ public final class E2eDriver {
 			// The in-world pad block (fake pads).
 			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
 			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"N8b"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
@@ -353,6 +353,7 @@ public final class E2eDriver {
 				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
 				step("N1 a guest's START opens Hearthside's pause menu; Options… and Game menu… open vanilla's and come back", this::guestPauseMenu);
 				step("N2b in split-screen player 1 gets Hearthside's menu, and Game menu… keeps every mod's button", this::splitScreenPauseKeepsModButtons);
+				step("N1b player 1's controller drives their pause menu by focus; Options… comes back; B is Resume, and Keep playing on the Leave confirm", this::hostPadPauseMenu);
 				step("N3 the world freezes only when everyone in it is paused, and every menu says so", this::pauseTogether);
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
@@ -4015,6 +4016,44 @@ public final class E2eDriver {
 			}
 			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
 			PADS.unplug(PICKING_PAD);
+		}
+	}
+
+	/**
+	 * N1b (Spec E section 3.1, task 2 review M7): in split-screen, player 1's controller drives their own pause menu by
+	 * focus. START opens it on Resume; D-pad down and A open vanilla's Options, B comes back to the menu (on Resume
+	 * again); on the Leave confirm B is Keep playing; B on the menu resumes.
+	 */
+	private void hostPadPauseMenu() throws Exception {
+		waitFor("player 1 in play", Duration.ofSeconds(10), () -> onRender(() -> minecraft.gui.screen() == null));
+		claimHostPad();
+		try {
+			press(HOST_PAD, PadButton.START);
+			waitFor("player 1's pause menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
+			check(onRender(this::focusedLabel).equals("Resume"), "it opens on Resume (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check(onRender(this::focusedLabel).equals("Options…"), "the D-pad moves to Options… (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.A);
+			waitFor("vanilla's Options", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof OptionsScreen));
+			press(HOST_PAD, PadButton.B);
+			waitFor("B from Options back to the menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
+			check(onRender(this::focusedLabel).equals("Resume"), "back on Resume (got " + onRender(this::focusedLabel) + ")");
+
+			for (int i = 0; i < 3; i++) {
+				press(HOST_PAD, PadButton.DPAD_DOWN);
+			}
+			check(onRender(this::focusedLabel).equals("Leave game"), "the D-pad reaches Leave game (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.A);
+			waitFor("the Leave confirm", Duration.ofSeconds(5),
+					() -> onRender(() -> buttonLabels(minecraft.gui.screen()).contains("Keep playing")));
+			check(onRender(this::focusedLabel).equals("Keep playing"), "the confirm opens on Keep playing");
+			press(HOST_PAD, PadButton.B);
+			waitFor("B on the confirm is Keep playing", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
+
+			press(HOST_PAD, PadButton.B);
+			waitFor("B resumes", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+		} finally {
+			releaseHostPad();
 		}
 	}
 

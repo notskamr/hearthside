@@ -615,6 +615,12 @@ public final class Party {
 		return current;
 	}
 
+	/** Whether player 1's game is in split-screen: a party with at least one guest seated (pause menus, Spec E). */
+	public static boolean splitScreen() {
+		Party party = current;
+		return party != null && party.seatedCount() > 0;
+	}
+
 	/** Adds a guest and starts their satellite; returns their player index. Runs on the render thread. */
 	public int join(String name) throws IOException, UnsupportedLauncherException {
 		GuestNames.requireValid(name);

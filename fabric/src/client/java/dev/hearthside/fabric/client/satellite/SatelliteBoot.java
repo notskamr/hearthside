@@ -15,6 +15,8 @@ import dev.hearthside.fabric.client.mixin.MinecraftUserAccessor;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
+import dev.hearthside.fabric.client.menu.MenuNavigator;
+import dev.hearthside.fabric.client.menu.PauseMenuScreen;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import dev.hearthside.fabric.server.GuestLoginHooks;
 import io.netty.buffer.Unpooled;
@@ -28,6 +30,7 @@ import net.minecraft.client.User;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
@@ -77,8 +80,27 @@ public final class SatelliteBoot {
 		FrameHook.register(applier::onFrame);
 		VirtualCursor.setDrawn(true);
 		ButtonGuideRenderer.enable(applier::scheme);
+		// Before any screen opens, so the guest's first pause menu is driven exactly like later ones.
+		MenuNavigator.register();
+		if ("1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"))) {
+			logScreens(minecraft);
+		}
 
 		Thread.ofPlatform().daemon().name("hearthside-satellite-connect").start(() -> connect(minecraft, port, index, secret));
+	}
+
+	/** E2E only: each screen this game shows, as it changes (the E2E reads a guest's screens from its log). */
+	private static void logScreens(Minecraft minecraft) {
+		Screen[] last = {null};
+		FrameHook.register(() -> {
+			Screen screen = minecraft.gui.screen();
+			if (screen != last[0]) {
+				last[0] = screen;
+				if (screen != null) {
+					HearthsideMod.LOGGER.info("Hearthside screen {}", screen.getClass().getSimpleName());
+				}
+			}
+		});
 	}
 
 	private static void connect(Minecraft minecraft, int port, int index, String secret) {
@@ -147,7 +169,7 @@ public final class SatelliteBoot {
 			});
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.RESUME -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite resumed (controller reconnected)");
-				if (minecraft.gui.screen() instanceof PauseScreen) {
+				if (minecraft.gui.screen() instanceof PauseScreen || PauseMenuScreen.isOpen(minecraft)) {
 					minecraft.gui.setScreen(null);
 				}
 			});
