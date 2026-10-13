@@ -4015,14 +4015,15 @@ public final class E2eDriver {
 		});
 		// Its own controller, so the step works whoever else is in the party (Player2 is still there in a focused run).
 		int gamesBefore = satellites().size();
+		int cardsBefore = onRender(() -> newCardSeats(0));
 		PADS.plug(N8B_PAD, "fake-n8b-pad", PadStyle.PLAYSTATION);
 		Thread.sleep(300);
 		int seat = 0;
 		try {
 			press(N8B_PAD, PadButton.A);
 			press(N8B_PAD, PadButton.A);
-			waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(this::newcomerSeat) > 0);
-			seat = onRender(this::newcomerSeat);
+			waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(() -> newCardSeats(cardsBefore)) != 0);
+			seat = Integer.numberOfTrailingZeros(onRender(() -> newCardSeats(cardsBefore)));
 			int s = seat;
 			toNew(s, N8B_PAD);
 			press(N8B_PAD, PadButton.A);
@@ -4061,20 +4062,21 @@ public final class E2eDriver {
 			}
 			PADS.unplug(N8B_PAD);
 			waitFor("the newcomer gone", Duration.ofSeconds(30),
-					() -> satellites().size() <= gamesBefore && onRender(this::newcomerSeat) == 0);
+					() -> satellites().size() <= gamesBefore && onRender(() -> s == 0 || card(s) == null));
 		}
 	}
 
 	private static final int N8B_PAD = 111;
 
-	/** The first seat with a card open (a newcomer choosing), or 0. Render thread. */
-	private int newcomerSeat() {
+	/** Seats with a card open (newcomers choosing) and not in {@code known}, as bits by seat. Render thread. */
+	private int newCardSeats(int known) {
+		int seats = 0;
 		for (int seat = 1; seat < 4; seat++) {
-			if (card(seat) != null) {
-				return seat;
+			if (card(seat) != null && (known & 1 << seat) == 0) {
+				seats |= 1 << seat;
 			}
 		}
-		return 0;
+		return seats;
 	}
 
 	/** Player 1's PC keyboard pressing {@code key}: whether {@code mapping} went down. Then the key is let go. */
