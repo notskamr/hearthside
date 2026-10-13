@@ -70,7 +70,8 @@ class SplitScreenConfigFillTest {
 		Path file = dir.resolve("hearthside.json");
 		String mine = "{\"partyPanel\": false, \"threePlayerLayout\": \"wide_top\", \"twoPlayerLayout\": \"side_by_side\","
 				+ " \"guestRenderDistance\": 12, \"guestMemoryMb\": 1024, \"preset\": \"balanced\", \"presetForPlayer1\": false,"
-				+ " \"vulkanOffer\": \"declined\"}";
+				+ " \"vulkanOffer\": \"declined\", \"borders\": \"colour\", \"nameTags\": false, \"layoutAnimation\": true,"
+				+ " \"titleStyle\": \"vanilla\"}";
 		Files.writeString(file, mine);
 		SplitScreenConfig.loadOrCreate(file);
 		assertThat(file).hasContent(mine);

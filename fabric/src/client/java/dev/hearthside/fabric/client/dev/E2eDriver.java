@@ -1434,7 +1434,7 @@ public final class E2eDriver {
 					: SplitScreenConfig.read(new java.io.StringReader(new String(before, StandardCharsets.UTF_8)));
 			try (java.io.Writer out = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
 				new SplitScreenConfig(config.guestMemoryMb(), config.guestRenderDistance(), config.layout(), Preset.PERFORMANCE,
-						true, config.vulkanOffer()).write(out);
+						true, config.vulkanOffer(), config.titleStyle()).write(out);
 			}
 			reopenWorld();
 			check(hostLogSince(0).contains("hearthside preset performance (config)"), "the party took Performance from the config");

@@ -35,9 +35,10 @@ import java.util.OptionalInt;
  * capped so a party fits on a laptop. Values outside their range are clamped; a missing, wrong-typed, unknown or
  * unreadable field falls back to its default, so a hand-edited file never stops a party from starting.
  *
- * <p>In the file the layout is three fields: {@code twoPlayerLayout} ({@code side_by_side} or {@code stacked}),
- * {@code threePlayerLayout} ({@code grid_with_panel}, {@code wide_top} or {@code tall_left}) and {@code partyPanel}
- * (whether three players' free quarter shows the party map).
+ * <p>In the file the layout is six fields: {@code twoPlayerLayout} ({@code side_by_side} or {@code stacked}),
+ * {@code threePlayerLayout} ({@code grid_with_panel}, {@code wide_top} or {@code tall_left}), {@code partyPanel}
+ * (whether three players' free quarter shows the party map), {@code borders} ({@code colour}, {@code thin} or
+ * {@code off}), {@code nameTags} and {@code layoutAnimation}.
  *
  * @param guestMemoryMb each guest's maximum heap ({@code -Xmx}), 768..8192 MB
  * @param guestRenderDistance the most chunks a guest renders, 2..32, never above the guest's own setting;
@@ -49,9 +50,10 @@ import java.util.OptionalInt;
  * @param presetForPlayer1 whether player 1's own game takes the preset too; otherwise only guests (and the world's
  *     simulation distance) do
  * @param vulkanOffer the answer to the offer to switch to Vulkan, so it is asked once
+ * @param titleStyle which title screen player 1 sees, from the next time it opens
  */
 public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, LayoutSettings layout, Preset preset,
-		boolean presetForPlayer1, VulkanOffer vulkanOffer) {
+		boolean presetForPlayer1, VulkanOffer vulkanOffer, TitleStyleSetting titleStyle) {
 	public static final int MIN_GUEST_MEMORY_MB = 768;
 	public static final int MAX_GUEST_MEMORY_MB = 8192;
 	public static final int MIN_RENDER_DISTANCE = 2;
@@ -62,7 +64,7 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	public static final int RENDER_DISTANCE_FROM_PRESET = -1;
 
 	public static final SplitScreenConfig DEFAULTS = new SplitScreenConfig(1536, RENDER_DISTANCE_FROM_PRESET,
-			LayoutSettings.DEFAULTS, Preset.AUTO, false, VulkanOffer.PENDING);
+			LayoutSettings.DEFAULTS, Preset.AUTO, false, VulkanOffer.PENDING, TitleStyleSetting.HEARTHSIDE);
 
 	private static final String MEMORY = "guestMemoryMb";
 	private static final String RENDER_DISTANCE = "guestRenderDistance";
@@ -71,9 +73,13 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	private static final String TWO_PLAYERS = "twoPlayerLayout";
 	private static final String THREE_PLAYERS = "threePlayerLayout";
 	private static final String PARTY_PANEL = "partyPanel";
+	private static final String BORDERS = "borders";
+	private static final String NAME_TAGS = "nameTags";
+	private static final String LAYOUT_ANIMATION = "layoutAnimation";
 	private static final String VULKAN_OFFER = "vulkanOffer";
+	private static final String TITLE_STYLE = "titleStyle";
 	private static final List<String> FIELDS = List.of(MEMORY, RENDER_DISTANCE, PRESET, PRESET_FOR_PLAYER1, TWO_PLAYERS,
-			THREE_PLAYERS, PARTY_PANEL, VULKAN_OFFER);
+			THREE_PLAYERS, PARTY_PANEL, BORDERS, NAME_TAGS, LAYOUT_ANIMATION, VULKAN_OFFER, TITLE_STYLE);
 	/** {@code guestRenderDistance} as written: {@link #RENDER_DISTANCE_FROM_PRESET}. */
 	private static final String FROM_PRESET = "preset";
 	/** What every file held before presets existed, unless a player changed it (plan R6). */
@@ -95,6 +101,13 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 		Objects.requireNonNull(layout, "layout");
 		Objects.requireNonNull(preset, "preset");
 		Objects.requireNonNull(vulkanOffer, "vulkanOffer");
+		Objects.requireNonNull(titleStyle, "titleStyle");
+	}
+
+	/** Everything but the title-screen style, which is Hearthside's. */
+	public SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, LayoutSettings layout, Preset preset,
+			boolean presetForPlayer1, VulkanOffer vulkanOffer) {
+		this(guestMemoryMb, guestRenderDistance, layout, preset, presetForPlayer1, vulkanOffer, TitleStyleSetting.HEARTHSIDE);
 	}
 
 	/** The guests' settings, with everything else at its default. */
@@ -103,11 +116,16 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	}
 
 	public SplitScreenConfig withLayout(LayoutSettings value) {
-		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, value, preset, presetForPlayer1, vulkanOffer);
+		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, value, preset, presetForPlayer1, vulkanOffer,
+				titleStyle);
 	}
 
 	public SplitScreenConfig withVulkanOffer(VulkanOffer value) {
-		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, layout, preset, presetForPlayer1, value);
+		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, layout, preset, presetForPlayer1, value, titleStyle);
+	}
+
+	public SplitScreenConfig withTitleStyle(TitleStyleSetting value) {
+		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, layout, preset, presetForPlayer1, vulkanOffer, value);
 	}
 
 	/** Whether guests' render distance is capped at all: by a number, or by the preset (if it caps). */
@@ -132,11 +150,15 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 		LayoutSettings layout = DEFAULTS.layout()
 				.withTwo(enumOr(object, TWO_PLAYERS, DEFAULTS.layout().two()))
 				.withThree(enumOr(object, THREE_PLAYERS, DEFAULTS.layout().three()))
-				.withPartyPanel(booleanOr(object, PARTY_PANEL, DEFAULTS.layout().partyPanel()));
+				.withPartyPanel(booleanOr(object, PARTY_PANEL, DEFAULTS.layout().partyPanel()))
+				.withBorders(enumOr(object, BORDERS, DEFAULTS.layout().borders()))
+				.withNameTags(booleanOr(object, NAME_TAGS, DEFAULTS.layout().nameTags()))
+				.withLayoutAnimation(booleanOr(object, LAYOUT_ANIMATION, DEFAULTS.layout().layoutAnimation()));
 		return new SplitScreenConfig(intOr(object, MEMORY, DEFAULTS.guestMemoryMb()), renderDistance(object), layout,
 				enumOr(object, PRESET, DEFAULTS.preset()),
 				booleanOr(object, PRESET_FOR_PLAYER1, DEFAULTS.presetForPlayer1()),
-				enumOr(object, VULKAN_OFFER, DEFAULTS.vulkanOffer()));
+				enumOr(object, VULKAN_OFFER, DEFAULTS.vulkanOffer()),
+				enumOr(object, TITLE_STYLE, DEFAULTS.titleStyle()));
 	}
 
 	/**
@@ -247,7 +269,11 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 		object.addProperty(TWO_PLAYERS, name(layout.two()));
 		object.addProperty(THREE_PLAYERS, name(layout.three()));
 		object.addProperty(PARTY_PANEL, layout.partyPanel());
+		object.addProperty(BORDERS, name(layout.borders()));
+		object.addProperty(NAME_TAGS, layout.nameTags());
+		object.addProperty(LAYOUT_ANIMATION, layout.layoutAnimation());
 		object.addProperty(VULKAN_OFFER, name(vulkanOffer));
+		object.addProperty(TITLE_STYLE, name(titleStyle));
 		try {
 			GSON.toJson(object, out);
 		} catch (JsonIOException e) {

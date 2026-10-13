@@ -65,7 +65,12 @@ class ControlCodecProperties {
 				Arbitraries.just(ControlSchemeJson.toJson(ControlScheme.BEDROCK)), text).map(ControlMessage.SetControls::new);
 		Arbitrary<ControlMessage> padStyle = Arbitraries.of(PadStyle.class).map(ControlMessage.SetPadStyle::new);
 
+		Arbitrary<ControlMessage> pauseState = Arbitraries.of(true, false).map(ControlMessage.PauseState::new);
+		Arbitrary<ControlMessage> pauseStatus = Combinators.combine(Arbitraries.of(true, false),
+						text.list().ofMaxSize(ControlMessage.PauseStatus.MAX_STILL_PLAYING))
+				.as(ControlMessage.PauseStatus::new);
+
 		return Arbitraries.oneOf(hello, ack, input, viewport, lifecycle, joinWorld, setControls, padStyle, slotsReady,
-				Arbitraries.just(new ControlMessage.UseCopyTransport()));
+				Arbitraries.just(new ControlMessage.UseCopyTransport()), pauseState, pauseStatus);
 	}
 }

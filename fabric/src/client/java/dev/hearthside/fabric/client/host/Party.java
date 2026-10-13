@@ -1559,6 +1559,10 @@ public final class Party {
 				// A crackle as the fire takes another player.
 				case JoinFlow.Effect.ClaimSeat claim -> dev.hearthside.fabric.client.ui.HearthSounds.play(
 						dev.hearthside.fabric.client.ui.HearthSounds.Ui.JOIN);
+				// Not wired yet: take-over (plan 5c2a Task 4) and Add player (Task 5).
+				case JoinFlow.Effect.TookOver took -> { }
+				case JoinFlow.Effect.ShowAddPlayerPrompt show -> { }
+				case JoinFlow.Effect.HideAddPlayerPrompt hide -> { }
 			}
 		}
 	}

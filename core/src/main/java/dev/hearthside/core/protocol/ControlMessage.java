@@ -5,6 +5,7 @@ import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.profile.GuestNames;
+import java.util.List;
 import java.util.Objects;
 
 /** Messages on the host↔satellite control channel. Type ids are listed on each record. */
@@ -120,6 +121,28 @@ public sealed interface ControlMessage {
 
 	/** Type 12, satellite → host: its game left the world on its own (quit from its pause menu, or disconnected). */
 	record LeftWorld() implements ControlMessage {}
+
+	/**
+	 * Type 13, satellite → host: whether this guest's game is paused, i.e. a pausing screen is open in it (Hearthside's
+	 * pause menu, vanilla's, or a mod's). Sent when it changes.
+	 */
+	record PauseState(boolean paused) implements ControlMessage {}
+
+	/**
+	 * Type 14, host → satellite: whether the world is frozen (every local player paused) and who is still playing, for
+	 * the pause menu's status line. At most {@link #MAX_STILL_PLAYING} names.
+	 */
+	record PauseStatus(boolean frozen, List<String> stillPlaying) implements ControlMessage {
+		/** Never more than the other local players; a garbled count is refused rather than allocated. */
+		public static final int MAX_STILL_PLAYING = 8;
+
+		public PauseStatus {
+			stillPlaying = List.copyOf(stillPlaying);
+			if (stillPlaying.size() > MAX_STILL_PLAYING) {
+				throw new IllegalArgumentException("Too many names still playing: " + stillPlaying.size());
+			}
+		}
+	}
 
 	/** A message whose type this version does not know; produced only by decoding, never written. */
 	record Unknown(int typeId) implements ControlMessage {}
