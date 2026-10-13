@@ -67,6 +67,22 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		}
 	}
 
+	/**
+	 * How compactly the panel is drawn: the heading at twice the font's size or its own, the gap between buttons, the
+	 * buttons' height, and whether the hints sit inside the panel's foot rather than under it.
+	 */
+	private record Fit(boolean bigHeading, int gap, int buttonH, boolean hintsInside) {}
+
+	/**
+	 * Roomiest first, tried until the panel fits every line of the status: the small heading and 2 px gaps, then shorter
+	 * buttons (their labels still centred), then the hints inside the panel. Only a view too small for the last cuts it.
+	 */
+	private static final List<Fit> FITS = List.of(new Fit(true, GAP, BUTTON_H, false), new Fit(false, GAP, BUTTON_H, false),
+			new Fit(false, 2, BUTTON_H, false), new Fit(false, 2, 18, false), new Fit(false, 2, 16, false),
+			new Fit(false, 2, 16, true));
+	/** Under hints inside the panel, the panel's own bottom edge. */
+	private static final int FOOT = 4;
+
 	private final List<Entry> entries = new ArrayList<>();
 	private final List<GlassButton> buttons = new ArrayList<>();
 	private final boolean guest;
@@ -74,7 +90,7 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	private MenuNav nav = new MenuNav();
 	private int lastButtons = -1;
 	private int panelX, panelY, panelW, panelH, statusY;
-	private boolean bigHeading;
+	private Fit fit = FITS.getFirst();
 	/** The status line as laid out (wrapped to the panel), and the status it was laid out for. Render thread. */
 	private List<String> statusLines = List.of();
 	private String laidOutFor = "";
@@ -216,48 +232,40 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	/**
 	 * Lays the panel out for the status line it shows now, wrapped to the panel in as many lines as it needs (one is
 	 * always kept for it): the panel with its hints under it, centred above the hotbar (which stays visible through the
-	 * dim). Run again whenever the status line changes, moving the buttons and hints without touching the focus. Only a
-	 * view too small for every line cuts the last one short.
+	 * dim), drawn as roomily as every line allows ({@link #FITS}). Run again whenever the status line changes, moving the
+	 * buttons and hints without touching the focus. Only a view too small for every line at the most compact cuts the
+	 * last one short.
 	 */
 	private void layout() {
 		laidOutFor = status;
 		panelW = Math.min(BUTTON_W + 2 * PAD + 40, width - 2 * MARGIN);
 		int room = height - HUD - 2 * MARGIN;
-		List<String> lines = new ArrayList<>();
-		if (!status.isEmpty()) {
-			for (FormattedCharSequence line : font.split(Component.literal(status), panelW - 2 * PAD)) {
-				StringBuilder text = new StringBuilder();
-				line.accept((index, style, codePoint) -> {
-					text.appendCodePoint(codePoint);
-					return true;
-				});
-				lines.add(text.toString());
-			}
-		}
-		int fit = Math.max(1, (room - blockHeight(false, 2, 0)) / STATUS_LINE);
-		statusTruncated = lines.size() > fit;
+		List<String> lines = new ArrayList<>(wrap(status, panelW - 2 * PAD));
+		int n = Math.max(1, lines.size());
+		fit = FITS.stream().filter(f -> blockHeight(f, n) <= room).findFirst().orElse(FITS.getLast());
+		int most = Math.max(1, (room - blockHeight(fit, 0)) / STATUS_LINE);
+		statusTruncated = lines.size() > most;
 		if (statusTruncated) {
-			lines = new ArrayList<>(lines.subList(0, fit));
+			lines = new ArrayList<>(lines.subList(0, most));
 			String last = lines.getLast();
-			lines.set(fit - 1, font.plainSubstrByWidth(last, panelW - 2 * PAD - font.width("…")) + "…");
+			lines.set(most - 1, font.plainSubstrByWidth(last, panelW - 2 * PAD - font.width("…")) + "…");
 		}
 		statusLines = List.copyOf(lines);
-		int n = Math.max(1, lines.size());
-		bigHeading = blockHeight(true, GAP, n) <= room;
-		int gap = bigHeading || blockHeight(false, GAP, n) <= room ? GAP : 2;
-		int heading = bigHeading ? 18 : 9;
-		int column = entries.size() * BUTTON_H + (entries.size() - 1) * gap;
-		panelH = PAD + heading + 4 + statusHeight(n) + 8 + column + PAD;
+		int shown = Math.max(1, lines.size());
+		int heading = fit.bigHeading() ? 18 : 9;
+		int column = entries.size() * fit.buttonH() + (entries.size() - 1) * fit.gap();
+		panelH = PAD + heading + 4 + statusHeight(shown) + 8 + column
+				+ (fit.hintsInside() ? HINT_GAP + HintChip.HEIGHT + FOOT : PAD);
 		panelX = (width - panelW) / 2;
-		panelY = Math.max(MARGIN, MARGIN + (room - blockHeight(bigHeading, gap, n)) / 2);
+		panelY = Math.max(MARGIN, MARGIN + (room - blockHeight(fit, shown)) / 2);
 		statusY = panelY + PAD + heading + 4;
 		int buttonW = Math.min(BUTTON_W, panelW - 2 * PAD);
-		int y = statusY + statusHeight(n) + 8;
+		int y = statusY + statusHeight(shown) + 8;
 		for (GlassButton button : buttons) {
-			button.setRectangle(buttonW, BUTTON_H, (width - buttonW) / 2, y);
-			y += BUTTON_H + gap;
+			button.setRectangle(buttonW, fit.buttonH(), (width - buttonW) / 2, y);
+			y += fit.buttonH() + fit.gap();
 		}
-		hints.place(width / 2, panelY + panelH + HINT_GAP);
+		hints.place(width / 2, fit.hintsInside() ? panelY + panelH - FOOT - HintChip.HEIGHT : panelY + panelH + HINT_GAP);
 		if (E2E) {
 			HearthsideMod.LOGGER.info("Hearthside pause status lines={} truncated={} drawn={}", statusLines.size(),
 					statusTruncated, String.join("|", statusLines));
@@ -269,14 +277,43 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		return Math.max(1, lines) * STATUS_LINE - 1;
 	}
 
-	/**
-	 * The panel and its hints, with the heading at twice the font's size or its own, this gap between buttons and the
-	 * status in this many lines.
-	 */
-	private int blockHeight(boolean big, int gap, int statusLines) {
-		int column = entries.size() * BUTTON_H + (entries.size() - 1) * gap;
+	/** The panel and its hints, drawn as {@code fit} says, with the status in this many lines. */
+	private int blockHeight(Fit fit, int statusLines) {
+		int column = entries.size() * fit.buttonH() + (entries.size() - 1) * fit.gap();
 		int status = statusLines == 0 ? -1 : statusHeight(statusLines);
-		return PAD + (big ? 18 : 9) + 4 + status + 8 + column + PAD + HINT_GAP + HintChip.HEIGHT;
+		int foot = fit.hintsInside() ? FOOT : PAD;
+		return PAD + (fit.bigHeading() ? 18 : 9) + 4 + status + 8 + column + HINT_GAP + HintChip.HEIGHT + foot;
+	}
+
+	/**
+	 * The status wrapped to {@code width}: broken after its em dash when it needs more than one line ("The world keeps
+	 * going —" / "Player2 is still playing"), unless that would take more lines than wrapping it as it comes.
+	 */
+	private List<String> wrap(String text, int width) {
+		if (text.isEmpty()) {
+			return List.of();
+		}
+		List<String> plain = split(text, width);
+		int dash = text.indexOf(" — ");
+		if (plain.size() < 2 || dash < 0) {
+			return plain;
+		}
+		List<String> broken = new ArrayList<>(split(text.substring(0, dash + 2), width));
+		broken.addAll(split(text.substring(dash + 3), width));
+		return broken.size() <= plain.size() ? broken : plain;
+	}
+
+	private List<String> split(String text, int width) {
+		List<String> lines = new ArrayList<>();
+		for (FormattedCharSequence line : font.split(Component.literal(text), width)) {
+			StringBuilder chars = new StringBuilder();
+			line.accept((index, style, codePoint) -> {
+				chars.appendCodePoint(codePoint);
+				return true;
+			});
+			lines.add(chars.toString());
+		}
+		return lines;
 	}
 
 	/** E2E: the open pause menu's status line as drawn, line by line, or null when none is open. Render thread. */
@@ -389,7 +426,7 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		g.fill(panelX + 2, panelY + 2, panelX + panelW - 2, panelY + panelH - 2, 0xD8201410);
 		HearthDraw.glass(g, panelX, panelY, panelW, panelH);
 		int headingY = panelY + PAD;
-		if (bigHeading) {
+		if (fit.bigHeading()) {
 			HearthDraw.heading(g, font, title, width / 2, headingY, HearthDraw.CREAM);
 		} else {
 			HearthDraw.labelCentred(g, font, title, width / 2, headingY, HearthDraw.CREAM);

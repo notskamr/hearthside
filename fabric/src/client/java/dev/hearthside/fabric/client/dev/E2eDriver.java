@@ -4357,6 +4357,7 @@ public final class E2eDriver {
 		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
 		Thread.sleep(300);
 		SoundProbe probe = new SoundProbe();
+		boolean hostPadClaimed = false;
 		try {
 			// Player 1's game is the couch's only audio (guests are muted): its sounds follow the world, not their menu.
 			onRender(() -> {
@@ -4396,6 +4397,9 @@ public final class E2eDriver {
 					() -> onRender(() -> minecraft.getWindow().getGuiScaledHeight() < 250));
 			log("   player 1's GUI " + onRender(() -> minecraft.getWindow().getGuiScaledWidth() + "×"
 					+ minecraft.getWindow().getGuiScaledHeight()));
+			// On a controller, so the menu shows its hints too (in play: the claiming A only jumps).
+			claimHostPad();
+			hostPadClaimed = true;
 
 			long mark = hostLogLength();
 			onRender(() -> {
@@ -4416,6 +4420,11 @@ public final class E2eDriver {
 			List<String> drawn = onRender(() -> dev.hearthside.fabric.client.menu.PauseMenuScreen.e2eDrawnStatus(minecraft));
 			check(List.of("The world keeps going —", "Player2 is still playing").equals(drawn),
 					"player 1's menu breaks its status after the em dash (drawn " + drawn + ")");
+			onRender(() -> {
+				// Only the menu in the picture: not the claim's "Controller assigned to you." under its hints.
+				minecraft.gui.hud.getChat().clearMessages(false);
+				return null;
+			});
 			windowShot("pause-menu-cramped");
 			if (sound) {
 				String state = soundState(probe);
@@ -4458,6 +4467,9 @@ public final class E2eDriver {
 						"player 1's game's sounds play again with the world, their menu still open (got " + state + ")");
 			}
 		} finally {
+			if (hostPadClaimed) {
+				releaseHostPad();
+			}
 			onRender(() -> {
 				minecraft.gui.setScreen(null);
 				minecraft.getSoundManager().stop(probe);
