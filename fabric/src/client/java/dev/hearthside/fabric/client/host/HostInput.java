@@ -153,7 +153,8 @@ final class HostInput implements Runnable {
 		// In the world player 1's mouse and controller take turns on their screens (the lobby's pointer is everyone's).
 		hostApplier.shareWithMouse(true);
 		long now = System.nanoTime();
-		update.frames().forEach((player, frame) -> {
+		update.frames().forEach((player, padFrame) -> {
+			InputFrame frame = withoutTakeoverPress(player, padFrame);
 			if (player == 0) {
 				hostApplier.accept(frame);
 			} else if (session.hasSeatCard(player)) {
@@ -355,6 +356,7 @@ final class HostInput implements Runnable {
 		lastSent.remove(player);
 		lastSentAt.remove(player);
 		styles.remove(player);
+		heldFromTakeover.remove(player);
 	}
 
 	private final Map<Integer, PadStyle> padStyles = new java.util.concurrent.ConcurrentHashMap<>();
@@ -587,6 +589,18 @@ final class HostInput implements Runnable {
 		}
 	}
 
+	/**
+	 * A free controller took over a guest whose controller dropped: it is theirs now, and the A that took them over,
+	 * still held, doesn't also press in their game.
+	 */
+	void takeOver(int instanceId, int player) {
+		assignPad(instanceId, player);
+		heldFromTakeover.put(player, InputFrame.buttons(PadButton.A));
+	}
+
+	/** Buttons a guest's controller still holds from taking them over; their game gets them only once released. */
+	private final Map<Integer, Integer> heldFromTakeover = new HashMap<>();
+
 	void assignPad(int instanceId, int player) {
 		if (player > 0) {
 			guestPads.add(instanceId);
@@ -607,6 +621,22 @@ final class HostInput implements Runnable {
 
 	private void chat(Component message) {
 		minecraft.gui.chatListener().handleSystemMessage(message, false);
+	}
+
+	/** A guest's frame without the buttons still held from taking them over (see {@link #takeOver}). */
+	private InputFrame withoutTakeoverPress(int player, InputFrame frame) {
+		Integer held = heldFromTakeover.get(player);
+		if (held == null) {
+			return frame;
+		}
+		int still = held & frame.buttons();
+		if (still == 0) {
+			heldFromTakeover.remove(player);
+			return frame;
+		}
+		heldFromTakeover.put(player, still);
+		return new InputFrame(frame.sequence(), frame.buttons() & ~still, frame.leftX(), frame.leftY(), frame.rightX(),
+				frame.rightY(), frame.leftTrigger(), frame.rightTrigger());
 	}
 
 	/** Frames differ in sequence every poll; compare the controller state only. */

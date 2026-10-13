@@ -28,8 +28,9 @@ import net.minecraft.resources.Identifier;
 
 /**
  * What Hearthside draws over each player's view (Spec A sections 3.1(5), 6): a joining player's card until their game
- * is in the world (then it crossfades into it), a frosted tint over a picture waiting for one at its new size, and the
- * fade of a view arriving or leaving. A guest's view never shows the bare window or their game's loading screens.
+ * is in the world (then it crossfades into it), a frosted tint over a picture waiting for one at its new size, a
+ * dropped controller's reconnect card, the fade of a view arriving or leaving, and every view's border and name tag.
+ * A guest's view never shows the bare window or their game's loading screens.
  * Render thread.
  */
 final class ViewOverlay implements OverlayLayer {
@@ -158,6 +159,18 @@ final class ViewOverlay implements OverlayLayer {
 			return;
 		}
 		var font = Minecraft.getInstance().font;
+		// M4 (Spec E section 3.7): a fade dims everything drawn under it so far, so every fading seat's card and its fade
+		// come first; the other cards, the party panel and every border and name tag are drawn over them, at full strength.
+		for (ViewFrame view : context.views()) {
+			if (view.seat() != 0 && fading(view, compositor)) {
+				guestView(g, font, view, compositor, context);
+			}
+		}
+		for (ViewFrame view : context.views()) {
+			if (view.seat() != 0 && !fading(view, compositor)) {
+				guestView(g, font, view, compositor, context);
+			}
+		}
 		// The free quarter with three players: the party panel and its live map, fading in and out with the layout.
 		party.panelAt(context.nanos(), context.reduceMotion()).ifPresent(panel -> {
 			Rect inGui = dev.hearthside.fabric.client.compositor.OverlayPass.inGui(panel.rect(), context.guiScale());
@@ -167,34 +180,51 @@ final class ViewOverlay implements OverlayLayer {
 						String.format(java.util.Locale.ROOT, "%.2f", panel.alpha()));
 			}
 		});
-		for (ViewFrame view : context.views()) {
-			Rect r = view.rect();
-			int seat = view.seat();
-			if (seat != 0) {
-				// Nothing from their game yet: their card, never the bare window.
-				float cover = compositor.hasFrame(seat) ? party.cardCover(seat, context.nanos(), context.reduceMotion()) : 1f;
-				if (cover < 1f && compositor.isStale(seat)) {
-					g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_PANEL, r.x(), r.y(), r.width(), r.height(), FROST);
-				}
-				SeatCard card = party.drawnCard(seat);
-				if (card != null) {
-					// Dropping in: they pick their profile right here, while everyone else plays on.
-					drawPicker(g, font, r, seat, card);
-				} else if (cover > 0f) {
-					CardPainter.joining(g, font, r, party.who(seat), party.cardStatus(seat, context.nanos()), cover,
-							context.nanos(), context.reduceMotion());
-				}
-				// The compositor fades a view's picture itself; with no picture yet, fade the card drawn there instead,
-				// over whatever is under it (a view still gliding out of this place, or the divider).
-				if (view.alpha() < 1f && !compositor.hasFrame(seat)) {
-					// Never 0: the GUI shader discards a fully transparent fill, which would leave the card unfaded.
-					int alpha = Math.max(1, Math.round(view.alpha() * 255));
-					g.fill(FADE, r.x(), r.y(), r.x() + r.width(), r.y() + r.height(), alpha << 24);
-				}
-			}
-			if (context.views().size() > 1) {
+		if (context.views().size() > 1) {
+			for (ViewFrame view : context.views()) {
 				borderAndTag(g, font, view, context);
 			}
+		}
+	}
+
+	/** Whether a guest's view is fading in or out with no picture from their game: the overlay fades its card. */
+	private static boolean fading(ViewFrame view, Compositor compositor) {
+		return view.alpha() < 1f && !compositor.hasFrame(view.seat());
+	}
+
+	/**
+	 * What a guest's view shows over their game: their card until their game is in the world (never the bare window),
+	 * the frost over a picture at the wrong size, the reconnect card while their controller is away, and the fade of a
+	 * view with no picture yet.
+	 */
+	private void guestView(GuiGraphicsExtractor g, Font font, ViewFrame view, Compositor compositor, OverlayContext context) {
+		Rect r = view.rect();
+		int seat = view.seat();
+		float cover = compositor.hasFrame(seat) ? party.cardCover(seat, context.nanos(), context.reduceMotion()) : 1f;
+		if (cover < 1f && compositor.isStale(seat)) {
+			g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_PANEL, r.x(), r.y(), r.width(), r.height(), FROST);
+		}
+		SeatCard card = party.drawnCard(seat);
+		if (card != null) {
+			// Dropping in: they pick their profile right here, while everyone else plays on.
+			drawPicker(g, font, r, seat, card);
+		} else {
+			if (cover > 0f) {
+				CardPainter.joining(g, font, r, party.who(seat), party.cardStatus(seat, context.nanos()), cover,
+						context.nanos(), context.reduceMotion());
+			}
+			// Their controller dropped (Spec E section 3.3): their view dims under a card until it's back or taken over.
+			CardPainter.Reconnect reconnect = party.reconnect(seat);
+			if (reconnect != null) {
+				CardPainter.reconnect(g, font, r, reconnect);
+			}
+		}
+		// The compositor fades a view's picture itself; with no picture yet, fade the card drawn there instead, over
+		// whatever is under it (a view still gliding out of this place, or the divider).
+		if (fading(view, compositor)) {
+			// Never 0: the GUI shader discards a fully transparent fill, which would leave the card unfaded.
+			int alpha = Math.max(1, Math.round(view.alpha() * 255));
+			g.fill(FADE, r.x(), r.y(), r.x() + r.width(), r.y() + r.height(), alpha << 24);
 		}
 	}
 }

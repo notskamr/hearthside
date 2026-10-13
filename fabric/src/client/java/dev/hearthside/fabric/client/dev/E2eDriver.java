@@ -4402,6 +4402,9 @@ public final class E2eDriver {
 		int resumed = count("hearthside satellite resumed");
 		PADS.plug(pad, guid, style);
 		Thread.sleep(300);
+		if (pad == TAKEOVER_PAD) {
+			windowShot("take-over"); // the card's take-over line, with the new controller's A
+		}
 		press(pad, PadButton.A);
 		waitFor("the new controller took Player2 over", Duration.ofSeconds(5),
 				() -> hostLogSince(mark).contains("hearthside take-over player=2 controller=" + guid));

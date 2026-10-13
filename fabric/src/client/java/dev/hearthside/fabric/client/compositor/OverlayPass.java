@@ -34,8 +34,15 @@ public final class OverlayPass {
 	private static boolean drawn;
 	private static boolean failed;
 	private static volatile boolean reduceMotion;
+	/** The GUI scale the overlay was last drawn at (0 before it first was). */
+	private static int lastScale;
 
 	private OverlayPass() {}
+
+	/** The GUI scale the overlay was last drawn at, 0 before it first was. Render thread. */
+	static int lastScale() {
+		return lastScale;
+	}
 
 	public static void register(OverlayLayer layer) {
 		if (!LAYERS.contains(layer)) {
@@ -98,6 +105,7 @@ public final class OverlayPass {
 		window.width = width;
 		window.height = height;
 		window.guiScale = scale;
+		lastScale = scale;
 		active = true;
 		try {
 			var graphics = new GuiGraphicsExtractor(minecraft, gameRenderer.gameRenderState().guiRenderState, -1, -1);
