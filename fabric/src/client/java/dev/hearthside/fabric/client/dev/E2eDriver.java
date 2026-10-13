@@ -159,7 +159,7 @@ public final class E2eDriver {
 			// The in-world pad block (fake pads).
 			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
 			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
@@ -350,6 +350,7 @@ public final class E2eDriver {
 				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
 				step("N1 a guest's START opens Hearthside's pause menu; Options… and Game menu… open vanilla's and come back", this::guestPauseMenu);
 				step("N2b in split-screen player 1 gets Hearthside's menu, and Game menu… keeps every mod's button", this::splitScreenPauseKeepsModButtons);
+				step("N3 the world freezes only when everyone in it is paused, and every menu says so", this::pauseTogether);
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
@@ -3919,6 +3920,87 @@ public final class E2eDriver {
 				minecraft.gui.setScreen(null);
 				return null;
 			});
+		}
+	}
+
+	/** A controller that joins during N3 and is still choosing a profile while everyone in the world is paused. */
+	private static final int PICKING_PAD = 111;
+
+	private static long gameTime(IntegratedServer server) {
+		return server.overworld().getGameTime();
+	}
+
+	/** The open screen's narration, which carries the pause menu's status line. Render thread. */
+	private String narration() {
+		Screen screen = minecraft.gui.screen();
+		return screen == null ? "" : screen.getNarrationMessage().getString();
+	}
+
+	/**
+	 * N3 (Spec E section 3.2, plan R5): the world freezes only when everyone in it is paused. (a) Player 1 paused while
+	 * Player2 plays: the world runs and player 1's menu says who is still playing. (b) Player2 pausing too freezes it
+	 * within a second, and both menus say so; (d) a newcomer still choosing a profile doesn't count. (c) Player2 resuming
+	 * starts it again. Player 1's status is read from their menu's narration, Player2's from its log.
+	 */
+	private void pauseTogether() throws Exception {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			press(PICKING_PAD, PadButton.A);
+			press(PICKING_PAD, PadButton.A);
+			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+
+			long mark = hostLogLength();
+			onRender(() -> {
+				minecraft.pauseGame(false);
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.isPausing()), "player 1 paused");
+			Thread.sleep(500);
+			long running = gameTime(server);
+			Thread.sleep(1000);
+			check(gameTime(server) > running, "(a) player 1 paused while Player2 plays: the world keeps going");
+			check(hostLogSince(mark).contains("hearthside world running still playing=player2"),
+					"player 1's game logs that Player2 is still playing");
+			check(onRender(this::narration).contains("The world keeps going — Player2 is still playing"),
+					"player 1's menu says Player2 is still playing (got \"" + onRender(this::narration) + "\")");
+
+			int pausedLines = count("hearthside pause state paused");
+			int frozenLines = count("hearthside world frozen");
+			press(102, PadButton.START);
+			waitFor("Player2's game says it's paused", Duration.ofSeconds(10),
+					() -> count("hearthside pause state paused") > pausedLines);
+			Thread.sleep(1000);
+			long frozen = gameTime(server);
+			Thread.sleep(1000);
+			check(gameTime(server) == frozen, "(b) everyone in the world paused: the world froze within a second");
+			check(onRender(() -> card(2) != null), "(d) though a newcomer is still choosing a profile");
+			check(hostLogSince(mark).contains("hearthside world frozen"), "player 1's game logs the world frozen");
+			check(onRender(this::narration).contains("Everyone's paused — the world is frozen"),
+					"player 1's menu says the world is frozen (got \"" + onRender(this::narration) + "\")");
+			waitFor("Player2's menu told the world is frozen", Duration.ofSeconds(5),
+					() -> count("hearthside world frozen") > frozenLines);
+
+			int playingLines = count("hearthside pause state playing");
+			press(102, PadButton.A); // Resume, focused whenever the menu opens
+			waitFor("Player2's game says it's playing", Duration.ofSeconds(10),
+					() -> count("hearthside pause state playing") > playingLines);
+			Thread.sleep(500);
+			long resumed = gameTime(server);
+			Thread.sleep(1000);
+			check(gameTime(server) > resumed, "(c) Player2 resuming starts the world again");
+			check(onRender(this::narration).contains("Player2 is still playing"), "and player 1's menu says so");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			if (onRender(() -> card(2) != null)) {
+				press(PICKING_PAD, PadButton.B);
+			}
+			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+			PADS.unplug(PICKING_PAD);
 		}
 	}
 
