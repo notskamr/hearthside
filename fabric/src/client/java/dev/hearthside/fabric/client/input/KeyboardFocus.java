@@ -42,7 +42,7 @@ public final class KeyboardFocus {
 	private static final Object TEXT_INPUT_OWNER = new Object();
 	private static boolean textInputOn, textInputFailed;
 	private static final int NO_KEY = -1;
-	/** The key whose press an on-screen keyboard took, until it is let go: its repeats are the keyboard's too. */
+	/** An Esc or Enter whose press an on-screen keyboard took, until it is let go: its repeats are swallowed. */
 	private static int heldKey = NO_KEY;
 
 	private KeyboardFocus() {}
@@ -117,24 +117,13 @@ public final class KeyboardFocus {
 	 * A key pressed (or repeating) on player 1's PC keyboard while {@code keyboard} (if any) takes their typing: true if
 	 * the keyboard took it. Backspace deletes, Enter accepts, Esc backs out; every other key is taken too, so nothing
 	 * under the keyboard acts on it (its characters arrive through {@link #charTyped}), except the function keys, which
-	 * never type. A taken key stays taken until it is let go: holding Backspace keeps deleting, and a held Esc or Enter
-	 * that closed the keyboard doesn't go on to act on what was under it.
+	 * never type. Repeats act again, as in a text box (holding Backspace keeps deleting), except Esc's and Enter's: see
+	 * {@link #heldRepeat}.
 	 */
 	public static boolean keyPressed(Optional<Target> keyboard, int key) {
-		if (functionKey(key)) {
+		if (keyboard.isEmpty() || functionKey(key)) {
 			return false;
 		}
-		if (key == heldKey) {
-			if (key == InputConstants.KEY_BACKSPACE && keyboard.isPresent()) {
-				keyboard.get().backspace();
-				HearthSounds.play(HearthSounds.Ui.KEY_DELETE);
-			}
-			return true;
-		}
-		if (keyboard.isEmpty()) {
-			return false;
-		}
-		heldKey = key;
 		Target target = keyboard.get();
 		switch (key) {
 			case InputConstants.KEY_BACKSPACE -> {
@@ -143,21 +132,34 @@ public final class KeyboardFocus {
 				HearthSounds.play(HearthSounds.Ui.KEY_DELETE);
 			}
 			case InputConstants.KEY_RETURN, InputConstants.KEY_NUMPADENTER -> {
+				heldKey = key;
 				used(target);
 				target.enter();
 			}
-			case InputConstants.KEY_ESCAPE -> target.escape();
+			case InputConstants.KEY_ESCAPE -> {
+				heldKey = key;
+				target.escape();
+			}
 			default -> {
 			}
 		}
 		return true;
 	}
 
-	/** A key let go (any key, on any screen or none): if a keyboard took its press, its repeats are over. */
-	public static void keyReleased(int key) {
-		if (key == heldKey) {
+	/**
+	 * Every key event on player 1's window, before anything else sees it: true for a repeat of an Esc or Enter a keyboard
+	 * took, which is swallowed until the key is let go, so a held Esc that closed the keyboard doesn't go on to pause the
+	 * game or leave the screen. That key's release, or any fresh press, ends it, so a lost release never swallows a later
+	 * press.
+	 */
+	public static boolean heldRepeat(int action, int key) {
+		if (action == InputConstants.REPEAT) {
+			return key == heldKey;
+		}
+		if (action == InputConstants.PRESS || key == heldKey) {
 			heldKey = NO_KEY;
 		}
+		return false;
 	}
 
 	/** F1 to F24 (fullscreen, screenshots, the debug screen): never typing, so always player 1's own. */

@@ -19,9 +19,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * play player 1. While player 1 plays on a controller with no screen open (ruling R8, Spec E section 3.6), their PC
  * keyboard is free: its keys type into that keyboard instead and never reach player 1's key mappings, except the
  * function keys (ruling P-12). On keyboard and mouse, or with a screen open, keys are player 1's as ever. Releases always
- * go through, so a key held down before the keyboard took over is let go; each one also ends the repeats of a key an
- * on-screen keyboard took (on any screen). If anything here fails, the key goes to Minecraft as if Hearthside weren't
- * here.
+ * go through, so a key held down before the keyboard took over is let go. Every event passes here first, on any screen or
+ * none, so this is also where a held Esc or Enter that an on-screen keyboard took has its repeats swallowed until it
+ * is let go. If anything here fails, the key goes to Minecraft as if Hearthside weren't here.
  */
 @Mixin(KeyboardHandler.class)
 abstract class HostKeyboardMixin {
@@ -33,9 +33,10 @@ abstract class HostKeyboardMixin {
 			return;
 		}
 		try {
-			if (action == InputConstants.RELEASE) {
-				KeyboardFocus.keyReleased(event.key());
-			} else if (KeyboardFocus.keyPressed(hearthside$newcomerKeyboard(), event.key())) {
+			int key = event.key();
+			boolean taken = KeyboardFocus.heldRepeat(action, key)
+					|| action != InputConstants.RELEASE && KeyboardFocus.keyPressed(hearthside$newcomerKeyboard(), key);
+			if (taken) {
 				ci.cancel();
 			}
 		} catch (RuntimeException e) {
