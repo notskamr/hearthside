@@ -11,6 +11,8 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.UTFDataFormatException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Frames control messages as {@code int length, unsigned short typeId, payload}, where
@@ -19,7 +21,7 @@ import java.io.UTFDataFormatException;
  * add messages.
  */
 public final class ControlCodec {
-	public static final int PROTOCOL_VERSION = 5;
+	public static final int PROTOCOL_VERSION = 6;
 	public static final int MAX_FRAME_BYTES = 65_536;
 
 	private static final int HELLO = 1;
@@ -34,6 +36,8 @@ public final class ControlCodec {
 	private static final int USE_COPY_TRANSPORT = 10;
 	private static final int IN_WORLD = 11;
 	private static final int LEFT_WORLD = 12;
+	private static final int PAUSE_STATE = 13;
+	private static final int PAUSE_STATUS = 14;
 
 	private ControlCodec() {}
 
@@ -89,6 +93,18 @@ public final class ControlCodec {
 			case ControlMessage.UseCopyTransport m -> USE_COPY_TRANSPORT;
 			case ControlMessage.InWorld m -> IN_WORLD;
 			case ControlMessage.LeftWorld m -> LEFT_WORLD;
+			case ControlMessage.PauseState m -> {
+				p.writeBoolean(m.paused());
+				yield PAUSE_STATE;
+			}
+			case ControlMessage.PauseStatus m -> {
+				p.writeBoolean(m.frozen());
+				p.writeShort(m.stillPlaying().size());
+				for (String name : m.stillPlaying()) {
+					p.writeUTF(name);
+				}
+				yield PAUSE_STATUS;
+			}
 			case ControlMessage.Lifecycle m -> {
 				p.writeByte(m.command().ordinal());
 				yield LIFECYCLE;
@@ -142,6 +158,8 @@ public final class ControlCodec {
 				case USE_COPY_TRANSPORT -> new ControlMessage.UseCopyTransport();
 				case IN_WORLD -> new ControlMessage.InWorld();
 				case LEFT_WORLD -> new ControlMessage.LeftWorld();
+				case PAUSE_STATE -> new ControlMessage.PauseState(p.readBoolean());
+				case PAUSE_STATUS -> pauseStatus(p);
 				case FRAME_SLOTS_READY -> new ControlMessage.FrameSlotsReady(transport(p.readUnsignedByte()), p.readInt(),
 						p.readInt(), p.readInt(), p.readUTF());
 				case LIFECYCLE -> new ControlMessage.Lifecycle(lifecycle(p.readUnsignedByte()));
@@ -164,6 +182,20 @@ public final class ControlCodec {
 			throw new ProtocolException(p.available() + " unexpected trailing bytes in message type " + type);
 		}
 		return message;
+	}
+
+	/** A boolean, an unsigned short count, then that many names; a count over the cap is refused before any is read. */
+	private static ControlMessage.PauseStatus pauseStatus(DataInputStream p) throws IOException {
+		boolean frozen = p.readBoolean();
+		int count = p.readUnsignedShort();
+		if (count > ControlMessage.PauseStatus.MAX_STILL_PLAYING) {
+			throw new ProtocolException("Too many names still playing: " + count);
+		}
+		List<String> names = new ArrayList<>(count);
+		for (int i = 0; i < count; i++) {
+			names.add(p.readUTF());
+		}
+		return new ControlMessage.PauseStatus(frozen, names);
 	}
 
 	private static PadStyle padStyle(int ordinal) throws ProtocolException {

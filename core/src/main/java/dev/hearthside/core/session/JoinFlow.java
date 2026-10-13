@@ -17,10 +17,15 @@ import java.util.UUID;
  * Who has a guest seat and how far they are in joining, driven by controller events (Spec A §3). The same flow runs
  * the party lobby ({@link Mode#LOBBY}: one A takes a seat) and drop-in during play ({@link Mode#IN_GAME}: a second A
  * within {@link #CONFIRM_WINDOW} confirms). Returns the effects the game must carry out. Not thread-safe.
+ *
+ * <p>Two things beat the usual join (Spec E §3.3–3.4): once a dropped player's seat is offered for take-over, a seatless
+ * controller's A takes that player over; and while player 1's Add player window is open, a seatless controller's
+ * single A joins.
  */
 public final class JoinFlow {
 	public static final Duration CONFIRM_WINDOW = Duration.ofSeconds(5);
 	public static final Duration TAKEOVER_AFTER = Duration.ofSeconds(60);
+	public static final Duration ADD_PLAYER_WINDOW = Duration.ofSeconds(15);
 
 	public enum Mode { LOBBY, IN_GAME }
 
@@ -40,6 +45,15 @@ public final class JoinFlow {
 		record StopGuestGame(String controller, int seat) implements Effect {}
 
 		record OfferTakeover(String controller) implements Effect {}
+
+		/** Controller {@code to} took over the player whose controller {@code from} dropped: same seat, same game. */
+		record TookOver(String from, String to) implements Effect {}
+
+		/** Player 1 chose Add player: a free controller's single A joins until {@code until}. */
+		record ShowAddPlayerPrompt(Instant until) implements Effect {}
+
+		/** The Add player window closed: someone joined, it expired, or it was cancelled. */
+		record HideAddPlayerPrompt() implements Effect {}
 	}
 
 	public record Result(List<Effect> effects) {
@@ -53,17 +67,32 @@ public final class JoinFlow {
 	private Mode mode;
 	private final int seatCount;
 	private final Clock clock;
+	private final Duration takeoverAfter;
 	private final Map<String, SeatState> states = new LinkedHashMap<>();
 	private final Map<String, Integer> seats = new HashMap<>();
+	/** When the Add player window closes; null while it's closed. */
+	private Instant addPlayerUntil;
 
 	/** @param seatCount guest seats (player 1 is not counted), 1–3 */
 	public JoinFlow(Mode mode, int seatCount, Clock clock) {
+		this(mode, seatCount, clock, TAKEOVER_AFTER);
+	}
+
+	/**
+	 * @param seatCount guest seats (player 1 is not counted), 1–3
+	 * @param takeoverAfter how long a dropped controller is waited for before another may take the player over
+	 */
+	public JoinFlow(Mode mode, int seatCount, Clock clock, Duration takeoverAfter) {
 		if (seatCount < 1 || seatCount > 3) {
 			throw new IllegalArgumentException("Guest seats must be 1-3, was " + seatCount);
+		}
+		if (takeoverAfter.isNegative()) {
+			throw new IllegalArgumentException("Take-over delay must not be negative, was " + takeoverAfter);
 		}
 		this.mode = mode;
 		this.seatCount = seatCount;
 		this.clock = clock;
+		this.takeoverAfter = takeoverAfter;
 	}
 
 	/** Every controller that is prompted or seated, and its state. */
@@ -80,6 +109,24 @@ public final class JoinFlow {
 		SeatState state = states.get(controller);
 		Instant now = clock.instant();
 		if (control == Control.A) {
+			if (!seats.containsKey(controller)) {
+				String dropped = lowestTakeoverOffered();
+				if (dropped != null) {
+					List<Effect> effects = new ArrayList<>(reassign(dropped, controller).effects());
+					effects.add(new Effect.TookOver(dropped, controller));
+					return new Result(effects);
+				}
+				if (addPlayerUntil != null && now.isBefore(addPlayerUntil) && freeSeat() >= 0) {
+					// Player 1 asked for a player: one A is enough, and it settles any double-A prompt this pad had.
+					List<Effect> effects = new ArrayList<>();
+					if (states.remove(controller) instanceof SeatState.Prompted) {
+						effects.add(new Effect.HideJoinPrompt(controller));
+					}
+					addPlayerUntil = null;
+					effects.add(new Effect.HideAddPlayerPrompt());
+					return claim(controller, effects);
+				}
+			}
 			if (state == null) {
 				if (mode == Mode.LOBBY) {
 					return claim(controller, new ArrayList<>());
@@ -112,6 +159,32 @@ public final class JoinFlow {
 			}
 		}
 		return Result.NONE;
+	}
+
+	/**
+	 * Player 1 chose Add player: for {@link #ADD_PLAYER_WINDOW} a free controller's single A joins. Choosing it again
+	 * restarts the window. Nothing happens when the party is full.
+	 */
+	public Result addPlayer() {
+		if (partyFull()) {
+			return Result.NONE;
+		}
+		addPlayerUntil = clock.instant().plus(ADD_PLAYER_WINDOW);
+		return new Result(List.of(new Effect.ShowAddPlayerPrompt(addPlayerUntil)));
+	}
+
+	/** Player 1 cancelled the Add player prompt. */
+	public Result cancelAddPlayer() {
+		if (addPlayerUntil == null) {
+			return Result.NONE;
+		}
+		addPlayerUntil = null;
+		return new Result(List.of(new Effect.HideAddPlayerPrompt()));
+	}
+
+	/** Whether every guest seat is taken. */
+	public boolean partyFull() {
+		return freeSeat() < 0;
 	}
 
 	/** The lobby is over and play has started: keep every seat, and new joins now need A, A. */
@@ -207,17 +280,21 @@ public final class JoinFlow {
 		return Result.NONE;
 	}
 
-	/** Expires join prompts and offers take-overs; call regularly (e.g. once a second). */
+	/** Expires join prompts and the Add player window, and offers take-overs; call regularly (e.g. once a second). */
 	public Result tick() {
 		Instant now = clock.instant();
 		List<Effect> effects = new ArrayList<>();
+		if (addPlayerUntil != null && !now.isBefore(addPlayerUntil)) {
+			addPlayerUntil = null;
+			effects.add(new Effect.HideAddPlayerPrompt());
+		}
 		for (Map.Entry<String, SeatState> entry : List.copyOf(states.entrySet())) {
 			String controller = entry.getKey();
 			if (entry.getValue() instanceof SeatState.Prompted p && !now.isBefore(p.until())) {
 				states.remove(controller);
 				effects.add(new Effect.HideJoinPrompt(controller));
 			} else if (entry.getValue() instanceof SeatState.Disconnected d
-					&& !now.isBefore(d.since().plus(TAKEOVER_AFTER))) {
+					&& !now.isBefore(d.since().plus(takeoverAfter))) {
 				states.put(controller, new SeatState.TakeoverOffered(d.before()));
 				effects.add(new Effect.OfferTakeover(controller));
 			}
@@ -242,6 +319,18 @@ public final class JoinFlow {
 		Integer seat = seats.remove(controller);
 		states.remove(controller);
 		return seat == null ? Result.NONE : new Result(List.of(new Effect.StopGuestGame(controller, seat)));
+	}
+
+	/** The controller of the lowest seat offered for take-over, or null if none is. */
+	private String lowestTakeoverOffered() {
+		String lowest = null;
+		for (Map.Entry<String, SeatState> entry : states.entrySet()) {
+			if (entry.getValue() instanceof SeatState.TakeoverOffered
+					&& (lowest == null || seats.get(entry.getKey()) < seats.get(lowest))) {
+				lowest = entry.getKey();
+			}
+		}
+		return lowest;
 	}
 
 	private int freeSeat() {
