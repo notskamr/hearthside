@@ -4349,7 +4349,8 @@ public final class E2eDriver {
 	 * starts it again. Player 1's status is read from their menu's narration, Player2's from its log. First, Player2
 	 * pauses alone (START, then B) while player 1 plays: their menu draws "The world keeps going — <player 1> is still
 	 * playing" whole, wrapped as it needs and never cut short (from its layout log line; the status-line screenshot), and
-	 * player 1's menu draws its own status whole at (a) and (b).
+	 * player 1's menu draws its own status whole at (a) and (b), in player 1's quarter view once the newcomer's view
+	 * makes three (the cramped case: broken after the em dash; the pause-menu-cramped screenshot).
 	 */
 	private void pauseTogether() throws Exception {
 		IntegratedServer server = minecraft.getSingleplayerServer();
@@ -4389,6 +4390,12 @@ public final class E2eDriver {
 			press(PICKING_PAD, PadButton.A);
 			press(PICKING_PAD, PadButton.A);
 			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+			// Their view makes three: player 1's is a quarter of the E2E's 854×480 window, 426×239 GUI px, the most cramped
+			// view player 1's six-entry menu has in a run. Its status must still be drawn whole there.
+			waitFor("player 1's view a quarter of the window", Duration.ofSeconds(10),
+					() -> onRender(() -> minecraft.getWindow().getGuiScaledHeight() < 250));
+			log("   player 1's GUI " + onRender(() -> minecraft.getWindow().getGuiScaledWidth() + "×"
+					+ minecraft.getWindow().getGuiScaledHeight()));
 
 			long mark = hostLogLength();
 			onRender(() -> {
@@ -4405,6 +4412,11 @@ public final class E2eDriver {
 			check(onRender(this::narration).contains("The world keeps going — Player2 is still playing"),
 					"player 1's menu says Player2 is still playing (got \"" + onRender(this::narration) + "\")");
 			waitForMenuStatusDrawnWhole("The world keeps going — Player2 is still playing");
+			// Two lines, broken after the em dash rather than mid-phrase.
+			List<String> drawn = onRender(() -> dev.hearthside.fabric.client.menu.PauseMenuScreen.e2eDrawnStatus(minecraft));
+			check(List.of("The world keeps going —", "Player2 is still playing").equals(drawn),
+					"player 1's menu breaks its status after the em dash (drawn " + drawn + ")");
+			windowShot("pause-menu-cramped");
 			if (sound) {
 				String state = soundState(probe);
 				check(state.equals("playing"), "player 1's game's sounds play on while the world runs (got " + state + ")");
