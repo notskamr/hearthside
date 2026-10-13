@@ -55,6 +55,8 @@ public final class SatelliteBoot {
 	/** The pause menu's status line from the host's last PauseStatus in this world ("" for none). Render thread. */
 	private static String pauseLine = "";
 	private static boolean wasInWorld;
+	/** Telling the host failed once; not tried again. Render thread. */
+	private static boolean pauseFailed;
 
 	private SatelliteBoot() {}
 
@@ -119,6 +121,19 @@ public final class SatelliteBoot {
 	 * screen, Hearthside's, vanilla's or a mod's), and forgets the host's status line once the world closes.
 	 */
 	private static void tickPause(Minecraft minecraft) {
+		if (pauseFailed) {
+			return;
+		}
+		try {
+			tellPause(minecraft);
+		} catch (RuntimeException e) {
+			// Never break Minecraft: the host just stops hearing this game's pause state.
+			pauseFailed = true;
+			HearthsideMod.LOGGER.error("Hearthside could not tell the host this game's pause state; no longer trying", e);
+		}
+	}
+
+	private static void tellPause(Minecraft minecraft) {
 		boolean inWorld = minecraft.level != null;
 		if (wasInWorld && !inWorld) {
 			pauseLine = "";

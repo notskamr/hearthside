@@ -1783,19 +1783,23 @@ public final class Party {
 	private dev.hearthside.core.session.PausePolicy.Decision lastPause;
 	/** The guests' control connections told {@link #lastPause}. Render thread. */
 	private final java.util.Set<ControlConnection> toldPause = new java.util.HashSet<>();
+	/** Whether the world was paused at the last client tick. Render thread. */
+	private boolean worldWasPaused;
+	/** Pausing together failed once: from then on player 1's pause is vanilla's and guests aren't told. Render thread. */
+	private boolean pauseFailed;
 
 	/**
 	 * Whether player 1's pause may freeze the world: everyone in it is paused (a dropped controller counts as paused),
 	 * or player 1 is the only one in it yet. Reads Minecraft's own pause state, never Hearthside's. Render thread.
 	 */
 	public boolean freezeAllowed() {
-		return pauseDecision().freeze();
+		return pauseFailed || pauseDecision().freeze();
 	}
 
 	/** Player 1's pause menu's status line now ("" outside split-screen in a world). Render thread. */
 	public static String pauseLine() {
 		Party party = current;
-		return party == null || !party.pausingTogether() ? ""
+		return party == null || party.pauseFailed || !party.pausingTogether() ? ""
 				: dev.hearthside.core.session.PauseLine.of(party.pauseDecision());
 	}
 
@@ -1832,11 +1836,39 @@ public final class Party {
 		};
 	}
 
+	/** Each client tick. Render thread. */
+	private void tickPause() {
+		if (pauseFailed) {
+			return;
+		}
+		try {
+			soundsFollowTheWorld();
+			tellPause();
+		} catch (RuntimeException e) {
+			// Never break Minecraft: vanilla's pause from here on.
+			pauseFailed = true;
+			HearthsideMod.LOGGER.error("Hearthside pausing together failed; pausing as vanilla does from now on", e);
+		}
+	}
+
+	/**
+	 * In split-screen player 1's game is the couch's only audio (guests' games are muted), so its sounds follow the
+	 * world, not player 1's menu. Minecraft pauses them as the world freezes, but resumes them only as a screen closes:
+	 * here they resume as the world runs again, player 1's menu still open. Alone, it's vanilla's. Render thread.
+	 */
+	private void soundsFollowTheWorld() {
+		boolean paused = minecraft.isPaused();
+		if (worldWasPaused && !paused && !slots.isEmpty() && minecraft.gui.screen() != null) {
+			minecraft.getSoundManager().resume();
+		}
+		worldWasPaused = paused;
+	}
+
 	/**
 	 * On a change, player 1's log and menu say it and every guest is told (their menus say it too); a guest's game that
 	 * connects later is told the current one. Render thread.
 	 */
-	private void tickPause() {
+	private void tellPause() {
 		dev.hearthside.core.session.PausePolicy.Decision decision = pausingTogether() ? pauseDecision() : null;
 		if (!java.util.Objects.equals(decision, lastPause)) {
 			lastPause = decision;

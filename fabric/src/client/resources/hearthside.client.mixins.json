@@ -36,6 +36,8 @@
 		"SatelliteInputMixin",
 		"SatelliteResyncMixin",
 		"SessionOptionsSaveMixin",
+		"SoundEngineAccessor",
+		"SoundManagerAccessor",
 		"SatelliteWindowMixin",
 		"TextFieldStyleMixin",
 		"TitleButtonStyleMixin",
