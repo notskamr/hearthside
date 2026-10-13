@@ -161,7 +161,7 @@ public final class E2eDriver {
 			{"F1", "1"}, {"F2", "1"}, {"F3", "1"}, {"E1", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
 			{"N7", "C2"}, {"N7b", "C2"},
-			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
+			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"N6b", "C7b"},
 			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
@@ -169,7 +169,7 @@ public final class E2eDriver {
 			// The in-world pad block (fake pads).
 			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"N5", "P5"}, {"N9", "P5"}, {"N5b", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"N5", "P5"}, {"N9", "P5"}, {"N5b", "P5"}, {"N6", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
 			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"N8b"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
@@ -322,6 +322,7 @@ public final class E2eDriver {
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
+			step("N6b with four players, Add player is greyed out", this::addPlayerGreyedWhenFull);
 			step("V10 with four players the guests drop almost no frames", this::fourPlayersDropAlmostNothing);
 			step("D5 a leaving view fades out, then the others glide", () -> sampleGaps(this::leavingFades));
 			step("D6 a guest who quits from their own game leaves the party", () -> sampleGaps(this::guestQuitsItself));
@@ -368,6 +369,7 @@ public final class E2eDriver {
 				step("N5 a dropped controller dims its player's view and pauses them; replugging undoes it; after a minute another controller takes over", this::droppedController);
 				step("N9 a joining view's fade never dims player 1's border", this::joinFadeKeepsBorders);
 				step("N5b a controller dropping while its player picks a profile dims the picker under the reconnect card", this::droppedWhilePicking);
+				step("N6 player 1's Add player: one A on a free controller joins; the prompt expires, and Esc cancels it", this::addPlayer);
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
@@ -4473,6 +4475,100 @@ public final class E2eDriver {
 	/** Jumps the party's join clock {@code seconds} ahead. Never back: the flow's deadlines only move forward. */
 	private void jumpJoinClock(long seconds) {
 		Party.e2eTimeShift = Party.e2eTimeShift.plusSeconds(seconds);
+	}
+
+	/** The controller that answers Add player in N6. */
+	private static final int ADD_PAD = 113;
+
+	/** Player 1's pause menu, then its Add player entry, as player 1 would choose it. */
+	private void chooseAddPlayer() throws Exception {
+		onRender(() -> {
+			minecraft.pauseGame(false);
+			pressLabelled("Add player");
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() == null), "Add player closes the menu");
+	}
+
+	/** Backs a newcomer out of their profile picker and waits until their seat is free. */
+	private void backOut(int pad) throws Exception {
+		if (onRender(() -> card(2) != null)) {
+			press(pad, PadButton.B);
+		}
+		waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+	}
+
+	/**
+	 * N6 (Spec E section 3.4, Review Focus 5): player 1's Add player closes the menu and shows the prompt for 15 s (the
+	 * join clock jumped past it). Then one A on a free controller joins, without the usual second A, even from a controller
+	 * whose own double-A prompt was pending. Esc on player 1's keyboard cancels the prompt without opening the menu.
+	 */
+	private void addPlayer() throws Exception {
+		long mark = hostLogLength();
+		try {
+			// (b) The prompt expires after 15 s.
+			chooseAddPlayer();
+			waitFor("the add-player prompt", Duration.ofSeconds(5), () -> hostLogSince(mark).contains("hearthside add player prompt shown"));
+			jumpJoinClock(16);
+			waitFor("(b) the prompt expired", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("hearthside add player prompt expired"));
+
+			// (a) One A on a free controller joins.
+			PADS.plug(ADD_PAD, "fake-add-pad", PadStyle.XBOX);
+			Thread.sleep(300);
+			long joined = hostLogLength();
+			chooseAddPlayer();
+			press(ADD_PAD, PadButton.A);
+			waitFor("(a) one A joins: a newcomer choosing a profile", Duration.ofSeconds(5),
+					() -> onRender(() -> card(2) != null));
+			check(hostLogSince(joined).contains("hearthside add player prompt joined"), "and the prompt says so");
+			backOut(ADD_PAD);
+
+			// (c) A controller whose double-A prompt is pending joins with its next A once player 1 asks.
+			press(ADD_PAD, PadButton.A); // its own join prompt: "press A again"
+			long pending = hostLogLength();
+			chooseAddPlayer();
+			press(ADD_PAD, PadButton.A);
+			waitFor("(c) the pending controller joined", Duration.ofSeconds(5), () -> onRender(() -> card(2) != null));
+			check(hostLogSince(pending).contains("hearthside add player prompt joined"), "through Add player");
+			backOut(ADD_PAD);
+
+			// Esc on player 1's keyboard cancels the prompt, and only that.
+			long cancel = hostLogLength();
+			chooseAddPlayer();
+			pcKey(InputConstants.KEY_ESCAPE);
+			waitFor("Esc cancelled the prompt", Duration.ofSeconds(5),
+					() -> hostLogSince(cancel).contains("hearthside add player prompt cancelled"));
+			check(onRender(() -> minecraft.gui.screen() == null), "and didn't open the pause menu");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			backOut(ADD_PAD);
+			PADS.unplug(ADD_PAD);
+			jumpJoinClock(16); // any prompt still showing has expired
+			Thread.sleep(1000); // the views settle back before the next step
+		}
+	}
+
+	/** N6b (plan R3): with four players, player 1's Add player is greyed out. */
+	private void addPlayerGreyedWhenFull() throws Exception {
+		check(playerCount() == 4, "four players");
+		try {
+			boolean active = onRender(() -> {
+				minecraft.pauseGame(false);
+				return Screens.getWidgets(minecraft.gui.screen()).stream()
+						.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("Add player"))
+						.findFirst().orElseThrow(() -> new AssertionError("missing: Add player in player 1's menu")).active;
+			});
+			check(!active, "Add player is greyed out with four players");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
 	}
 
 	/** Takes Player2 over with a newly plugged controller, after a dropped one's minute has passed. */
