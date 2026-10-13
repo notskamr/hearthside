@@ -62,9 +62,14 @@ public final class JoinToast implements OverlayLayer {
 	/** The slide being drawn (a showing's start, or minus a leaving's), and whether it fades rather than slides. */
 	private long slideKey = Long.MIN_VALUE;
 	private boolean fadeSlide;
-	/** For the E2E: where the toast was last drawn, and Minecraft's toasts it kept clear of then. */
+	/**
+	 * For the E2E: where the toast was last drawn, Minecraft's toasts it kept clear of then, player 1's view it mapped
+	 * them from (null on player 1's HUD), and its line ("A" for the button).
+	 */
 	private Rect e2eDrawn;
 	private List<Rect> e2eToasts = List.of();
+	private Rect e2eView;
+	private String e2eLine = "";
 
 	/** E2E: where the toast was last drawn (null before it ever was), in the units it was drawn in. */
 	public Rect e2eDrawn() {
@@ -74,6 +79,16 @@ public final class JoinToast implements OverlayLayer {
 	/** E2E: Minecraft's toasts as the toast last saw them, in the same units. */
 	public List<Rect> e2eToasts() {
 		return e2eToasts;
+	}
+
+	/** E2E: player 1's view as the toast last mapped their toasts from it, in the same units; null on their HUD. */
+	public Rect e2eView() {
+		return e2eView;
+	}
+
+	/** E2E: the toast's line as last drawn, with "A" for the button. */
+	public String e2eLine() {
+		return e2eLine;
 	}
 
 	/** Over every view and everything on them (cards, name tags, borders, the party panel). */
@@ -172,11 +187,12 @@ public final class JoinToast implements OverlayLayer {
 
 	/** On player 1's own screen, alone: centred at the top, clear of Minecraft's toasts (the right 160 GUI px). */
 	public void draw(GuiGraphicsExtractor g, int width, long now) {
+		e2eView = null;
 		draw(g, width, now, -1, ToastRects.visible(Minecraft.getInstance()));
 	}
 
 	/** Minecraft's toasts in player 1's view (their GUI pixels), in the overlay's units over that view. */
-	private static List<Rect> hostToasts(OverlayContext context) {
+	private List<Rect> hostToasts(OverlayContext context) {
 		Minecraft minecraft = Minecraft.getInstance();
 		ViewFrame own = context.views().stream().filter(v -> v.seat() == 0).findFirst().orElse(null);
 		int guiWidth = minecraft.getWindow().getGuiScaledWidth(), guiHeight = minecraft.getWindow().getGuiScaledHeight();
@@ -184,6 +200,7 @@ public final class JoinToast implements OverlayLayer {
 			return List.of();
 		}
 		Rect view = own.rect();
+		e2eView = view;
 		float sx = view.width() / (float) guiWidth, sy = view.height() / (float) guiHeight;
 		List<Rect> toasts = new ArrayList<>();
 		for (Rect r : ToastRects.visible(minecraft)) {
@@ -258,6 +275,7 @@ public final class JoinToast implements OverlayLayer {
 		float alpha = fadeSlide ? Math.clamp(progress, 0f, 1f) : 1f;
 		e2eDrawn = new Rect(x, y, w, HEIGHT);
 		e2eToasts = toasts;
+		e2eLine = before.getString() + " A" + (afterW > 0 ? " " + after.getString() : "");
 		g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.GLASS_PANEL, x, y, w, HEIGHT, faded(0xFFFFFFFF, alpha));
 		HearthDraw.label(g, font, heading, x + 10, y + 6, faded(ORANGE, alpha));
 		int lx = x + 10;

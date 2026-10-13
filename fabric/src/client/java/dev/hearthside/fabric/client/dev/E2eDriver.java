@@ -4499,6 +4499,12 @@ public final class E2eDriver {
 		check(drawn != null, shot + ": the prompt was drawn");
 		check(!toasts.isEmpty(), shot + ": it saw the tutorial toast");
 		check(toasts.stream().noneMatch(drawn::intersects), shot + ": the prompt " + drawn + " overlaps a toast " + toasts);
+		// The mapping itself: the tutorial toast sits at the right edge of player 1's view.
+		var view = onRender(toast::e2eView);
+		check(view != null, shot + ": mapped from player 1's view");
+		int right = view.x() + view.width();
+		check(toasts.stream().anyMatch(t -> Math.abs(t.x() + t.width() - right) <= 1),
+				shot + ": a toast's right edge on player 1's view's right edge " + right + " " + toasts);
 	}
 
 	/** Backs a newcomer out of their profile picker and waits until their seat is free. */
@@ -4539,6 +4545,15 @@ public final class E2eDriver {
 			windowShot("add-player-connect"); // no free controller yet: "Connect a controller, then press A"
 			promptClearOfToasts("add-player-connect");
 			jumpJoinClock(16);
+			// Its time is up: Esc at once is the pause key again, not a cancel (P-9: only while the prompt shows).
+			long expiry = hostLogLength();
+			pcKey(InputConstants.KEY_ESCAPE);
+			check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "(b) Esc as the prompt runs out opens the pause menu");
+			check(!hostLogSince(expiry).contains("hearthside add player prompt cancelled"), "(b) and cancels nothing");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
 			waitFor("(b) the prompt expired", Duration.ofSeconds(5),
 					() -> hostLogSince(mark).contains("hearthside add player prompt expired"));
 
@@ -4564,6 +4579,27 @@ public final class E2eDriver {
 			waitFor("(c) the pending controller joined", Duration.ofSeconds(5), () -> onRender(() -> card(2) != null));
 			check(hostLogSince(pending).contains("hearthside add player prompt joined"), "through Add player");
 			backOut(ADD_PAD);
+
+			// (d) While a dropped Player2 is offered for take-over, a free controller's A takes them over (that beats Add
+			// player): the prompt says so, and says join again once their controller is back.
+			int paused = count("hearthside satellite paused");
+			long offered = hostLogLength();
+			PADS.unplug(102);
+			try {
+				waitFor("(d) Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > paused);
+				jumpJoinClock(61);
+				waitFor("(d) the take-over offered", Duration.ofSeconds(5),
+						() -> hostLogSince(offered).contains("hearthside take-over offered player=2"));
+				chooseAddPlayer();
+				waitFor("(d) the prompt offers the take-over", Duration.ofSeconds(3),
+						() -> onRender(() -> Party.current().joinToast().e2eLine())
+								.equals("Press A on a new controller to take over Player2"));
+			} finally {
+				PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+				PADS.set(102, InputFrame.NEUTRAL);
+			}
+			waitFor("(d) back to joining once Player2's controller is back", Duration.ofSeconds(5),
+					() -> onRender(() -> Party.current().joinToast().e2eLine()).equals("Press A on a new controller to join"));
 
 			// Esc on player 1's keyboard cancels the prompt, and only that.
 			long cancel = hostLogLength();
