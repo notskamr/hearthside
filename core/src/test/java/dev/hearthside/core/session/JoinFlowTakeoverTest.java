@@ -107,4 +107,34 @@ class JoinFlowTakeoverTest {
 		assertThat(flow.press("pad-2", Control.A).effects()).containsExactly(new Effect.ShowJoinPrompt("pad-2"));
 		assertThat(flow.seats().get("pad-1")).isEqualTo(new SeatState.Playing(alex));
 	}
+
+	@Test
+	void inTheLobbyAFreeControllersAStillClaimsAFreeSeat() {
+		// Ruling P-10: taking over is for a player in the world; in the lobby nothing is offered, and A takes a seat.
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.profileChosen("pad-1", alex);
+		flow.disconnected("pad-1");
+		clock.advance(Duration.ofSeconds(60));
+		assertThat(flow.tick().effects()).as("nothing offered in the lobby").isEmpty();
+
+		var result = flow.press("pad-2", Control.A);
+		assertThat(result.effects()).contains(new Effect.ClaimSeat("pad-2", 1))
+				.noneMatch(effect -> effect instanceof Effect.TookOver);
+		assertThat(flow.seatOf("pad-1")).hasValue(0);
+		assertThat(flow.seats().get("pad-1")).isInstanceOf(SeatState.Disconnected.class);
+	}
+
+	@Test
+	void aSeatDroppedInTheLobbyIsOfferedOnceInTheWorld() {
+		JoinFlow flow = new JoinFlow(Mode.LOBBY, 3, clock);
+		flow.press("pad-1", Control.A);
+		flow.profileChosen("pad-1", alex);
+		flow.disconnected("pad-1");
+		clock.advance(Duration.ofSeconds(60));
+		flow.tick();
+		flow.enterGame();
+		assertThat(flow.tick().effects()).containsExactly(new Effect.OfferTakeover("pad-1"));
+		assertThat(flow.press("pad-2", Control.A).effects()).contains(new Effect.TookOver("pad-1", "pad-2"));
+	}
 }

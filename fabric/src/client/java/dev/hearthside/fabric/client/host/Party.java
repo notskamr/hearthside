@@ -106,6 +106,8 @@ import net.minecraft.network.chat.Component;
 public final class Party {
 	private static final SecureRandom RANDOM = new SecureRandom();
 	private static volatile Party current;
+	/** E2E: how far the join flow's clock runs ahead of the real one (only ever moved forward), to reach a take-over. */
+	public static volatile java.time.Duration e2eTimeShift = java.time.Duration.ZERO;
 
 	private final Minecraft minecraft;
 	private final Path gameDir;
