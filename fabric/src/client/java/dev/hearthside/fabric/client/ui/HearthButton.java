@@ -14,7 +14,7 @@ import net.minecraft.network.chat.Component;
  * A wooden Cozy-hearth button (Spec A section 4.1); glows ember-orange when hovered or focused. It can show the
  * controller button that also presses it, as a glyph before its label.
  */
-public final class HearthButton extends Button {
+public final class HearthButton extends Button implements DrawsOwnSelection {
 	private Control glyph;
 	private Supplier<PadStyle> style;
 

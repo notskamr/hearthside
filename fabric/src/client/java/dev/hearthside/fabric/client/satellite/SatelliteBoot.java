@@ -15,6 +15,7 @@ import dev.hearthside.fabric.client.mixin.MinecraftUserAccessor;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.VirtualCursor;
+import dev.hearthside.fabric.client.menu.MenuNavigator;
 import dev.hearthside.fabric.client.menu.PauseMenuScreen;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import dev.hearthside.fabric.server.GuestLoginHooks;
@@ -79,6 +80,8 @@ public final class SatelliteBoot {
 		FrameHook.register(applier::onFrame);
 		VirtualCursor.setDrawn(true);
 		ButtonGuideRenderer.enable(applier::scheme);
+		// Before any screen opens, so the guest's first pause menu is driven exactly like later ones.
+		MenuNavigator.register();
 		if ("1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"))) {
 			logScreens(minecraft);
 		}

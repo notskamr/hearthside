@@ -1,16 +1,13 @@
 package dev.hearthside.fabric.client.menu;
 
-import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.MenuNav;
 import dev.hearthside.fabric.client.host.Party;
-import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.ui.HearthButton;
 import dev.hearthside.fabric.client.ui.HearthDraw;
 import dev.hearthside.fabric.client.ui.HintChip;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 
@@ -32,6 +29,7 @@ final class LeaveConfirmScreen extends Screen implements PadScreen {
 	private final PauseMenuScreen parent;
 	private MenuNav nav = new MenuNav();
 	private HearthButton keepPlaying;
+	private PadHints hints;
 	private int panelX, panelY, panelW, panelH;
 
 	LeaveConfirmScreen(PauseMenuScreen parent) {
@@ -63,18 +61,9 @@ final class LeaveConfirmScreen extends Screen implements PadScreen {
 		}
 		addRenderableWidget(leave);
 		addRenderableWidget(keepPlaying);
-		if (controllerDriven()) {
-			// Its own hints under the card, as on the pause menu: A presses whatever is focused, B keeps playing.
-			HintChip select = new HintChip(0, 0, Control.A, ButtonGuideRenderer::style, Component.literal("Select"),
-					b -> pressFocused());
-			HintChip back = new HintChip(0, 0, Control.B, ButtonGuideRenderer::style, Component.literal("Back"), b -> onClose());
-			int x = (width - select.getWidth() - 4 - back.getWidth()) / 2;
-			int hintsY = panelY + panelH + HINT_GAP;
-			select.setPosition(x, hintsY);
-			back.setPosition(x + select.getWidth() + 4, hintsY);
-			addRenderableWidget(select);
-			addRenderableWidget(back);
-		}
+		// Its own hints under the card, as on the pause menu: A presses whatever is focused, B keeps playing.
+		hints = new PadHints(this, Component.literal("Back"), this::onClose);
+		hints.addTo(this::addRenderableWidget, width / 2, panelY + panelH + HINT_GAP);
 	}
 
 	/** Keep playing: leaving is never one stray press away. */
@@ -83,15 +72,14 @@ final class LeaveConfirmScreen extends Screen implements PadScreen {
 		setInitialFocus(keepPlaying);
 	}
 
-	private boolean controllerDriven() {
-		Party party = Party.current();
-		return party != null && party.hostHasController();
-	}
-
-	private void pressFocused() {
-		if (getFocused() instanceof HearthButton focused) {
-			focused.onPress(new KeyEvent(0, 0, 0));
+	@Override
+	public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+		hints.update();
+		if (PadHints.controllerDriven()) {
+			// As on the pause menu: the controller's selection is the only one lit until the mouse takes over.
+			mouseX = mouseY = -1;
 		}
+		super.extractRenderState(g, mouseX, mouseY, partialTick);
 	}
 
 	@Override

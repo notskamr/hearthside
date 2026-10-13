@@ -33,6 +33,7 @@
 		"HostPresentMixin",
 		"SatelliteFrameMixin",
 		"SatelliteInputMixin",
+		"SatelliteResyncMixin",
 		"SessionOptionsSaveMixin",
 		"SatelliteWindowMixin",
 		"TextFieldStyleMixin",

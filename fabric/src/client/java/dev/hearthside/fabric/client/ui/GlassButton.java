@@ -10,7 +10,7 @@ import net.minecraft.network.chat.Component;
  * An Ember-glass button over the world (Spec A section 4.1): a frosted chip that lights ember-orange when it is the
  * selection. A real vanilla {@link Button}, so other mods, narration and the E2E see it as one.
  */
-public final class GlassButton extends Button {
+public final class GlassButton extends Button implements DrawsOwnSelection {
 	/** The ember accent of a selected button, and its fainter fill. */
 	private static final int LIT = 0xFFFFB35A, LIT_FILL = 0x50FF8A3A;
 	private static final int INACTIVE_TEXT = 0xFF8A7A6A;

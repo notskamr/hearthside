@@ -1,14 +1,12 @@
 package dev.hearthside.fabric.client.menu;
 
 import dev.hearthside.core.Role;
-import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.MenuNav;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.HearthsideClient;
 import dev.hearthside.fabric.client.host.Party;
-import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.ui.GlassButton;
 import dev.hearthside.fabric.client.ui.HearthDraw;
 import dev.hearthside.fabric.client.ui.HintChip;
@@ -16,12 +14,12 @@ import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import net.minecraft.client.InputType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
-import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.network.chat.Component;
 
@@ -59,6 +57,9 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	private int lastButtons = -1;
 	private int panelX, panelY, panelW, panelH, statusY;
 	private boolean bigHeading;
+	private PadHints hints;
+	/** A controller's A is pressing an entry right now (not the mouse or the PC keyboard). */
+	private boolean padPressing;
 
 	public PauseMenuScreen() {
 		super(TITLE);
@@ -93,6 +94,10 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	/**
 	 * Adds an entry at {@code index} in the column (Tasks 5 and 6: "Add player" and "Split-screen…" after Resume).
 	 * Render thread.
+	 *
+	 * <p>Add entries once per instance, in the constructor by role. The same instance is shown again on the way back from
+	 * Options…, Game menu… and the Leave confirm, and {@code init} (and Fabric's {@code ScreenEvents.AFTER_INIT}) runs
+	 * each time, so adding from an "on show" hook would add the entry again.
 	 */
 	public void addEntry(int index, Component label, Runnable action, boolean active) {
 		entries.add(Math.clamp(index, 0, entries.size()), new Entry(label, action, active));
@@ -148,21 +153,8 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 			y += BUTTON_H + gap;
 		}
 		// Its own hints: Minecraft's screens get ButtonGuideRenderer's, Hearthside's draw their own.
-		HintChip[] chips = {
-				new HintChip(0, 0, Control.A, ButtonGuideRenderer::style, Component.literal("Select"), b -> pressFocused()),
-				new HintChip(0, 0, Control.B, ButtonGuideRenderer::style, RESUME, b -> resume()),
-		};
-		int total = (chips.length - 1) * 4;
-		for (HintChip chip : chips) {
-			total += chip.getWidth();
-		}
-		int x = (width - total) / 2;
-		for (HintChip chip : chips) {
-			chip.setPosition(x, panelY + panelH + HINT_GAP);
-			chip.visible = controllerDriven();
-			x += chip.getWidth() + 4;
-			addRenderableWidget(chip);
-		}
+		hints = new PadHints(this, RESUME, this::resume);
+		hints.addTo(this::addRenderableWidget, width / 2, panelY + panelH + HINT_GAP);
 	}
 
 	/** The panel and its hints, with the heading at twice the font's size or its own, and this gap between buttons. */
@@ -179,24 +171,14 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		}
 	}
 
-	/** Controller hints only for a controller: always in a guest's game, in player 1's while they hold one. */
-	private boolean controllerDriven() {
-		if (guest) {
-			return true;
-		}
-		Party party = Party.current();
-		return party != null && party.hostHasController();
-	}
-
 	private void choose(Entry entry) {
 		HearthsideMod.LOGGER.info("Hearthside pause menu chose {}", entry.label().getString());
-		entry.action().run();
-	}
-
-	private void pressFocused() {
-		if (getFocused() instanceof GlassButton focused && focused.active) {
-			focused.onPress(new KeyEvent(0, 0, 0));
+		if (padPressing) {
+			// The controller drives the next screen (vanilla's Options or pause screen) with its pointer: no keyboard
+			// focus lit there as well, which the D-pad here would otherwise leave behind.
+			minecraft.setLastInputType(InputType.NONE);
 		}
+		entry.action().run();
 	}
 
 	/** As vanilla's Back to Game. */
@@ -256,7 +238,12 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 				resume();
 				return true;
 			}
-			MenuNavigator.apply(minecraft, this, action, focusColour());
+			padPressing = action == MenuNav.Action.ACCEPT;
+			try {
+				MenuNavigator.apply(minecraft, this, action, focusColour());
+			} finally {
+				padPressing = false;
+			}
 		}
 		return used;
 	}
@@ -270,8 +257,9 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	public void extractBackground(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
 		// The world stays visible through the glass, a little dimmed.
 		g.fill(0, 0, width, height, 0x60000000);
-		// Backed so the buttons stay readable over a bright world.
-		g.fill(panelX + 2, panelY + 2, panelX + panelW - 2, panelY + panelH - 2, 0xB8201410);
+		// Backed, as the on-screen keyboard is, so the buttons stay readable over a bright world (and the crosshair stays
+		// out of the panel).
+		g.fill(panelX + 2, panelY + 2, panelX + panelW - 2, panelY + panelH - 2, 0xD8201410);
 		HearthDraw.glass(g, panelX, panelY, panelW, panelH);
 		int headingY = panelY + PAD;
 		if (bigHeading) {
@@ -291,12 +279,12 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
-		boolean hints = controllerDriven();
-		children().forEach(c -> {
-			if (c instanceof HintChip chip) {
-				chip.visible = hints;
-			}
-		});
+		hints.update();
+		if (PadHints.controllerDriven()) {
+			// The controller's selection is the only one lit: a guest's game has no mouse (the OS arrow is player 1's,
+			// wherever it last was), and player 1's mouse lights what it's over again once it moves.
+			mouseX = mouseY = -1;
+		}
 		super.extractRenderState(g, mouseX, mouseY, partialTick);
 	}
 }

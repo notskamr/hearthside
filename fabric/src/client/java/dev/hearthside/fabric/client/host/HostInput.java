@@ -185,17 +185,19 @@ final class HostInput implements Runnable {
 	 * hold a controller, and hidden in play; their controller moves it and A clicks under it. Their applier centres it
 	 * as each screen opens from play. When they move or click the mouse it drives instead, as without a controller (no
 	 * pointer, no controller hints), until the stick, D-pad or A takes over again. Only one pointer ever shows: the OS
-	 * arrow is hidden while theirs is drawn.
+	 * arrow is hidden while theirs is drawn. Hearthside's own screens (their pause menu) have no pointer: the controller
+	 * moves the selection, and the OS arrow shows only once the mouse drives.
 	 */
 	private void showHostPointer() {
 		Screen screen = minecraft.gui.screen();
-		boolean show = screen != null && !(screen instanceof PadScreen) && !hostApplier.mouseDriving();
+		boolean padScreen = screen instanceof PadScreen;
+		boolean show = screen != null && !padScreen && !hostApplier.mouseDriving();
 		if (show && !VirtualCursor.isDrawn()) {
 			// It may still wear the colour of a guest who drove the lobby.
 			VirtualCursor.setTint(session.colorOf(0));
 		}
 		VirtualCursor.setDrawn(show);
-		OsCursor.setHidden(show);
+		OsCursor.setHidden(show || (padScreen && !hostApplier.mouseDriving()));
 		ButtonGuideRenderer.setScreenHintsHidden(hostApplier.mouseDriving());
 	}
 

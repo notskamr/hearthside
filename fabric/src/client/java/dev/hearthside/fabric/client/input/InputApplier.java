@@ -156,6 +156,18 @@ public final class InputApplier {
 				if (screen instanceof PadScreen padScreen && minecraft.level != null) {
 					// Hearthside's screens in the world (the pause menu) take this controller by focus: no pointer.
 					padScreen.padInput(0, frame, now);
+					if (sharesWithMouse) {
+						// Player 1's mouse and controller take turns here too: whichever was used last drives (the
+						// screen lights no mouse hover while it's the controller).
+						if (used(frame)) {
+							RealMouse.handOff().padUsed(now);
+						}
+						mouseDriving = RealMouse.handOff().owner() == PointerHandOff.Owner.MOUSE;
+					} else if (minecraft.gui.screen() != null) {
+						// A guest's game has no mouse of its own: nothing is hovered here, nor on the first frame of a
+						// screen opened from here (the pointer takes over on the next).
+						parkMouse();
+					}
 				} else {
 					applyMenu(screen, GamepadMapping.menu(scheme, previous, frame, dt), now);
 				}
@@ -163,6 +175,15 @@ public final class InputApplier {
 		} finally {
 			// Even if applying failed, never replay the same button edge on the next frame.
 			previous = frame;
+		}
+	}
+
+	/** Moves the game's mouse off the window, where it is over nothing. */
+	private void parkMouse() {
+		double mouseX = minecraft.mouseHandler.xpos(), mouseY = minecraft.mouseHandler.ypos();
+		if (mouseX != -1 || mouseY != -1) {
+			long handle = minecraft.getWindow().handle();
+			SyntheticMouse.run(() -> minecraft.mouseHandler.onMove(handle, -1, -1, -1 - mouseX, -1 - mouseY));
 		}
 	}
 
