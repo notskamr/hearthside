@@ -43,10 +43,12 @@ Hearthside starts the other players' games itself, hidden, when they join — th
 
 **In the world.** Each player sees their own view; the layout makes room as players come and go.
 - To join mid-game, press **A twice** on a new controller, or let player 1 choose **Add player** from their pause menu:
-  then one **A** on any free controller joins within 15 seconds.
+  then one **A** on any free controller joins within 15 seconds (B on player 1's controller or Esc cancels it). A player
+  joining while everyone in the world is paused waits on their card until someone resumes.
 - **Start** (Esc for player 1 on the keyboard) opens your own pause menu, in your own view: **Resume**, **Options…**,
   **Game menu…** (Minecraft's own pause menu, with any other mod's buttons) and **Leave game**. Player 1's also has
-  **Add player** and **Split-screen…**. Move with the D-pad or the stick, A picks, B resumes.
+  **Add player** and **Split-screen…**. Move with the D-pad or the stick, A picks, B resumes. Playing alone, the pause
+  key opens Minecraft's own pause menu.
 - The world keeps going while anyone is still playing (your menu says who), and freezes when everyone in it has paused.
 - If a controller disconnects, that player's view dims behind "Reconnect your controller" and their game pauses; plug it
   back in to carry on. After a minute, one **A** on another controller takes that player over, right where they stand.
@@ -84,7 +86,7 @@ Minecraft closed; it applies from the next party.
 | `titleStyle` | `hearthside` | The title screen's look: `hearthside` (the plank wall and firelight) or `vanilla`. |
 
 **Swap views** on the Split-screen screen moves a player earlier or later in the layout, so player 1 needn't be
-top-left. It lasts for the session.
+top-left. It lasts until everyone else has left.
 
 **Performance presets.** Each extra player's game is a whole Minecraft, so a laptop works hard with three or four.
 The preset applies for the session only; nobody's own settings are changed.
