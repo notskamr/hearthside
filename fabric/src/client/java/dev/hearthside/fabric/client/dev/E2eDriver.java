@@ -4594,6 +4594,8 @@ public final class E2eDriver {
 				waitFor("(d) the prompt offers the take-over", Duration.ofSeconds(3),
 						() -> onRender(() -> Party.current().joinToast().e2eLine())
 								.equals("Press A on a new controller to take over Player2"));
+				Thread.sleep(300);
+				windowShot("add-player-take-over");
 			} finally {
 				PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
 				PADS.set(102, InputFrame.NEUTRAL);

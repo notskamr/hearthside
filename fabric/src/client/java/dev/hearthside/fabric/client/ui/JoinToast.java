@@ -30,6 +30,7 @@ import net.minecraft.network.chat.Component;
  *
  * <p>Player 1's Add player (Spec E section 3.4) shows the same toast: "Add player — Press A on a new controller to
  * join", or "Connect a controller, then press A" while no free controller is connected, switching as one is plugged in.
+ * While a dropped player is offered for take-over, which that A does first, it says "to take over <name>" instead.
  */
 public final class JoinToast implements OverlayLayer {
 	public static final Duration IN = Duration.ofMillis(180), OUT = Duration.ofMillis(150);
@@ -56,6 +57,8 @@ public final class JoinToast implements OverlayLayer {
 	private boolean reduceMotion;
 	/** For the Add player prompt: the free controllers' family, or null while none is connected. */
 	private Supplier<PadStyle> freeStyle = () -> null;
+	/** For the Add player prompt: who a free controller's A would take over instead of joining, or null. */
+	private Supplier<String> takeOver = () -> null;
 	/** Where the toast's top sits now, gliding to its place clear of Minecraft's toasts; NaN while out of sight. */
 	private float placed = Float.NaN;
 	private long placedAt;
@@ -113,14 +116,17 @@ public final class JoinToast implements OverlayLayer {
 
 	/**
 	 * Player 1 chose Add player: show its prompt for {@code window}, in place of any controller's. {@code freeStyle}
-	 * gives the free controllers' family, or null while none is connected; the prompt follows it as it draws.
+	 * gives the free controllers' family, or null while none is connected; {@code takeOver} the name of the dropped
+	 * player a free controller's A would take over instead, or null. The prompt follows both as it draws.
 	 */
-	public void showAddPlayer(long now, Duration window, boolean reduce, Supplier<PadStyle> freeStyle) {
+	public void showAddPlayer(long now, Duration window, boolean reduce, Supplier<PadStyle> freeStyle,
+			Supplier<String> takeOver) {
 		expire(now);
 		if (shown == null || !shown.addPlayer()) {
 			HearthSounds.play(HearthSounds.Ui.PROMPT_IN);
 		}
 		this.freeStyle = freeStyle;
+		this.takeOver = takeOver;
 		shown = new Prompt(ADD_PLAYER, PadStyle.GENERIC, now, now + window.toNanos());
 		leaving = null;
 		reduceMotion = reduce;
@@ -182,13 +188,13 @@ public final class JoinToast implements OverlayLayer {
 	public void extract(GuiGraphicsExtractor g, OverlayContext context) {
 		// Over split play: centred on the window, below the first row of name tags, and below any of Minecraft's toasts
 		// in player 1's view it would meet.
-		draw(g, context.guiWidth(), context.nanos(), 26, hostToasts(context));
+		draw(g, context.guiWidth(), context.nanos(), 26, () -> hostToasts(context));
 	}
 
 	/** On player 1's own screen, alone: centred at the top, clear of Minecraft's toasts (the right 160 GUI px). */
 	public void draw(GuiGraphicsExtractor g, int width, long now) {
 		e2eView = null;
-		draw(g, width, now, -1, ToastRects.visible(Minecraft.getInstance()));
+		draw(g, width, now, -1, () -> ToastRects.visible(Minecraft.getInstance()));
 	}
 
 	/** Minecraft's toasts in player 1's view (their GUI pixels), in the overlay's units over that view. */
@@ -214,10 +220,10 @@ public final class JoinToast implements OverlayLayer {
 
 	/**
 	 * Draws the toast at the top; {@code top} >= 0 places it there, centred, else it is clear of the toast column. Where
-	 * it would meet one of Minecraft's {@code toasts} it sits just below the lowest, gliding there and back as they come
+	 * it would meet one of Minecraft's toasts ({@code toastsNow}) it sits just below the lowest, gliding there and back as they come
 	 * and go; it fades in there instead of sliding down across that toast.
 	 */
-	private void draw(GuiGraphicsExtractor g, int width, long now, int top, List<Rect> toasts) {
+	private void draw(GuiGraphicsExtractor g, int width, long now, int top, Supplier<List<Rect>> toastsNow) {
 		Prompt prompt = shown != null ? shown : leaving;
 		float offset = offset(now);
 		if (prompt == null || offset <= -HEIGHT - 6) {
@@ -234,13 +240,16 @@ public final class JoinToast implements OverlayLayer {
 		if (prompt.addPlayer()) {
 			heading = Component.literal("Add player");
 			PadStyle free = freeStyle.get();
+			// A dropped player offered for take-over is what a free controller's A does first (Spec E section 3.3).
+			String takingOver = takeOver.get();
 			if (free != null) {
 				before = Component.literal("Press");
-				after = Component.literal("on a new controller to join");
+				after = Component.literal(takingOver != null ? "on a new controller to take over " + takingOver
+						: "on a new controller to join");
 				style = free;
 			} else {
 				before = Component.literal("Connect a controller, then press");
-				after = Component.empty();
+				after = takingOver != null ? Component.literal("to take over " + takingOver) : Component.empty();
 			}
 		} else {
 			heading = Component.literal("New controller");
@@ -253,6 +262,7 @@ public final class JoinToast implements OverlayLayer {
 		int w = Math.max(130, Math.max(font.width(heading), line) + 24);
 		int x = top >= 0 ? (width - w) / 2 : Math.max(6, Math.min((width - w) / 2, width - 160 - 8 - w));
 		int own = top >= 0 ? top : 6;
+		List<Rect> toasts = toastsNow.get(); // looked up only while a prompt is up
 		int wanted = BelowToasts.top(own, x, w, HEIGHT, GAP, toasts);
 		if (Float.isNaN(placed) || reduceMotion) {
 			placed = wanted; // it appears where it belongs
