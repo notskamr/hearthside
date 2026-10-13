@@ -106,6 +106,26 @@ import net.minecraft.network.chat.Component;
 public final class Party {
 	private static final SecureRandom RANDOM = new SecureRandom();
 	private static volatile Party current;
+	/** E2E: how far the join flow's clock runs ahead of the real one (only ever moved forward), to reach a take-over. */
+	public static volatile Duration e2eTimeShift = Duration.ZERO;
+
+	/** The join flow's clock: the real one, {@link #e2eTimeShift} ahead (no shift outside the E2E). */
+	private static final class FlowClock extends Clock {
+		@Override
+		public java.time.ZoneId getZone() {
+			return java.time.ZoneOffset.UTC;
+		}
+
+		@Override
+		public Clock withZone(java.time.ZoneId zone) {
+			return this;
+		}
+
+		@Override
+		public java.time.Instant instant() {
+			return java.time.Instant.now().plus(e2eTimeShift);
+		}
+	}
 
 	private final Minecraft minecraft;
 	private final Path gameDir;
@@ -211,7 +231,7 @@ public final class Party {
 
 	private Party(Minecraft minecraft, JoinFlow.Mode mode) throws IOException {
 		this.minecraft = minecraft;
-		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
+		this.flow = new JoinFlow(mode, 3, new FlowClock());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
 		this.config = SplitScreenConfigFile.load(gameDir);
 		this.preset = choosePreset();
@@ -1416,6 +1436,46 @@ public final class Party {
 		}
 	}
 
+	/**
+	 * Another controller took over a player whose controller dropped (Spec E section 3.3): the same seat, game, profile
+	 * and place, now on the new controller, which becomes their profile's controller (plan R4). Render thread.
+	 */
+	private void takeOver(String from, String to) {
+		Integer index = slotOfController(from);
+		Integer instanceId = instanceOf.get(to);
+		if (index == null || instanceId == null) {
+			// Not expected: the press that took over recorded its controller, and the seat's slot lives as long as it.
+			HearthsideMod.LOGGER.warn("Hearthside could not hand {}'s player to {}: seat {}, controller {}", from, to,
+					index, instanceId);
+			return;
+		}
+		controllerOfSlot.put(index, to);
+		instanceOf.remove(from);
+		guidOf.remove(from);
+		String guid = guidOf.get(to);
+		HostInput currentInput = input;
+		PadStyle style = PadStyle.GENERIC;
+		if (currentInput != null) {
+			currentInput.takeOver(instanceId, index);
+			style = currentInput.styleOfPad(instanceId);
+		}
+		sendToGuest(index, new ControlMessage.SetPadStyle(style));
+		sendToGuest(index, new ControlMessage.Lifecycle(LifecycleCommand.RESUME));
+		HearthsideMod.LOGGER.info("Hearthside take-over player={} controller={}", index + 1, guid);
+		if (!composite) {
+			// No card went away to show it: the chat says so.
+			chat(Component.literal("Player " + (index + 1) + " is playing on another controller now."));
+		}
+		Slot slot = slots.get(index);
+		GuestProfile profile = slot == null ? null : slot.profile;
+		if (profile != null && guid != null && !guid.equals(profile.preferredControllerGuid())) {
+			GuestProfile updated = profile.withController(guid);
+			if (rememberProfile(updated)) {
+				slot.profile = updated;
+			}
+		}
+	}
+
 	/** A guest's controller came back under a new SDL id. Render thread. */
 	void onPadRestored(int player, int newInstanceId) {
 		String old = controllerOfSlot.get(player);
@@ -1611,6 +1671,25 @@ public final class Party {
 		};
 	}
 
+	/**
+	 * What a guest's reconnect card shows while their controller is disconnected (Spec E section 3.3), or null while
+	 * it's connected: who they are, and while a free controller's A would take them over (the lowest seat offered, as
+	 * {@link JoinFlow#nextTakeover}), the family of the free controllers (generic with none or a mix). Render thread.
+	 */
+	dev.hearthside.fabric.client.ui.CardPainter.Reconnect reconnect(int seat) {
+		String controller = controllerOfSlot.get(seat);
+		dev.hearthside.core.session.SeatState state = controller == null ? null : flow.seats().get(controller);
+		if (!(state instanceof dev.hearthside.core.session.SeatState.TakeoverOffered)
+				&& !(state instanceof dev.hearthside.core.session.SeatState.Disconnected)) {
+			return null;
+		}
+		boolean offered = flow.nextTakeover().filter(controller::equals).isPresent();
+		HostInput current = input;
+		PadStyle free = current == null || current.freePadCount() == 0 ? null : current.freePadStyle();
+		return new dev.hearthside.fabric.client.ui.CardPainter.Reconnect(who(seat), offered,
+				free == null ? PadStyle.GENERIC : free);
+	}
+
 	/** Who a seat is, for their card: name, skin, colour and controller family. */
 	dev.hearthside.fabric.client.ui.CardPainter.Who who(int seat) {
 		Leaving gone = gone(seat);
@@ -1675,15 +1754,24 @@ public final class Party {
 						removeSlot(slot);
 					}
 				}
-				case JoinFlow.Effect.OfferTakeover offer -> chat(Component.literal(
-						"A player's controller is still disconnected. Plug it back in to carry on.")
-						.withStyle(ChatFormatting.YELLOW));
+				case JoinFlow.Effect.OfferTakeover offer -> {
+					// Their reconnect card offers it from now on (it reads the seat's state each frame); with tiled windows
+					// nothing draws that card, so the chat says it.
+					Integer index = slotOfController(offer.controller());
+					if (index != null) {
+						HearthsideMod.LOGGER.info("Hearthside take-over offered player={}", index + 1);
+						if (!composite) {
+							chat(Component.literal("Player " + (index + 1) + "'s controller is still disconnected. "
+									+ "Press A on another controller to take over.").withStyle(ChatFormatting.YELLOW));
+						}
+					}
+				}
+				case JoinFlow.Effect.TookOver took -> takeOver(took.from(), took.to());
 				case JoinFlow.Effect.HideJoinPrompt hide -> joinToast.hide(hide.controller(), System.nanoTime());
 				// A crackle as the fire takes another player.
 				case JoinFlow.Effect.ClaimSeat claim -> dev.hearthside.fabric.client.ui.HearthSounds.play(
 						dev.hearthside.fabric.client.ui.HearthSounds.Ui.JOIN);
-				// Not wired yet: take-over (plan 5c2a Task 4) and Add player (Task 5).
-				case JoinFlow.Effect.TookOver took -> { }
+				// Not wired yet: Add player (plan 5c2a Task 5).
 				case JoinFlow.Effect.ShowAddPlayerPrompt show -> { }
 				case JoinFlow.Effect.HideAddPlayerPrompt hide -> { }
 			}

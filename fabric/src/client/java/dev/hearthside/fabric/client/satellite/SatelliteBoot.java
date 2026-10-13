@@ -32,7 +32,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.User;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.client.gui.screens.ConnectScreen;
-import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
@@ -57,8 +56,26 @@ public final class SatelliteBoot {
 	private static boolean wasInWorld;
 	/** Telling the host failed once; not tried again. Render thread. */
 	private static boolean pauseFailed;
+	/**
+	 * The pause menu the host's PAUSE opened (the controller dropped), which its RESUME closes if it's still showing;
+	 * null once resumed, or when the drop found a screen already open and opened none. Render thread.
+	 */
+	private static Screen pausedFor;
+
+	private static final boolean E2E = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
+	/** E2E: the buttons of the last input frame from the host. The control channel's reading thread. */
+	private static int lastInputButtons;
 
 	private SatelliteBoot() {}
+
+	/** E2E: logs each press of A that reaches this game (the E2E checks a take-over's A never does). */
+	private static void logAPress(dev.hearthside.core.input.InputFrame frame) {
+		int a = dev.hearthside.core.input.InputFrame.buttons(dev.hearthside.core.input.PadButton.A);
+		if ((frame.buttons() & ~lastInputButtons & a) != 0) {
+			HearthsideMod.LOGGER.info("Hearthside input A down");
+		}
+		lastInputButtons = frame.buttons();
+	}
 
 	public static void register() {
 		ClientLoginNetworking.registerGlobalReceiver(GuestLoginHooks.GUEST_TOKEN, (client, handler, buf, listenerAdder) -> {
@@ -138,6 +155,8 @@ public final class SatelliteBoot {
 		if (wasInWorld && !inWorld) {
 			pauseLine = "";
 			PauseMenuScreen.setStatus("");
+			PauseMenuScreen.setControllerAway(false);
+			pausedFor = null;
 		}
 		wasInWorld = inWorld;
 		ControlConnection connection = control;
@@ -222,15 +241,33 @@ public final class SatelliteBoot {
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.PAUSE -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite paused (controller disconnected)");
 				applier.release();
+				if (!Presentation.satelliteTiled()) {
+					// Player 1's game draws the reconnect card over this view. A tiled window has none: its menu stays.
+					PauseMenuScreen.setControllerAway(true);
+				}
+				Screen before = minecraft.gui.screen();
 				minecraft.pauseGame(false);
+				Screen opened = minecraft.gui.screen();
+				if (opened != before) {
+					pausedFor = opened;
+				}
 			});
 			case ControlMessage.Lifecycle m when m.command() == LifecycleCommand.RESUME -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside satellite resumed (controller reconnected)");
-				if (minecraft.gui.screen() instanceof PauseScreen || PauseMenuScreen.isOpen(minecraft)) {
+				// Only the menu the drop opened, if it's still the one showing: one the player opened is theirs to close.
+				PauseMenuScreen.setControllerAway(false);
+				Screen opened = pausedFor;
+				pausedFor = null;
+				if (opened != null && minecraft.gui.screen() == opened) {
 					minecraft.gui.setScreen(null);
 				}
 			});
-			case ControlMessage.Input m -> applier.accept(m.frame());
+			case ControlMessage.Input m -> {
+				if (E2E) {
+					logAPress(m.frame());
+				}
+				applier.accept(m.frame());
+			}
 			case ControlMessage.UseCopyTransport m -> minecraft.execute(() -> {
 				FrameExporter exporter = FrameExporter.instance();
 				if (exporter != null) {

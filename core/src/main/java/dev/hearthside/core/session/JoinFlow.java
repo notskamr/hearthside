@@ -18,9 +18,9 @@ import java.util.UUID;
  * the party lobby ({@link Mode#LOBBY}: one A takes a seat) and drop-in during play ({@link Mode#IN_GAME}: a second A
  * within {@link #CONFIRM_WINDOW} confirms). Returns the effects the game must carry out. Not thread-safe.
  *
- * <p>Two things beat the usual join (Spec E §3.3–3.4): once a dropped player's seat is offered for take-over, a seatless
- * controller's A takes that player over; and while player 1's Add player window is open, a seatless controller's
- * single A joins.
+ * <p>Two things beat the usual join (Spec E §3.3–3.4): once a dropped player's seat is offered for take-over (in the
+ * world only), a seatless controller's A takes that player over; and while player 1's Add player window is open, a
+ * seatless controller's single A joins.
  */
 public final class JoinFlow {
 	public static final Duration CONFIRM_WINDOW = Duration.ofSeconds(5);
@@ -110,10 +110,14 @@ public final class JoinFlow {
 		Instant now = clock.instant();
 		if (control == Control.A) {
 			if (!seats.containsKey(controller)) {
-				String dropped = lowestTakeoverOffered();
+				// Only in the world (plan ruling P-10): in the lobby a free controller's A takes a free seat as ever.
+				String dropped = nextTakeover().orElse(null);
 				if (dropped != null) {
+					int seat = seats.get(dropped);
 					List<Effect> effects = new ArrayList<>(reassign(dropped, controller).effects());
-					effects.add(new Effect.TookOver(dropped, controller));
+					if (seatOf(controller).equals(OptionalInt.of(seat))) {
+						effects.add(new Effect.TookOver(dropped, controller));
+					}
 					return new Result(effects);
 				}
 				if (addPlayerUntil != null && now.isBefore(addPlayerUntil) && freeSeat() >= 0) {
@@ -280,7 +284,10 @@ public final class JoinFlow {
 		return Result.NONE;
 	}
 
-	/** Expires join prompts and the Add player window, and offers take-overs; call regularly (e.g. once a second). */
+	/**
+	 * Expires join prompts and the Add player window, and offers take-overs (in the world); call regularly (e.g. once a
+	 * second).
+	 */
 	public Result tick() {
 		Instant now = clock.instant();
 		List<Effect> effects = new ArrayList<>();
@@ -293,8 +300,9 @@ public final class JoinFlow {
 			if (entry.getValue() instanceof SeatState.Prompted p && !now.isBefore(p.until())) {
 				states.remove(controller);
 				effects.add(new Effect.HideJoinPrompt(controller));
-			} else if (entry.getValue() instanceof SeatState.Disconnected d
+			} else if (mode == Mode.IN_GAME && entry.getValue() instanceof SeatState.Disconnected d
 					&& !now.isBefore(d.since().plus(takeoverAfter))) {
+				// Offered in the world only; a seat that dropped in the lobby is offered at the first tick in the world.
 				states.put(controller, new SeatState.TakeoverOffered(d.before()));
 				effects.add(new Effect.OfferTakeover(controller));
 			}
@@ -319,6 +327,11 @@ public final class JoinFlow {
 		Integer seat = seats.remove(controller);
 		states.remove(controller);
 		return seat == null ? Result.NONE : new Result(List.of(new Effect.StopGuestGame(controller, seat)));
+	}
+
+	/** The dropped controller whose player a free controller's A would take over now, if any. */
+	public java.util.Optional<String> nextTakeover() {
+		return java.util.Optional.ofNullable(mode == Mode.IN_GAME ? lowestTakeoverOffered() : null);
 	}
 
 	/** The controller of the lowest seat offered for take-over, or null if none is. */

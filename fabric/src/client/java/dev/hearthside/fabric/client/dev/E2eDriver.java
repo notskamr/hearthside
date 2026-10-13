@@ -169,7 +169,7 @@ public final class E2eDriver {
 			// The in-world pad block (fake pads).
 			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"N5", "P5"}, {"N9", "P5"}, {"N5b", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
 			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"N8b"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
@@ -365,6 +365,9 @@ public final class E2eDriver {
 				step("N2b in split-screen player 1 gets Hearthside's menu, and Game menu… keeps every mod's button", this::splitScreenPauseKeepsModButtons);
 				step("N1b player 1's controller drives their pause menu by focus; Options… comes back; B is Resume, and Keep playing on the Leave confirm", this::hostPadPauseMenu);
 				step("N3 the world freezes only when everyone in it is paused, and every menu says so", this::pauseTogether);
+				step("N5 a dropped controller dims its player's view and pauses them; replugging undoes it; after a minute another controller takes over", this::droppedController);
+				step("N9 a joining view's fade never dims player 1's border", this::joinFadeKeepsBorders);
+				step("N5b a controller dropping while its player picks a profile dims the picker under the reconnect card", this::droppedWhilePicking);
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
@@ -2323,7 +2326,7 @@ public final class E2eDriver {
 		}
 	}
 
-	private static final int TILED_PAD = 130;
+	private static final int TILED_PAD = 130, TILED_TAKEOVER_PAD = 131;
 
 	/** D9: with tiled windows nothing would draw a card, so A, A joins straight away as that controller's profile. */
 	private void tiledDropIn() throws Exception {
@@ -2337,12 +2340,37 @@ public final class E2eDriver {
 			check(onRender(() -> Party.current().seatCard(1)) == null, "no card: nothing would draw it");
 			check(onRender(() -> Party.current().profileOf(1)) != null, "a profile was picked for the controller");
 			waitFor("the newcomer in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("their game in world mode", Duration.ofSeconds(60),
+					() -> satelliteLog().contains("hearthside controller: world mode"));
+
+			// Their controller drops (review Important 1): with tiled windows nothing draws a reconnect card, so their
+			// pause menu shows, and the chat offers the take-over and says when it happened.
+			int paused = count("hearthside satellite paused");
+			int menus = count("hearthside pause menu opened");
+			int hidden = count("hearthside pause menu hidden");
+			long mark = hostLogLength();
+			PADS.unplug(TILED_PAD);
+			waitFor("their game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > paused);
+			waitFor("their pause menu opened", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > menus);
+			Thread.sleep(500);
+			check(count("hearthside pause menu hidden") == hidden, "their pause menu shows: no card would stand in for it");
+			jumpJoinClock(61);
+			waitFor("the take-over offered in chat", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("[chat] player 2's controller is still disconnected"));
+			PADS.plug(TILED_TAKEOVER_PAD, "fake-tiled-takeover-pad", PadStyle.XBOX);
+			Thread.sleep(300);
+			press(TILED_TAKEOVER_PAD, PadButton.A);
+			waitFor("another controller took over", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("hearthside take-over player=2 controller=fake-tiled-takeover-pad"));
+			waitFor("and the chat says so", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("[chat] player 2 is playing on another controller now"));
 		} finally {
 			onRender(() -> {
 				Party.current().leaveAll();
 				return null;
 			});
 			PADS.unplug(TILED_PAD);
+			PADS.unplug(TILED_TAKEOVER_PAD);
 			waitFor("back to 1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
 		}
 	}
@@ -4269,6 +4297,41 @@ public final class E2eDriver {
 		return asked ? state.completeOnTimeout("none", 2, TimeUnit.SECONDS).get() : "none";
 	}
 
+	/** Whether a menu's drawn status lines are {@code expected} whole: every word there, nothing cut short. */
+	private static boolean wholeStatus(List<String> drawn, String expected) {
+		return drawn != null && String.join(" ", drawn).replace(" ", "").toLowerCase(Locale.ROOT)
+				.equals(expected.replace(" ", "").toLowerCase(Locale.ROOT));
+	}
+
+	/** Player 1's open pause menu draws {@code expected} as its status, whole (wrapped as it needs, never cut). */
+	private void waitForMenuStatusDrawnWhole(String expected) throws Exception {
+		List<String>[] drawn = new List[1];
+		try {
+			waitFor("player 1's menu draws \"" + expected + "\" whole", Duration.ofSeconds(3), () -> {
+				drawn[0] = onRender(() -> dev.hearthside.fabric.client.menu.PauseMenuScreen.e2eDrawnStatus(minecraft));
+				return wholeStatus(drawn[0], expected);
+			});
+		} catch (AssertionError e) {
+			throw new AssertionError(e.getMessage() + " (drawn " + drawn[0] + ")");
+		}
+	}
+
+	/**
+	 * A guest's pause-menu layouts logged after its {@code skip} first ones, each as its drawn lines: only those not cut
+	 * short (the satellite logs them in E2E runs).
+	 */
+	private static List<List<String>> drawnStatuses(String satelliteLog, int skip) {
+		Matcher m = Pattern.compile("hearthside pause status lines=\\d+ truncated=(true|false) drawn=([^\\r\\n]*)")
+				.matcher(satelliteLog);
+		List<List<String>> layouts = new ArrayList<>();
+		for (int n = 0; m.find(); n++) {
+			if (n >= skip && m.group(1).equals("false")) {
+				layouts.add(List.of(m.group(2).split("\\|")));
+			}
+		}
+		return layouts;
+	}
+
 	/** The open screen's narration, which carries the pause menu's status line. Render thread. */
 	private String narration() {
 		Screen screen = minecraft.gui.screen();
@@ -4279,7 +4342,10 @@ public final class E2eDriver {
 	 * N3 (Spec E section 3.2, plan R5): the world freezes only when everyone in it is paused. (a) Player 1 paused while
 	 * Player2 plays: the world runs and player 1's menu says who is still playing. (b) Player2 pausing too freezes it
 	 * within a second, and both menus say so; (d) a newcomer still choosing a profile doesn't count. (c) Player2 resuming
-	 * starts it again. Player 1's status is read from their menu's narration, Player2's from its log.
+	 * starts it again. Player 1's status is read from their menu's narration, Player2's from its log. First, Player2
+	 * pauses alone (START, then B) while player 1 plays: their menu draws "The world keeps going — <player 1> is still
+	 * playing" whole, wrapped as it needs and never cut short (from its layout log line; the status-line screenshot), and
+	 * player 1's menu draws its own status whole at (a) and (b).
 	 */
 	private void pauseTogether() throws Exception {
 		IntegratedServer server = minecraft.getSingleplayerServer();
@@ -4300,6 +4366,22 @@ public final class E2eDriver {
 			if (!sound) {
 				log("   no sound device: N3's sound checks are skipped");
 			}
+			// Player2 paused while player 1 plays: their menu's status names player 1 in full, wrapped, never cut short.
+			String host = minecraft.getUser().getName();
+			int statusLines = count("hearthside pause status lines=");
+			int ownPaused = count("hearthside pause state paused");
+			press(102, PadButton.START);
+			waitFor("Player2's game says it's paused", Duration.ofSeconds(10),
+					() -> count("hearthside pause state paused") > ownPaused);
+			String guestLine = "The world keeps going — " + host + " is still playing";
+			waitFor("Player2's menu laid out for \"" + guestLine + "\"", Duration.ofSeconds(10),
+					() -> drawnStatuses(satelliteLog(), statusLines).stream().anyMatch(d -> wholeStatus(d, guestLine)));
+			windowShot("status-line");
+			int ownPlaying = count("hearthside pause state playing");
+			press(102, PadButton.B);
+			waitFor("Player2's game says it's playing", Duration.ofSeconds(10),
+					() -> count("hearthside pause state playing") > ownPlaying);
+
 			press(PICKING_PAD, PadButton.A);
 			press(PICKING_PAD, PadButton.A);
 			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
@@ -4318,6 +4400,7 @@ public final class E2eDriver {
 					"player 1's game logs that Player2 is still playing");
 			check(onRender(this::narration).contains("The world keeps going — Player2 is still playing"),
 					"player 1's menu says Player2 is still playing (got \"" + onRender(this::narration) + "\")");
+			waitForMenuStatusDrawnWhole("The world keeps going — Player2 is still playing");
 			if (sound) {
 				String state = soundState(probe);
 				check(state.equals("playing"), "player 1's game's sounds play on while the world runs (got " + state + ")");
@@ -4336,6 +4419,7 @@ public final class E2eDriver {
 			check(hostLogSince(mark).contains("hearthside world frozen"), "player 1's game logs the world frozen");
 			check(onRender(this::narration).contains("Everyone's paused — the world is frozen"),
 					"player 1's menu says the world is frozen (got \"" + onRender(this::narration) + "\")");
+			waitForMenuStatusDrawnWhole("Everyone's paused — the world is frozen");
 			if (sound) {
 				String state = soundState(probe);
 				check(state.equals("paused"), "player 1's game's sounds pause with the world (got " + state + ")");
@@ -4368,6 +4452,205 @@ public final class E2eDriver {
 			}
 			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
 			PADS.unplug(PICKING_PAD);
+		}
+	}
+
+	/** The controller that takes Player2 over in N5. */
+	private static final int TAKEOVER_PAD = 112;
+	private static final String TAKEOVER_GUID = "fake-takeover-pad";
+
+	/** The guest's view's top-left corner, inside the magenta patch its game paints there in E2E runs (framebuffer). */
+	private int[] guestCorner() throws Exception {
+		Rect r = onRender(() -> Compositor.active().overlayViews().stream().filter(v -> v.seat() == 1).findFirst()
+				.orElseThrow(() -> new AssertionError("missing: seat 1's view")).rect());
+		return new int[] {r.x() + 4, r.y() + 4};
+	}
+
+	private static boolean dimmedMagenta(int rgb) {
+		return rgb != 0xFF00FF && (rgb >> 16 & 0xFF) < 0xC0 && (rgb & 0xFF) < 0xC0 && (rgb >> 8 & 0xFF) < 0x40;
+	}
+
+	/** Jumps the party's join clock {@code seconds} ahead. Never back: the flow's deadlines only move forward. */
+	private void jumpJoinClock(long seconds) {
+		Party.e2eTimeShift = Party.e2eTimeShift.plusSeconds(seconds);
+	}
+
+	/** Takes Player2 over with a newly plugged controller, after a dropped one's minute has passed. */
+	private void takeOverWith(int pad, String guid, PadStyle style) throws Exception {
+		long mark = hostLogLength();
+		jumpJoinClock(61);
+		waitFor("the take-over offered", Duration.ofSeconds(5),
+				() -> hostLogSince(mark).contains("hearthside take-over offered player=2"));
+		int resumed = count("hearthside satellite resumed");
+		PADS.plug(pad, guid, style);
+		Thread.sleep(300);
+		if (pad == TAKEOVER_PAD) {
+			windowShot("take-over"); // the card's take-over line, with the new controller's A
+		}
+		press(pad, PadButton.A);
+		waitFor("the new controller took Player2 over", Duration.ofSeconds(5),
+				() -> hostLogSince(mark).contains("hearthside take-over player=2 controller=" + guid));
+		waitFor("Player2's game resumed", Duration.ofSeconds(10), () -> count("hearthside satellite resumed") > resumed);
+	}
+
+	/**
+	 * N5 (Spec E section 3.3, Review Focus 1): unplugging a guest's controller dims their view behind a card and opens
+	 * their pause menu; replugging undoes both, but leaves a menu they had opened themselves. After a minute (the join
+	 * clock jumped ahead) a new controller's single A takes the player over where they stand, and becomes their
+	 * profile's controller. Pad 102 takes Player2 back the same way, for the steps after.
+	 */
+	private void droppedController() throws Exception {
+		int[] corner = guestCorner();
+		check(probePixel(corner[0], corner[1]) == 0xFF00FF, "the guest's view is bright before the drop");
+
+		// The drop, and the same controller coming back.
+		int paused = count("hearthside satellite paused");
+		int menus = count("hearthside pause menu opened");
+		PADS.unplug(102);
+		waitFor("Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > paused);
+		waitFor("Player2's pause menu opened", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > menus);
+		int veiled = probePixel(corner[0], corner[1]);
+		check(dimmedMagenta(veiled), "the reconnect card dims the guest's view (corner " + Integer.toHexString(veiled) + ")");
+		windowShot("reconnect-card");
+		int world = count("hearthside controller: world mode");
+		PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+		waitFor("(a) replugging closes the menu the drop opened", Duration.ofSeconds(10),
+				() -> count("hearthside controller: world mode") > world);
+		waitFor("(a) and the card", Duration.ofSeconds(5), () -> probePixel(corner[0], corner[1]) == 0xFF00FF);
+
+		// (b) A menu Player2 opened themselves stays open through a drop and a reconnect.
+		int own = count("hearthside pause menu opened");
+		press(102, PadButton.START);
+		waitFor("Player2's own pause menu", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > own);
+		int resumed = count("hearthside satellite resumed");
+		PADS.unplug(102);
+		Thread.sleep(500);
+		PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+		waitFor("Player2's game resumed", Duration.ofSeconds(10), () -> count("hearthside satellite resumed") > resumed);
+		int stillOpen = count("hearthside controller: world mode");
+		Thread.sleep(1500);
+		check(count("hearthside controller: world mode") == stillOpen, "(b) their own menu is still open after the reconnect");
+		press(102, PadButton.B);
+		waitFor("B closes it", Duration.ofSeconds(10), () -> count("hearthside controller: world mode") > stillOpen);
+
+		// (c) A minute later, another controller takes over.
+		ServerPlayer guest = guest("Player2");
+		Vec3 where = guest.position();
+		int dropped = count("hearthside satellite paused");
+		long takeoverMark = hostLogLength();
+		PADS.unplug(102);
+		waitFor("Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > dropped);
+		try {
+			int aPresses = count("hearthside input a down");
+			takeOverWith(TAKEOVER_PAD, TAKEOVER_GUID, PadStyle.XBOX);
+			waitFor("(c) Player2's game got the new controller's style", Duration.ofSeconds(5),
+					() -> satelliteLog().contains("hearthside setpadstyle xbox"));
+			Thread.sleep(500);
+			check(count("hearthside input a down") == aPresses,
+					"(c) the A that took Player2 over never pressed anything in their game");
+			check(guest("Player2").position().distanceTo(where) < 0.5, "(c) Player2 is where they were");
+			GuestProfile profile = profiles().load().stream().filter(p -> p.name().equals("Player2")).findFirst().orElseThrow();
+			check(TAKEOVER_GUID.equals(profile.preferredControllerGuid()), "(c) and the new controller is now their profile's");
+			Vec3 start = guest("Player2").position();
+			PADS.set(TAKEOVER_PAD, new InputFrame(0, 0, 0, -1, 0, 0, 0, 0));
+			Thread.sleep(2000);
+			PADS.set(TAKEOVER_PAD, InputFrame.NEUTRAL);
+			check(guest("Player2").position().distanceTo(start) > 1, "(c) the new controller moves Player2");
+		} finally {
+			if (hostLogSince(takeoverMark).contains("hearthside take-over player=2 controller=" + TAKEOVER_GUID)) {
+				// Pad 102 takes Player2 back the same way.
+				int away = count("hearthside satellite paused");
+				PADS.unplug(TAKEOVER_PAD);
+				waitFor("Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > away);
+				takeOverWith(102, PAD_GUID, PadStyle.PLAYSTATION);
+			} else {
+				// No take-over: pad 102 simply reconnects.
+				PADS.unplug(TAKEOVER_PAD);
+				PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+			}
+			PADS.set(102, InputFrame.NEUTRAL);
+		}
+	}
+
+	/**
+	 * N5b (review Minor 2): a newcomer's controller dropping while they pick a profile in their own view dims their
+	 * picker under the same reconnect card, so a take-over of their seat is never unseen; replugging it brings it back.
+	 */
+	private void droppedWhilePicking() throws Exception {
+		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			press(PICKING_PAD, PadButton.A);
+			press(PICKING_PAD, PadButton.A);
+			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+			Thread.sleep(1500); // their view glides in and fades up
+			Rect r = onRender(() -> Compositor.active().overlayViews().stream().filter(v -> v.seat() == 2).findFirst()
+					.orElseThrow(() -> new AssertionError("missing: seat 2's view")).rect());
+			int x = r.x() + 8, y = r.y() + 8;
+			int bright = probePixel(x, y);
+			check(luminance(bright) > 15, "the picker's corner shows the plank wall (" + Integer.toHexString(bright) + ")");
+			PADS.unplug(PICKING_PAD);
+			waitFor("the picker dimmed under the reconnect card", Duration.ofSeconds(5),
+					() -> luminance(probePixel(x, y)) < 0.6 * luminance(bright));
+			windowShot("reconnect-over-picker");
+			PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+			waitFor("the picker bright again", Duration.ofSeconds(5),
+					() -> luminance(probePixel(x, y)) > 0.85 * luminance(bright));
+		} finally {
+			PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX); // back, if a failed check left it out
+			Thread.sleep(300);
+			if (onRender(() -> card(2) != null)) {
+				press(PICKING_PAD, PadButton.B);
+			}
+			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+			PADS.unplug(PICKING_PAD);
+			Thread.sleep(1000); // the views settle back before the next step
+		}
+	}
+
+	private static double luminance(int rgb) {
+		return 0.2126 * (rgb >> 16 & 0xFF) + 0.7152 * (rgb >> 8 & 0xFF) + 0.0722 * (rgb & 0xFF);
+	}
+
+	/**
+	 * N9 (Spec E section 3.7, M4): while a newcomer's view fades in under their card (player 1's view gliding out of its
+	 * way), player 1's border keeps its brightness, sampled every frame where it meets the newcomer's view.
+	 */
+	private void joinFadeKeepsBorders() throws Exception {
+		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		long mark = hostLogLength();
+		try {
+			Compositor.e2eBorderSampling = true;
+			try {
+				press(PICKING_PAD, PadButton.A);
+				press(PICKING_PAD, PadButton.A);
+				waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+				Thread.sleep(1500); // through the glide and the fade
+			} finally {
+				Compositor.e2eBorderSampling = false;
+			}
+			// Three views: player 1 top-left, the newcomer below them. Their shared edge is player 1's bottom border.
+			Matcher m = Pattern.compile("hearthside border probe seat=0 edge=bottom rgb=([0-9a-f]{6})").matcher(hostLogSince(mark));
+			List<Integer> samples = new ArrayList<>();
+			while (m.find()) {
+				samples.add(Integer.parseInt(m.group(1), 16));
+			}
+			int mine = onRender(() -> Party.current().colorOf(0)) & 0xFFFFFF;
+			int theirs = onRender(() -> Party.current().colorOf(2)) & 0xFFFFFF;
+			double floor = 0.6 * 0.85 * Math.min(luminance(mine), luminance(theirs));
+			double darkest = samples.stream().mapToDouble(E2eDriver::luminance).min().orElse(-1);
+			log("   " + samples.size() + " border samples, darkest " + String.format("%.0f", darkest) + ", floor "
+					+ String.format("%.0f", floor));
+			check(samples.size() >= 20, "player 1's border sampled through the fade (" + samples.size() + " frames)");
+			check(darkest >= floor, "player 1's border kept its brightness through the newcomer's fade");
+		} finally {
+			if (onRender(() -> card(2) != null)) {
+				press(PICKING_PAD, PadButton.B);
+			}
+			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+			PADS.unplug(PICKING_PAD);
+			Thread.sleep(1000); // the views settle back before the next step
 		}
 	}
 

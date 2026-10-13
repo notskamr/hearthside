@@ -31,13 +31,18 @@ final class PadHints {
 
 	/** Lays the row out centred on {@code centreX} with its top at {@code y}, adding each chip with {@code add}. */
 	void addTo(Consumer<HintChip> add, int centreX, int y) {
+		place(centreX, y);
+		chips.forEach(add);
+		update();
+	}
+
+	/** Moves the row: centred on {@code centreX}, its top at {@code y}. */
+	void place(int centreX, int y) {
 		int x = centreX - width() / 2;
 		for (HintChip chip : chips) {
 			chip.setPosition(x, y);
 			x += chip.getWidth() + GAP;
-			add.accept(chip);
 		}
-		update();
 	}
 
 	private int width() {

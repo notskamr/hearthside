@@ -3,6 +3,8 @@ package dev.hearthside.fabric.client.ui;
 import dev.hearthside.core.input.Control;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.layout.Rect;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -11,6 +13,7 @@ import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.PlayerModelType;
 import net.minecraft.world.entity.player.PlayerSkin;
 
@@ -93,6 +96,121 @@ public final class CardPainter {
 		} else if (!status.failed()) {
 			embers(g, centre, statusY + 13, a, nanos, reduceMotion);
 		}
+	}
+
+	/**
+	 * What a dropped controller's card says (Spec E section 3.3): who the player is, and whether another controller may
+	 * take them over now, its A drawn in {@code takeoverStyle}.
+	 */
+	public record Reconnect(Who who, boolean offerTakeover, PadStyle takeoverStyle) {}
+
+	/** Over a dropped controller's view: their picture (their pause menu) dims to 45%. */
+	private static final int VEIL = 0x8C000000;
+	private static final String RECONNECT = "Reconnect your controller";
+	/** The take-over line, word by word; the empty word is the A button's glyph. */
+	private static final List<String> TAKE_OVER = List.of("Or", "press", "", "on", "another", "controller", "to", "take",
+			"over");
+
+	/**
+	 * A dropped controller's card over the player's view: a dark veil over their game, and a card in their colour asking
+	 * for the controller back (their name, a controller in their colour, "Reconnect your controller"), and once a
+	 * minute has passed, how another controller takes them over.
+	 */
+	public static void reconnect(GuiGraphicsExtractor g, Font font, Rect view, Reconnect card) {
+		g.fill(view.x(), view.y(), view.x() + view.width(), view.y() + view.height(), VEIL);
+		int cw = Math.min(Math.clamp(Math.round(view.width() * 0.6f), 96, 160), view.width() - 12);
+		int inner = cw - 12;
+		List<FormattedCharSequence> ask = font.split(Component.literal(RECONNECT), inner);
+		List<List<String>> offer = card.offerTakeover() ? wrap(font, TAKE_OVER, inner) : List.of();
+		// Kept inside a short view (a small window, four players): first without the icon, then with the take-over line's
+		// first row only, cut short after it (the A and what it presses on stay).
+		int room = view.height() - 8;
+		boolean icon = height(ask.size(), offer.size(), true) <= room;
+		if (!icon && offer.size() > 1 && height(ask.size(), offer.size(), false) > room) {
+			offer = List.of(firstRowCut(font, offer.getFirst(), inner));
+		}
+		int ch = height(ask.size(), offer.size(), icon);
+		Rect c = new Rect(view.x() + (view.width() - cw) / 2, view.y() + Math.max(0, (view.height() - ch) / 2), cw, ch);
+		int colour = card.who().colour() & 0xFFFFFF;
+		cardBack(g, c, colour, 1f);
+		int centre = c.x() + cw / 2;
+		int y = c.y() + 8;
+		String name = font.plainSubstrByWidth(card.who().name(), inner - 10);
+		HearthDraw.colourPill(g, font, Component.literal(name), centre, y, colour);
+		y += 12 + 6;
+		if (icon) {
+			// Their controller, lit in their colour as the real one is.
+			g.blitSprite(RenderPipelines.GUI_TEXTURED, HearthSprites.CONTROLLER, centre - ICON_W / 2, y, ICON_W, ICON_H,
+					0xFF000000 | colour);
+			y += ICON_H + 6;
+		}
+		for (FormattedCharSequence line : ask) {
+			g.text(font, line, centre - font.width(line) / 2, y, HearthDraw.INK, false);
+			y += 10;
+		}
+		y += 4;
+		for (List<String> line : offer) {
+			int x = centre - lineWidth(font, line) / 2;
+			for (String word : line) {
+				if (word.isEmpty()) {
+					x += HearthDraw.glyph(g, Control.A, card.takeoverStyle(), x, y);
+				} else {
+					g.text(font, Component.literal(word), x, y + 2, MUTED, false);
+					x += font.width(word);
+				}
+				x += font.width(" ");
+			}
+			y += 12;
+		}
+	}
+
+	/** The controller icon on a reconnect card: the 13×9 sprite at twice its size. */
+	private static final int ICON_W = 26, ICON_H = 18;
+
+	/** A reconnect card's height: its pill, the icon if shown, the ask's lines and the take-over's rows. */
+	private static int height(int askLines, int offerRows, boolean icon) {
+		return 8 + 12 + 6 + (icon ? ICON_H + 6 : 0) + askLines * 10 + (offerRows == 0 ? 0 : 4 + offerRows * 12) + 6;
+	}
+
+	/** A take-over row that has to stand alone, ending in "…" (words dropped from its end until it fits). */
+	private static List<String> firstRowCut(Font font, List<String> row, int width) {
+		List<String> cut = new ArrayList<>(row);
+		while (true) {
+			List<String> shown = new ArrayList<>(cut);
+			if (shown.getLast().isEmpty()) {
+				shown.add("…");
+			} else {
+				shown.set(shown.size() - 1, shown.getLast() + "…");
+			}
+			if (cut.size() == 1 || lineWidth(font, shown) <= width) {
+				return shown;
+			}
+			cut.removeLast();
+		}
+	}
+
+	/** Words (the empty one a button glyph) in lines no wider than {@code width}. */
+	private static List<List<String>> wrap(Font font, List<String> words, int width) {
+		List<List<String>> lines = new ArrayList<>();
+		List<String> line = new ArrayList<>();
+		for (String word : words) {
+			line.add(word);
+			if (line.size() > 1 && lineWidth(font, line) > width) {
+				line.removeLast();
+				lines.add(line);
+				line = new ArrayList<>(List.of(word));
+			}
+		}
+		lines.add(line);
+		return lines;
+	}
+
+	private static int lineWidth(Font font, List<String> line) {
+		int width = font.width(" ") * (line.size() - 1);
+		for (String word : line) {
+			width += word.isEmpty() ? HearthDraw.glyphWidth(Control.A) : font.width(word);
+		}
+		return width;
 	}
 
 	/** Where a player's card sits in their view: a portrait card, centred, scaled to the view. */
