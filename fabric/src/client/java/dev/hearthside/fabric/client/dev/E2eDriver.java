@@ -9,14 +9,18 @@ import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.config.Preset;
 import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.core.config.SplitScreenConfig;
+import dev.hearthside.core.config.TitleStyleSetting;
 import dev.hearthside.core.config.VulkanOffer;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
 import dev.hearthside.core.input.RemapModel;
+import dev.hearthside.core.layout.BorderStyle;
 import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
+import dev.hearthside.core.layout.ViewFrame;
+import dev.hearthside.core.layout.ViewOrder;
 import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.HostProfile;
 import dev.hearthside.core.profile.PlayerColors;
@@ -30,6 +34,8 @@ import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.OverlayLayer;
+import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.ui.HearthTextField;
@@ -154,6 +160,7 @@ public final class E2eDriver {
 			{"V2", "C2"}, {"U1", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
 			{"F1", "1"}, {"F2", "1"}, {"F3", "1"}, {"E1", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
+			{"N7", "C2"},
 			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
 			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
@@ -309,6 +316,8 @@ public final class E2eDriver {
 			step("Q3 a guest's own Sodium settings survive its next launch", this::guestSodiumSettingsSurvive);
 			step("Q4 a guest can't switch to fullscreen", this::guestRefusesFullscreen);
 			step("Q4b an untested Sodium version leaves Sodium's options alone instead of crashing guests", this::untestedSodiumLeftAlone);
+			step("N7 Split-screen options apply live: layout glides, borders and name tags at once, swap views, saved, title style next time",
+					() -> sampleGaps(this::splitScreenOptions));
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
@@ -1669,6 +1678,197 @@ public final class E2eDriver {
 			return null;
 		});
 		Thread.sleep(100);
+	}
+
+	/** N7's overlay recorder: the scale and the views (GUI units) the overlay last drew, and seat 1's rects while recording. */
+	private volatile int overlayScale;
+	private volatile List<ViewFrame> overlayViews = List.of();
+	private volatile java.util.Set<Rect> recording;
+
+	private ViewFrame drawnView(int seat) {
+		return overlayViews.stream().filter(v -> v.seat() == seat).findFirst().orElseThrow(
+				() -> new AssertionError("missing: seat " + seat + "'s view in the overlay"));
+	}
+
+	/** The composited colour at a GUI pixel (the middle of it), after the overlay. */
+	private int probeAt(int guiX, int guiY) throws Exception {
+		int s = overlayScale;
+		return probePixel(guiX * s + s / 2, guiY * s + s / 2);
+	}
+
+	/** The composited colour at a framebuffer pixel, after the overlay. */
+	private int probePixel(int x, int y) throws Exception {
+		long mark = hostLogLength();
+		Compositor.e2eProbePoint = new int[] {x, y};
+		try {
+			Pattern line = Pattern.compile("hearthside overlay probe rgb=([0-9a-f]{6})");
+			String[] rgb = {null};
+			// The second line after the mark: the first may come from a read started before the point moved.
+			waitFor("an overlay probe at " + x + "," + y, Duration.ofSeconds(5), () -> {
+				Matcher m = line.matcher(hostLogSince(mark));
+				int n = 0;
+				while (m.find()) {
+					if (++n == 2) {
+						rgb[0] = m.group(1);
+					}
+				}
+				return rgb[0] != null;
+			});
+			return Integer.parseInt(rgb[0], 16);
+		} finally {
+			Compositor.e2eProbePoint = null;
+		}
+	}
+
+	/** Applies a change to player 1's Split-screen settings, as the Split-screen screen does. */
+	private void applySplitScreen(java.util.function.UnaryOperator<SplitScreenConfig> change) throws Exception {
+		onRender(() -> {
+			Party.current().applySettings(change.apply(Party.current().config()));
+			return null;
+		});
+	}
+
+	/** Seat 1's distinct rects drawn while {@code body} runs and for {@code millis} after. */
+	private java.util.Set<Rect> recordSeatOne(ThrowingRunnable body, long millis) throws Exception {
+		recording = java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
+		try {
+			body.run();
+			Thread.sleep(millis);
+			synchronized (recording) {
+				return new java.util.LinkedHashSet<>(recording);
+			}
+		} finally {
+			recording = null;
+		}
+	}
+
+	/**
+	 * N7 (Spec E section 3.5): player 1's pause menu opens Split-screen, whose changes apply live. Moving player 1 later
+	 * puts them on the right. The stacked layout glides there; borders off and name tags off disappear at once; with
+	 * layout animation off the views snap. The file keeps the new values; the title style applies the next time the
+	 * title screen opens. Everything is put back afterwards.
+	 */
+	private void splitScreenOptions() throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("config").resolve("hearthside.json");
+		byte[] before = Files.exists(file) ? Files.readAllBytes(file) : null;
+		SplitScreenConfig start = onRender(() -> Party.current().config());
+		List<Integer> order = onRender(() -> Party.current().viewOrder());
+		OverlayLayer recorder = (g, context) -> {
+			overlayScale = context.guiScale();
+			overlayViews = context.views();
+			java.util.Set<Rect> into = recording;
+			if (into != null) {
+				context.views().stream().filter(v -> v.seat() == 1).forEach(v -> into.add(v.rect()));
+			}
+		};
+		OverlayPass.register(recorder);
+		long mark = hostLogLength();
+		try {
+			waitFor("the overlay drawn", Duration.ofSeconds(5), () -> overlayScale > 0 && overlayViews.size() == 2);
+			check(start.layout().two() == LayoutSettings.TwoPlayer.SIDE_BY_SIDE && start.layout().borders() == BorderStyle.THIN
+					&& start.layout().nameTags() && start.layout().layoutAnimation(), "starts from the defaults");
+
+			// The way in: player 1's pause menu.
+			onRender(() -> {
+				minecraft.pauseGame(false);
+				pressLabelled("Split-screen…");
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.screen() != null
+					&& minecraft.gui.screen().getClass().getSimpleName().equals("SplitScreenScreen")),
+					"player 1's pause menu opens the Split-screen screen");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+
+			// Swap views: player 1 later goes right, and back.
+			onRender(() -> {
+				Party.current().setViewOrder(ViewOrder.later(Party.current().viewOrder(), 0));
+				return null;
+			});
+			waitFor("player 1's view on the right", Duration.ofSeconds(5),
+					() -> drawnView(0).rect().x() > drawnView(1).rect().x());
+			onRender(() -> {
+				Party.current().setViewOrder(order);
+				return null;
+			});
+			waitFor("player 1's view back on the left", Duration.ofSeconds(5),
+					() -> drawnView(0).rect().x() < drawnView(1).rect().x());
+			Thread.sleep(800);
+
+			// The stacked layout, gliding.
+			Rect sideBySide = drawnView(1).rect();
+			java.util.Set<Rect> glide = recordSeatOne(() -> applySplitScreen(
+					c -> c.withLayout(c.layout().withTwo(LayoutSettings.TwoPlayer.STACKED))), 1200);
+			Rect stacked = drawnView(1).rect();
+			log("   seat 1 drew " + glide.size() + " rects from " + sideBySide + " to " + stacked);
+			check(stacked.y() > 0 && stacked.width() > sideBySide.width(), "the guest's view moved below player 1's");
+			check(glide.size() >= 3, "the views glided there (" + glide.size() + " distinct rects)");
+			check(hostLogSince(mark).contains("hearthside split-screen applied twoplayerlayout=stacked"), "and logged it");
+
+			// Within the name tags' 4 s after the layout change: a tag and a border on the guest's view.
+			int colour = onRender(() -> Party.current().colorOf(1)) & 0xFFFFFF;
+			int tagX = stacked.x() + 14, tagY = stacked.y() + 13; // the colour square in the name tag
+			int borderX = stacked.x() + 1, borderY = stacked.y(); // the top border, over the guest's magenta corner
+			check(probeAt(tagX, tagY) == colour, "the guest's name tag shows after the layout change");
+			check(probeAt(borderX, borderY) != 0xFF00FF, "the guest's view has its border");
+			applySplitScreen(c -> c.withLayout(c.layout().withBorders(BorderStyle.OFF).withNameTags(false)));
+			Thread.sleep(200);
+			check(probeAt(tagX, tagY) != colour, "name tags off: the tag went at once");
+			check(probeAt(borderX, borderY) == 0xFF00FF, "borders off: the border went at once");
+			String applied = hostLogSince(mark);
+			check(applied.contains("hearthside split-screen applied borders=off")
+					&& applied.contains("hearthside split-screen applied nametags=false"), "and logged both");
+
+			// Saved.
+			SplitScreenConfig saved = SplitScreenConfig.read(new java.io.StringReader(Files.readString(file)));
+			check(saved.layout().two() == LayoutSettings.TwoPlayer.STACKED && saved.layout().borders() == BorderStyle.OFF
+					&& !saved.layout().nameTags(), "config/hearthside.json has the new values");
+
+			// Layout animation off: back to side by side in one step.
+			java.util.Set<Rect> snap = recordSeatOne(() -> applySplitScreen(c -> c.withLayout(
+					c.layout().withLayoutAnimation(false).withTwo(LayoutSettings.TwoPlayer.SIDE_BY_SIDE))), 1200);
+			log("   seat 1 drew " + snap + " with layout animation off");
+			check(snap.size() <= 2, "with layout animation off the views snap (" + snap.size() + " distinct rects)");
+			check(drawnView(1).rect().equals(sideBySide), "back side by side");
+
+			// The title style applies the next time the title screen opens.
+			applySplitScreen(c -> c.withTitleStyle(TitleStyleSetting.VANILLA));
+			TitleStyle.drewBackground = false;
+			TitleStyle.drewButtons = false;
+			onRender(() -> {
+				minecraft.gui.setScreen(new TitleScreen());
+				return null;
+			});
+			Thread.sleep(600);
+			check(!TitleStyle.drewBackground && !TitleStyle.drewButtons, "the vanilla title style: Minecraft's own title screen");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			applySplitScreen(c -> c.withTitleStyle(TitleStyleSetting.HEARTHSIDE));
+			onRender(() -> {
+				minecraft.gui.setScreen(new TitleScreen());
+				return null;
+			});
+			Thread.sleep(600);
+			check(TitleStyle.drewBackground && TitleStyle.drewButtons, "and Hearthside's again when switched back");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				Party.current().setViewOrder(order);
+				Party.current().applySettings(start);
+				return null;
+			});
+			OverlayPass.unregister(recorder);
+			Thread.sleep(1000); // the views settle back before the next step
+			if (before != null) {
+				Files.write(file, before);
+			} else {
+				Files.deleteIfExists(file);
+			}
+		}
 	}
 
 	private long sevenMark;
