@@ -177,6 +177,8 @@ public final class Party {
 		volatile ControlConnection connection;
 		/** The frame-slot generation this guest's game announced last, as it arrived (ahead of the import it queues). */
 		volatile int announcedGeneration;
+		/** A pausing screen is open in this guest's game, as it last said (pausing together, Spec E section 3.2). */
+		volatile boolean paused;
 
 		Slot(int index, GuestProfile profile) {
 			this.index = index;
@@ -505,6 +507,7 @@ public final class Party {
 			Party party = current;
 			if (party != null) {
 				party.followGuiScaleSetting();
+				party.tickPause();
 			}
 			// SDL sends typed characters only while text input is on; screen changes turn it off, so it is kept on here.
 			KeyboardFocus.keepTextInput(client, () -> party != null && party.pcKeyboardTarget().isPresent());
@@ -748,6 +751,10 @@ public final class Party {
 			}
 			OverlayPass.unregister(joinToast);
 			leaveSplitScreen();
+			// The next party's menus never show this one's line.
+			lastPause = null;
+			toldPause.clear();
+			dev.hearthside.fabric.client.menu.PauseMenuScreen.setStatus("");
 		});
 		HearthsideMod.LOGGER.info("Hearthside session closed");
 	}
@@ -1770,6 +1777,90 @@ public final class Party {
 		}
 	}
 
+	// ---- Pausing together (Spec E section 3.2) ----
+
+	/** The pause decision last logged and sent to guests (null outside split-screen in a world). Render thread. */
+	private dev.hearthside.core.session.PausePolicy.Decision lastPause;
+	/** The guests' control connections told {@link #lastPause}. Render thread. */
+	private final java.util.Set<ControlConnection> toldPause = new java.util.HashSet<>();
+
+	/**
+	 * Whether player 1's pause may freeze the world: everyone in it is paused (a dropped controller counts as paused),
+	 * or player 1 is the only one in it yet. Reads Minecraft's own pause state, never Hearthside's. Render thread.
+	 */
+	public boolean freezeAllowed() {
+		return pauseDecision().freeze();
+	}
+
+	/** Player 1's pause menu's status line now ("" outside split-screen in a world). Render thread. */
+	public static String pauseLine() {
+		Party party = current;
+		return party == null || !party.pausingTogether() ? ""
+				: dev.hearthside.core.session.PauseLine.of(party.pauseDecision());
+	}
+
+	private boolean pausingTogether() {
+		return !slots.isEmpty() && world != null && minecraft.level != null;
+	}
+
+	/** Every seat: player 1 from their own game, each guest from what their game last said and their controller. */
+	private dev.hearthside.core.session.PausePolicy.Decision pauseDecision() {
+		List<dev.hearthside.core.session.PauseInputs.Seat> seats = new ArrayList<>();
+		seats.add(new dev.hearthside.core.session.PauseInputs.Seat(0, minecraft.getUser().getName(), true,
+				minecraft.gui.isPausing(), false));
+		Map<String, dev.hearthside.core.session.SeatState> states = flow.seats();
+		for (Slot slot : slots.values()) {
+			String controller = controllerOfSlot.get(slot.index);
+			dev.hearthside.core.session.SeatState state = controller == null ? null : states.get(controller);
+			boolean disconnected = state instanceof dev.hearthside.core.session.SeatState.Disconnected
+					|| state instanceof dev.hearthside.core.session.SeatState.TakeoverOffered;
+			// Composited, their game says when it's in the world (their view goes live); tiled, the join flow knows.
+			boolean inWorld = composite ? viewPhase(slot.index) == dev.hearthside.core.session.ViewPhase.LIVE : playing(state);
+			seats.add(new dev.hearthside.core.session.PauseInputs.Seat(slot.index, slot.displayName(), inWorld,
+					slot.paused, disconnected));
+		}
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		return dev.hearthside.core.session.PauseInputs.decide(seats, server != null && server.isPublished());
+	}
+
+	private static boolean playing(dev.hearthside.core.session.SeatState state) {
+		return switch (state) {
+			case dev.hearthside.core.session.SeatState.Playing p -> true;
+			case dev.hearthside.core.session.SeatState.Disconnected d -> playing(d.before());
+			case dev.hearthside.core.session.SeatState.TakeoverOffered t -> playing(t.before());
+			case null, default -> false;
+		};
+	}
+
+	/**
+	 * On a change, player 1's log and menu say it and every guest is told (their menus say it too); a guest's game that
+	 * connects later is told the current one. Render thread.
+	 */
+	private void tickPause() {
+		dev.hearthside.core.session.PausePolicy.Decision decision = pausingTogether() ? pauseDecision() : null;
+		if (!java.util.Objects.equals(decision, lastPause)) {
+			lastPause = decision;
+			toldPause.clear();
+			if (decision == null) {
+				dev.hearthside.fabric.client.menu.PauseMenuScreen.setStatus("");
+				return;
+			}
+			HearthsideMod.LOGGER.info("Hearthside world {} still playing={}", decision.freeze() ? "frozen" : "running",
+					String.join(",", decision.stillPlaying()));
+			dev.hearthside.fabric.client.menu.PauseMenuScreen.setStatus(dev.hearthside.core.session.PauseLine.of(decision));
+		}
+		if (decision == null) {
+			return;
+		}
+		ControlMessage.PauseStatus status = new ControlMessage.PauseStatus(decision.freeze(), decision.stillPlaying());
+		for (Slot slot : slots.values()) {
+			ControlConnection connection = slot.connection;
+			if (connection != null && toldPause.add(connection)) {
+				send(connection, status);
+			}
+		}
+	}
+
 	/** B on a card stuck joining: that player gives up their seat. Render thread. */
 	void cancelJoin(int seat) {
 		Slot slot = slots.get(seat);
@@ -1801,6 +1892,7 @@ public final class Party {
 		return new HelloVerdict(new ControlMessage.HelloAck(ControlCodec.PROTOCOL_VERSION, true, "", ""),
 				connection -> {
 					slot.connection = connection;
+					slot.paused = false; // a new game says again
 					connection.onMessage(message -> {
 						if (message instanceof ControlMessage.InWorld) {
 							minecraft.execute(() -> {
@@ -1817,6 +1909,8 @@ public final class Party {
 									removeSlot(slot);
 								}
 							});
+						} else if (message instanceof ControlMessage.PauseState state) {
+							slot.paused = state.paused();
 						} else if (message instanceof ControlMessage.FrameSlotsReady ready) {
 							slot.announcedGeneration = ready.generation();
 							minecraft.execute(() -> {

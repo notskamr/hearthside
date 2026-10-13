@@ -45,7 +45,8 @@
 		"ToastManagerAccessor",
 		"UnpublishMixin",
 		"WindowAccessor",
-		"WindowSizeMixin"
+		"WindowSizeMixin",
+		"WorldFreezeMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
