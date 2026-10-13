@@ -16,14 +16,16 @@ import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.fabric.client.compositor.backend.ImportFailed;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.compositor.backend.SlotMemory;
-import java.nio.file.Path;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayDeque;
 import java.util.OptionalInt;
 
 /**
  * One guest's frames for one generation, on the host (Spec C sections 3.3 and 4.2). Each new frame is copied at once
  * into the host's own texture, which is all the compose pass ever reads: a GPU-shared slot is copied on the GPU and
- * given back once that copy's fence signals; a copy-transport slot is uploaded from the pixel file and given back at
+ * given back once that copy's fence signals; a copy-transport slot is uploaded from the pixel memory and given back at
  * once. The guest never waits for the host, and the host never waits for the GPU. Render thread only.
  */
 public final class GuestImport implements AutoCloseable {
@@ -37,17 +39,20 @@ public final class GuestImport implements AutoCloseable {
 	private final SharedImages images;
 	/** GPU sharing: every slot's shared image as a texture of this game's own backend; null when copying. */
 	private final GpuTexture[] shared;
-	/** Copying: the guest's pixel file; null when sharing. */
-	private final PixelFile pixels;
+	/** Copying: the guest's pixel memory; null when sharing. */
+	private final PixelMemory pixels;
 	private final GpuTexture hostTexture;
 	private final GpuTextureView hostView;
 	private final ArrayDeque<Release> releases = new ArrayDeque<>();
 	private long lastFrame;
 	private boolean pulled;
 	private final boolean rowsTopDown;
+	/** E2E: the pause halfway through reading a copied frame, and the buffer it is read into (see {@link #slowRead}). */
+	private final int slowCopyMs = FrameHooks.slowCopyMs();
+	private ByteBuffer slowCopy;
 
 	private GuestImport(ControlMessage.FrameSlotsReady ready, SegmentSlotTable table, SharedImages images,
-			GpuTexture[] shared, PixelFile pixels, GpuTexture hostTexture) {
+			GpuTexture[] shared, PixelMemory pixels, GpuTexture hostTexture) {
 		this.generation = ready.generation();
 		this.width = ready.width();
 		this.height = ready.height();
@@ -63,14 +68,14 @@ public final class GuestImport implements AutoCloseable {
 	}
 
 	/**
-	 * Imports a generation's slots: GPU-shared ones by name through {@code images}, or the copy transport's pixel file.
+	 * Imports a generation's slots: GPU-shared ones by name through {@code images}, or the copy transport's pixel memory.
 	 * Takes over {@code table} on success; on failure the caller still owns it.
 	 */
 	public static GuestImport open(ControlMessage.FrameSlotsReady ready, SegmentSlotTable table, SharedImages images)
 			throws ImportFailed {
 		GpuDevice device = RenderSystem.getDevice();
 		GpuTexture[] shared = null;
-		PixelFile pixels = null;
+		PixelMemory pixels = null;
 		GpuTexture hostTexture = null;
 		try {
 			if (ready.transport() == Transport.GPU_SHARED) {
@@ -82,16 +87,24 @@ public final class GuestImport implements AutoCloseable {
 				shared = new GpuTexture[table.slots()];
 				for (int slot = 0; slot < shared.length; slot++) {
 					String name = FrameNames.gpuMemory(ready.controlFile(), ready.generation(), slot);
+					// Never cleared here: it is the guest's own memory (which the guest cleared), and may already hold a frame.
 					shared[slot] = images.importSlot(description, new SlotMemory(table.memorySize(slot), table.memoryType(slot),
 							new SlotMemory.Source.ByName(name)), "hearthside guest slot " + name);
 				}
 			} else {
-				pixels = PixelFile.open(PixelFile.forControlFile(Path.of(ready.controlFile())), ready.width(), ready.height(),
-						table.slots());
+				try {
+					// Only ever opened: memory the guest has let go of fails here rather than showing black.
+					pixels = PixelMemory.open(ready.controlFile(), ready.width(), ready.height(), table.slots());
+				} catch (IOException e) {
+					throw new ImportFailed("Opening " + ready.controlFile() + "'s pixel memory: " + e.getMessage(), e);
+				}
 			}
+			// A render attachment too, only so it can be cleared when created (OpenGL clears through a framebuffer).
 			hostTexture = device.createTexture("hearthside guest " + ready.generation(),
-					GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING,
+					GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
+							| GpuTexture.USAGE_RENDER_ATTACHMENT,
 					GpuFormat.RGBA8_UNORM, ready.width(), ready.height(), 1, 1);
+			Canvas.startBlack(hostTexture);
 			return new GuestImport(ready, table, images, shared, pixels, hostTexture);
 		} catch (ImportFailed | RuntimeException e) {
 			closeAll(shared);
@@ -121,7 +134,8 @@ public final class GuestImport implements AutoCloseable {
 		lastFrame = table.frame(slot);
 		if (pixels != null) {
 			// Uploaded (into Minecraft's staging memory on Vulkan) before this returns: the slot is free again at once.
-			encoder.writeToTexture(hostTexture, pixels.region(slot), 0, 0, 0, 0, width, height);
+			encoder.writeToTexture(hostTexture, slowCopyMs > 0 ? slowRead(slot) : pixels.region(slot), 0, 0, 0, 0, width,
+					height);
 			slots.release(slot);
 		} else {
 			GpuTexture source = shared[slot];
@@ -132,6 +146,21 @@ public final class GuestImport implements AutoCloseable {
 		}
 		pulled = true;
 		return true;
+	}
+
+	/**
+	 * E2E ({@link FrameHooks#SLOW_COPY_MS}): reads a slot as a slow machine might, into a buffer of our own in two halves
+	 * with a pause between, so a guest writing the slot meanwhile would tear what is uploaded.
+	 */
+	private ByteBuffer slowRead(int slot) {
+		ByteBuffer region = pixels.region(slot);
+		if (slowCopy == null) {
+			slowCopy = ByteBuffer.allocateDirect(region.capacity()).order(ByteOrder.nativeOrder());
+		}
+		int half = height / 2 * width * 4;
+		slowCopy.clear().put(region.slice(0, half));
+		FrameHooks.pause(slowCopyMs);
+		return slowCopy.put(region.slice(half, region.capacity() - half)).flip();
 	}
 
 	/** Whether a frame has reached the host texture yet (a new generation is drawn only from then on). */

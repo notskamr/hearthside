@@ -16,6 +16,7 @@ import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.InputApplier;
 import dev.hearthside.fabric.client.input.OsCursor;
 import dev.hearthside.fabric.client.input.RealMouse;
+import dev.hearthside.fabric.client.input.TutorialToasts;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.menu.SeatScreen;
@@ -95,6 +96,7 @@ final class HostInput implements Runnable {
 		}
 		InputRouter.Update update = router.update(pads);
 		takeTitlePad(pads);
+		takeAnsweringPad(pads);
 		autoClaimHost(pads);
 		int free = 0;
 		PadStyle freeKind = null;
@@ -389,8 +391,10 @@ final class HostInput implements Runnable {
 	private void handle(RouterEvent event) {
 		switch (event) {
 			case RouterEvent.UnassignedPress press -> {
-				// A press from a controller assigned this frame (player 1's from the title) is not a join.
-				if (router.playerFor(press.instanceId()).isEmpty()) {
+				// A press from a controller assigned this frame (player 1's from the title) is not a join, nor is the
+				// one that answered the card before the lobby.
+				if (router.playerFor(press.instanceId()).isEmpty()
+						&& !Integer.valueOf(press.instanceId()).equals(answering)) {
 					session.onUnassignedPress(press.instanceId(), press.button(), guids.get(press.instanceId()));
 				}
 			}
@@ -423,6 +427,9 @@ final class HostInput implements Runnable {
 					ButtonGuideRenderer.enable(hostApplier::scheme);
 				}
 				chat(Component.literal("Player " + (restored.player() + 1) + "'s controller reconnected."));
+				if (restored.player() == 0) {
+					hostGainedController();
+				}
 			}
 		}
 	}
@@ -446,7 +453,24 @@ final class HostInput implements Runnable {
 		}
 	}
 
-	/** In the lobby, player 1's remembered controller is theirs again as soon as it is connected. */
+	/** The controller that answered a card before the lobby, until it lets go of everything: its press isn't a join. */
+	private Integer answering;
+
+	private void takeAnsweringPad(List<PadSnapshot> pads) {
+		Integer id = session.answeringPad;
+		if (id != null) {
+			session.answeringPad = null;
+			answering = id;
+		}
+		if (answering != null && pads.stream().noneMatch(p -> p.instanceId() == answering && p.frame().buttons() != 0)) {
+			answering = null;
+		}
+	}
+
+	/**
+	 * In the lobby, player 1's remembered controller is theirs again as soon as it is connected. A button it still holds
+	 * (the A that answered the Vulkan offer) doesn't also press anything in the lobby.
+	 */
 	private void autoClaimHost(List<PadSnapshot> pads) {
 		String guid = session.hostControllerGuid();
 		// Only as the lobby opens: later, an idle controller of that model is far more likely a guest's.
@@ -457,6 +481,7 @@ final class HostInput implements Runnable {
 			if (guid.equals(pad.guid()) && router.playerFor(pad.instanceId()).isEmpty()
 					&& !guestPads.contains(pad.instanceId())) {
 				claimForHost(pad.instanceId());
+				heldFromCard.put(0, pad.frame().buttons());
 				return;
 			}
 		}
@@ -499,6 +524,11 @@ final class HostInput implements Runnable {
 		return router.hasPad(player);
 	}
 
+	/** Player 1's OS mouse, not their controller's pointer, drives the open screen. Render thread. */
+	boolean hostMouseDriving() {
+		return hostApplier.mouseDriving();
+	}
+
 	/** {@code /hearthside pad}: the host takes this controller, replacing any it had. */
 	private void claimForHost(int instanceId) {
 		if (router.hasPad(0)) {
@@ -516,6 +546,19 @@ final class HostInput implements Runnable {
 		VirtualCursor.setDrawn(true);
 		chat(Component.literal("Controller assigned to you."));
 		session.onHostClaimed(guids.get(instanceId));
+		hostGainedController();
+	}
+
+	/**
+	 * Player 1 gains a controller, claimed or reconnected. Keyboard tutorial toasts already up would stay stuck: their
+	 * steps may count only the mouse. Runs last, and a failure here leaves the controller theirs.
+	 */
+	private void hostGainedController() {
+		try {
+			TutorialToasts.clear(minecraft);
+		} catch (RuntimeException e) {
+			HearthsideMod.LOGGER.error("Hearthside could not clear the keyboard tutorial toasts", e);
+		}
 	}
 
 	private void restoreHostOptions() {

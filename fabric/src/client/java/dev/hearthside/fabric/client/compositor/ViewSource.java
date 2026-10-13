@@ -14,6 +14,12 @@ public interface ViewSource {
 	/** Where a seat's view will be once motion ends: the size its game should render at. */
 	Optional<Rect> target(int seat);
 
+	/**
+	 * The frame size last sent to a seat's game (only its size counts): its target's size, or smaller under a reduced
+	 * render resolution. Empty before any was sent.
+	 */
+	Optional<Rect> frame(int seat);
+
 	/** Every seat with a view, including one still fading out. */
 	Set<Integer> seats();
 }

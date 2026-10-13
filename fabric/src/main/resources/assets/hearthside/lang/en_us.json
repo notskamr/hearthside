@@ -15,5 +15,8 @@
 	"hearthside.guide.close": "Close",
 	"hearthside.guide.select": "Select",
 	"hearthside.guide.back": "Back",
+	"hearthside.guide.bundle_choose": "Choose",
+	"hearthside.guide.bundle_take_out": "Take out",
+	"hearthside.guide.bundle_put_in": "Put in",
 	"hearthside.options.fullscreen.guest": "Every player plays in player 1's window, so only player 1 can make it fullscreen."
 }

@@ -4,6 +4,9 @@ import dev.hearthside.core.auth.GuestTokenAuthority;
 import dev.hearthside.core.channel.ControlConnection;
 import dev.hearthside.core.channel.ControlServer;
 import dev.hearthside.core.channel.HelloVerdict;
+import dev.hearthside.core.config.Preset;
+import dev.hearthside.core.config.PresetChooser;
+import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.core.config.SplitScreenConfig;
 import dev.hearthside.core.input.ControlScheme;
 import dev.hearthside.core.input.InputFrame;
@@ -45,12 +48,16 @@ import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
+import dev.hearthside.fabric.client.satellite.SessionOptions;
 import dev.hearthside.fabric.client.satellite.SodiumVersion;
+import dev.hearthside.core.compositor.GuiScaleRule;
 import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.TransportDecision;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.FrameHooks;
+import dev.hearthside.fabric.client.compositor.GuiScaleOverride;
 import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.compositor.Presentation;
 import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
@@ -58,6 +65,7 @@ import dev.hearthside.fabric.client.compositor.backend.SharedImages;
 import dev.hearthside.fabric.client.window.WindowPlacer;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -80,6 +88,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import com.mojang.blaze3d.platform.Window;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.device.DeviceType;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.toasts.SystemToast;
@@ -126,6 +135,8 @@ public final class Party {
 	private boolean settling;
 	/** When the last leave began. */
 	private long leaveAt;
+	/** Player 1's GUI-scale setting the party's GUI scale was last worked out from (-1: not yet, or not compositing). */
+	private int guiScaleSetting = -1;
 	private final ViewOverlay viewOverlay = new ViewOverlay(this);
 	/** The party panel's live map: sampled on the server thread, drawn from a texture. */
 	private final MapSampler mapSampler;
@@ -146,6 +157,15 @@ public final class Party {
 	private volatile GraphicsBackend guestBackend = GraphicsBackend.OPENGL;
 	/** Each guest's heap and render-distance cap, from {@code config/hearthside.json} as it was when this session opened. */
 	private final SplitScreenConfig config;
+	/** The party's preset: the configured one, or what Auto chose for this machine when the party was created (plan R5). */
+	private final Preset preset;
+	/** Whether this party lowered the world's simulation distance below player 1's own. Server thread. */
+	private boolean simulationLowered;
+	/**
+	 * A world opened: the ticks to wait before its simulation distance is set. The integrated server sets player 1's own
+	 * at the very end of its first tick, after every tick event. Server thread.
+	 */
+	private int simulationAfterTicks;
 
 	private static final class Slot {
 		final int index;
@@ -154,6 +174,8 @@ public final class Party {
 		volatile String secret;
 		volatile SatelliteSupervisor supervisor;
 		volatile ControlConnection connection;
+		/** The frame-slot generation this guest's game announced last, as it arrived (ahead of the import it queues). */
+		volatile int announcedGeneration;
 
 		Slot(int index, GuestProfile profile) {
 			this.index = index;
@@ -171,8 +193,11 @@ public final class Party {
 		this.flow = new JoinFlow(mode, 3, Clock.systemUTC());
 		this.gameDir = minecraft.gameDirectory.toPath().toAbsolutePath();
 		this.config = SplitScreenConfigFile.load(gameDir);
-		HearthsideMod.LOGGER.info("Hearthside split-screen config guestMemoryMb={} guestRenderDistance={} layout={}",
-				config.guestMemoryMb(), config.guestRenderDistance(), config.layout());
+		this.preset = choosePreset();
+		HearthsideMod.LOGGER.info(
+				"Hearthside split-screen config guestMemoryMb={} guestRenderDistance={} layout={} preset={} renderDistanceCap={}",
+				config.guestMemoryMb(), config.guestRenderDistance(), config.layout(), name(preset),
+				SessionTuning.of(preset, config).renderDistanceCap());
 		this.views = new Views(config.layout());
 		this.mapSampler = new MapSampler(minecraft.getUser().getName());
 		this.controlServer = ControlServer.start(this::verifyHello);
@@ -214,6 +239,144 @@ public final class Party {
 			composite = false;
 		}
 		HearthsideMod.LOGGER.info("Hearthside split-screen presentation: {}", composite ? "one window" : "tiled windows");
+	}
+
+	// ---- Performance presets (Spec D section 3.3) ----
+
+	/**
+	 * The party's preset: the configured one, or for Auto what {@link PresetChooser} makes of this machine (its GPU, its
+	 * memory, the players the connected controllers make and the window's size), logged with its reasons. The render
+	 * thread for a lobby, the server thread for a world opened without one.
+	 */
+	private Preset choosePreset() {
+		if (config.preset() != Preset.AUTO) {
+			HearthsideMod.LOGGER.info("Hearthside preset {} (config)", name(config.preset()));
+			return config.preset();
+		}
+		PresetChooser.Choice choice;
+		try {
+			Window window = minecraft.getWindow();
+			choice = PresetChooser.choose(new PresetChooser.Machine(gpuKind(), memoryBytes(),
+					Math.min(4, connectedControllers() + 1), window.getWidth(), window.getHeight()));
+		} catch (RuntimeException | LinkageError e) {
+			// Never a party that can't open: what every party had before presets.
+			HearthsideMod.LOGGER.warn("Hearthside could not look at this machine for Auto; Balanced for this party", e);
+			choice = new PresetChooser.Choice(Preset.BALANCED, List.of("machine unknown"));
+		}
+		HearthsideMod.LOGGER.info("Hearthside preset auto → {} ({})", name(choice.preset()), String.join(", ", choice.reasons()));
+		return choice.preset();
+	}
+
+	/**
+	 * This game's GPU, as Minecraft's device reports it (E2E: {@code hearthside.e2e.fakeGpuType}). Minecraft's OpenGL
+	 * only tells Intel GPUs apart; for any other, Vulkan is asked which kind the GPU OpenGL runs on is (plan ruling T5-6).
+	 */
+	private static PresetChooser.GpuKind gpuKind() {
+		String fake = System.getProperty("hearthside.e2e.fakeGpuType");
+		if (fake != null) {
+			try {
+				return kindOf(DeviceType.valueOf(fake.strip().toUpperCase(Locale.ROOT)));
+			} catch (IllegalArgumentException e) {
+				return PresetChooser.GpuKind.UNKNOWN;
+			}
+		}
+		com.mojang.renderpearl.api.device.DeviceInfo info;
+		try {
+			info = RenderSystem.getDevice().getDeviceInfo();
+		} catch (RuntimeException e) {
+			return PresetChooser.GpuKind.UNKNOWN;
+		}
+		PresetChooser.GpuKind kind = kindOf(info.type());
+		if (kind == PresetChooser.GpuKind.UNKNOWN && "OpenGL".equals(info.backendName())) {
+			return dev.hearthside.fabric.client.compositor.backend.VulkanProbe.gpuKind(info.name(), info.vendorName());
+		}
+		return kind;
+	}
+
+	private static PresetChooser.GpuKind kindOf(DeviceType type) {
+		return switch (type) {
+			case INTEGRATED -> PresetChooser.GpuKind.INTEGRATED;
+			case DISCRETE -> PresetChooser.GpuKind.DISCRETE;
+			default -> PresetChooser.GpuKind.UNKNOWN;
+		};
+	}
+
+	/** The machine's physical memory (E2E: {@code hearthside.e2e.fakeRamGb}). */
+	private static long memoryBytes() {
+		String fake = System.getProperty("hearthside.e2e.fakeRamGb");
+		if (fake != null) {
+			try {
+				return Long.parseLong(fake.strip()) << 30;
+			} catch (NumberFormatException e) {
+				HearthsideMod.LOGGER.warn("Hearthside ignores hearthside.e2e.fakeRamGb={}", fake);
+			}
+		}
+		try {
+			return ((com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean()).getTotalMemorySize();
+		} catch (RuntimeException | LinkageError e) {
+			// A Java without the JDK's management extension: Minecraft's own hardware library knows it too.
+			return new oshi.SystemInfo().getHardware().getMemory().getTotal();
+		}
+	}
+
+	/** Controllers connected now, nobody's yet: each could be a player. */
+	private int connectedControllers() {
+		if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+			return FakeGamepadSource.INSTANCE.poll().size();
+		}
+		return minecraft.isSameThread() ? SdlGamepadSource.connectedCount() : SdlGamepadSource.connectedCountAnyThread();
+	}
+
+	/** The preset this session plays at now: the party's (E2E: {@code hearthside.e2e.preset} forces one, read live). */
+	private Preset sessionPreset() {
+		String forced = System.getProperty("hearthside.e2e.preset");
+		if (forced != null) {
+			for (Preset p : Preset.values()) {
+				if (p != Preset.AUTO && p.name().equalsIgnoreCase(forced.strip())) {
+					return p;
+				}
+			}
+		}
+		return preset;
+	}
+
+	/** What the session's preset sets: guests' cap, graphics and frame rate, the world's simulation distance. */
+	private SessionTuning tuning() {
+		return SessionTuning.of(sessionPreset(), config);
+	}
+
+	/**
+	 * The world simulates at most the preset's distance, for this session: player 1's own setting is left as it is, and
+	 * the integrated server keeps this until player 1 moves their own slider. With no such limit (any more), player 1's
+	 * own distance again. Any thread; done on the server's.
+	 */
+	private void applySimulationDistance(SessionTuning tuning) {
+		WorldLink link = world;
+		if (link == null) {
+			return;
+		}
+		net.minecraft.server.MinecraftServer server = link.server();
+		server.execute(() -> {
+			var players = server.getPlayerList();
+			int own = minecraft.options.simulationDistance().get();
+			int limit = tuning.simulationDistance();
+			if (limit > 0 && own >= limit) {
+				if (players.getSimulationDistance() != limit) {
+					players.setSimulationDistance(limit);
+				}
+				// Logged each time it applies: as the world opens, and at each guest's launch.
+				HearthsideMod.LOGGER.info("Hearthside simulation distance {} (preset)", limit);
+				simulationLowered = true;
+			} else if (simulationLowered) {
+				simulationLowered = false;
+				players.setSimulationDistance(own);
+				HearthsideMod.LOGGER.info("Hearthside simulation distance {} (own setting)", own);
+			}
+		});
+	}
+
+	private static String name(Preset preset) {
+		return preset.name().toLowerCase(Locale.ROOT);
 	}
 
 	/** Opens the controllers and starts the per-frame input loop. Render thread (SDL). */
@@ -262,6 +425,8 @@ public final class Party {
 	/** A world opened: let every guest whose game is ready log in to it. */
 	private void attach(WorldLink link) {
 		world = link;
+		// Once the world has ticked: its first tick sets player 1's own simulation distance.
+		simulationAfterTicks = 2;
 		// The lobby is over: seats stay, and from now on new controllers join with A, A. (The flow is render-thread
 		// only; this runs on the server thread.)
 		minecraft.execute(flow::enterGame);
@@ -330,6 +495,15 @@ public final class Party {
 			Party party = current;
 			if (party != null) {
 				party.mapSampler.tick(server);
+				if (party.simulationAfterTicks > 0 && --party.simulationAfterTicks == 0) {
+					party.applySimulationDistance(party.tuning());
+				}
+			}
+		});
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			Party party = current;
+			if (party != null) {
+				party.followGuiScaleSetting();
 			}
 		});
 		// When player 1 plays alone there is no overlay pass: the join toast draws on their HUD instead.
@@ -381,6 +555,12 @@ public final class Party {
 
 	/** The title screen's controller, for the controller loop to hand to player 1 when it first sees it. */
 	volatile Integer pendingHostPad;
+	/**
+	 * A controller still holding the button that answered a card before the lobby (the Vulkan offer's Not now): that
+	 * press is not a join. It is player 1's only if it also pressed Co-op or is their remembered controller, and then
+	 * the button it still holds presses nothing in the lobby either.
+	 */
+	volatile Integer answeringPad;
 
 	/** Ends the party: every guest's game stops. */
 	public void disband() {
@@ -468,13 +648,24 @@ public final class Party {
 			slot.secret = newSecret();
 			try {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
+				// The party's preset, for this game's session: a drop-in gets the same as everyone (plan R5).
+				SessionTuning tuning = tuning();
 				LaunchCommand command = LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
 						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
-								guestBackend, config.guestMemoryMb(), config.guestRenderDistance()));
+								guestBackend, config.guestMemoryMb(), tuning.renderDistanceCap(), tuning.lightGraphics(),
+								tuning.fpsCap()));
+				applySimulationDistance(tuning);
 				if (Boolean.getBoolean("hearthside.e2e.noVulkanLoader")) {
 					// E2E: the guest behaves as if its machine had no Vulkan runtime.
 					command = withEnvironment(command, ExportDevice.NO_VULKAN_LOADER_ENV, "1");
+				}
+				for (Map.Entry<String, String> hook : FrameHooks.GUEST_ENV.entrySet()) {
+					// E2E: the frame hand-over's stress hooks (F1, F3), for the guest's side of it.
+					String value = System.getProperty(hook.getKey());
+					if (value != null) {
+						command = withEnvironment(command, hook.getValue(), value);
+					}
 				}
 				if (Boolean.getBoolean("hearthside.e2e.guestTryFullscreen")) {
 					// E2E: once in the world, the guest tries every way into fullscreen (Q4).
@@ -612,6 +803,12 @@ public final class Party {
 	public boolean hostHasController() {
 		HostInput current = input;
 		return current != null && current.hasPadFor(0);
+	}
+
+	/** Player 1 holds a controller and is playing on it: their mouse isn't driving the open screen. */
+	public boolean hostOnController() {
+		HostInput current = input;
+		return current != null && current.hasPadFor(0) && !current.hostMouseDriving();
 	}
 
 	public boolean hostClaimArmed() {
@@ -1573,10 +1770,11 @@ public final class Party {
 								}
 							});
 						} else if (message instanceof ControlMessage.FrameSlotsReady ready) {
+							slot.announcedGeneration = ready.generation();
 							minecraft.execute(() -> {
 								Compositor compositor = Compositor.active();
 								if (compositor != null && slots.get(slot.index) == slot) {
-									compositor.onGuestSlots(slot.index, ready);
+									compositor.onGuestSlots(slot.index, ready, slot.announcedGeneration);
 								}
 							});
 						}
@@ -1610,6 +1808,10 @@ public final class Party {
 		pauseOnLostFocusBefore = minecraft.options.pauseOnLostFocus;
 		// Other players keep playing while this window is in the background; the host must not pause because of it.
 		minecraft.options.pauseOnLostFocus = false;
+		if (config.presetForPlayer1()) {
+			// Player 1's game takes the preset too, for as long as the screen is shared (never its render scale: plan R4).
+			SessionOptions.applyForPlayer1(minecraft.options, tuning());
+		}
 	}
 
 	/** How each guest's view reaches the screen, for its launch command. */
@@ -1640,7 +1842,78 @@ public final class Party {
 		} else {
 			WindowPlacer.restore(minecraft.getWindow(), hostWindowBefore);
 		}
+		// Minecraft's own GUI scale again, even where no compositor was left to clear the party's.
+		boolean guiScaleForced = GuiScaleOverride.forced() != 0;
+		GuiScaleOverride.clear();
+		if (guiScaleForced) {
+			minecraft.resizeGui();
+		}
 		minecraft.options.pauseOnLostFocus = pauseOnLostFocusBefore;
+		SessionOptions.restore(minecraft.options);
+	}
+
+	/**
+	 * The party's GUI scale for the views now laid out (Spec D section 3.4): Minecraft's rule for each view's size at
+	 * player 1's setting, the smallest of them. Player 1's game takes it from its next GUI layout. Render thread.
+	 */
+	private int partyGuiScale(List<Slot> guests) {
+		int setting = minecraft.options.guiScale().get();
+		List<Rect> rects = new ArrayList<>();
+		views.target(0).ifPresent(rects::add);
+		for (Slot guest : guests) {
+			views.target(guest.index).ifPresent(rects::add);
+		}
+		guiScaleSetting = setting;
+		if (rects.isEmpty()) {
+			GuiScaleOverride.set(0);
+			return 0;
+		}
+		// SetViewport carries at most 32 (a view over 10,000 pixels wide).
+		int scale = Math.min(32, GuiScaleRule.partyScale(setting, rects));
+		GuiScaleOverride.set(scale);
+		return scale;
+	}
+
+	/**
+	 * Lays player 1's GUI out at the party's scale, if it isn't already, and sends every guest its view, GUI scale and
+	 * frame size. Render thread.
+	 */
+	private void sendViewports(List<Slot> guests, int partyScale, int refresh) {
+		Window window = minecraft.getWindow();
+		if (partyScale > 0 && window.getGuiScale() != partyScale) {
+			minecraft.resizeGui();
+		}
+		views.target(0).ifPresent(host -> GuiScaleOverride.log(1, window, host.width(), host.height()));
+		// Guests only, even when player 1 takes the preset (plan R4).
+		boolean reducedResolution = tuning().reducedResolution();
+		for (Slot guest : guests) {
+			ControlConnection connection = guest.connection;
+			Rect target = views.target(guest.index).orElse(null);
+			if (connection == null || target == null) {
+				continue;
+			}
+			ControlMessage.SetViewport viewport = partyScale < 1 ? new ControlMessage.SetViewport(target, refresh)
+					: viewport(target, refresh, GuiScaleRule.forView(target, partyScale, reducedResolution));
+			views.sentFrame(guest.index, new Rect(0, 0, viewport.frameWidth(), viewport.frameHeight()));
+			send(connection, viewport);
+		}
+	}
+
+	private static ControlMessage.SetViewport viewport(Rect target, int refresh, GuiScaleRule.ViewScale scale) {
+		return new ControlMessage.SetViewport(target, refresh, scale.guiScale(), scale.frameWidth(), scale.frameHeight());
+	}
+
+	/**
+	 * Player 1 changed their GUI-scale setting while compositing: every view follows (until then the forced party
+	 * scale keeps player 1's GUI as it was). Polled each client tick. Render thread.
+	 */
+	private void followGuiScaleSetting() {
+		if (!composite || world == null || views == null || Compositor.active() == null || guiScaleSetting < 0
+				|| minecraft.options.guiScale().get() == guiScaleSetting) {
+			return;
+		}
+		List<Slot> guests = new ArrayList<>(slots.values());
+		sendViewports(guests, partyGuiScale(guests), WindowPlacer.refreshHz(minecraft.getWindow()));
 	}
 
 	/** Re-lays out the views, or leaves split-screen mode when the last guest has gone. Render thread. */
@@ -1676,16 +1949,12 @@ public final class Party {
 					}
 				}
 			}
+			// Player 1's GUI scale first, so their view is laid out once, at its new size and the party's scale.
+			int partyScale = partyGuiScale(guests);
 			Compositor.activate(minecraft, this::afterGuestsChanged,
 					index -> sendToGuest(index, new ControlMessage.UseCopyTransport()), views, size.width(), size.height());
 			OverlayPass.register(viewOverlay);
-			for (Slot guest : guests) {
-				ControlConnection connection = guest.connection;
-				Rect target = views.target(guest.index).orElse(null);
-				if (connection != null && target != null) {
-					send(connection, new ControlMessage.SetViewport(target, refresh));
-				}
-			}
+			sendViewports(guests, partyScale, refresh);
 			return;
 		}
 		if (workArea == null) {

@@ -68,6 +68,8 @@ public final class Compositor {
 	private final Canvas canvas = new Canvas("hearthside canvas");
 	/** The fallback's per-seat scratch pictures, for views drawn at another size than their frame's. */
 	private final Map<Integer, Canvas> scratch = new HashMap<>();
+	/** The fallback's one opaque texel, which puts the canvas's alpha back to 1 after the views are copied in. */
+	private final Canvas opaqueTexel = new Canvas("hearthside opaque texel");
 	private final CanvasReadback readback = new CanvasReadback();
 	private Rect hostViewport;
 	private double screenPerFb = 1.0;
@@ -131,6 +133,8 @@ public final class Compositor {
 			return;
 		}
 		active = null;
+		// Player 1's own GUI scale again, from the layout clearing the virtual size makes.
+		GuiScaleOverride.clear();
 		VirtualSizing.clear(minecraft);
 		// Minecraft destroys each texture once the GPU has finished with it.
 		c.imports.values().forEach(GuestImport::close);
@@ -141,11 +145,21 @@ public final class Compositor {
 		c.retired.clear();
 		c.scratch.values().forEach(Canvas::close);
 		c.scratch.clear();
+		c.opaqueTexel.close();
 		c.canvas.close();
 	}
 
 	/** Window coordinates per framebuffer pixel (1.0 normally, 0.5 on a 2x display). */
 	public static double screenPerFramebuffer(Minecraft minecraft) {
+		String fake = System.getProperty("hearthside.e2e.fakeScreenPerFb");
+		if (fake != null) {
+			// E2E: a display scale (Windows' 150%, say) on a display that has none.
+			try {
+				return Double.parseDouble(fake);
+			} catch (NumberFormatException e) {
+				HearthsideMod.LOGGER.warn("Ignoring hearthside.e2e.fakeScreenPerFb={}", fake);
+			}
+		}
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			IntBuffer w = stack.mallocInt(1), h = stack.mallocInt(1);
 			SDLVideo.SDL_GetWindowSize(minecraft.getWindow().handle(), w, h);
@@ -204,8 +218,12 @@ public final class Compositor {
 	/**
 	 * A guest (re)allocated its frame slots; import them. GPU-shared slots are imported only when the guest's GPU and
 	 * driver are this game's (Spec C section 3.7, step 3); otherwise the guest is told to copy, and the host says why.
+	 * {@code announced} is the generation the guest announced last, which may already be a later one: the guest keeps
+	 * only its current and previous generations, so one it has moved on from may be gone before it is imported (a burst
+	 * of resizes), and that is no error.
 	 */
-	public void onGuestSlots(int playerIndex, ControlMessage.FrameSlotsReady ready) {
+	public void onGuestSlots(int playerIndex, ControlMessage.FrameSlotsReady ready, int announced) {
+		boolean superseded = announced != ready.generation();
 		GuestImport previous = imports.get(playerIndex);
 		GuestImport waiting = incoming.get(playerIndex);
 		if ((previous != null && previous.generation() == ready.generation())
@@ -216,7 +234,11 @@ public final class Compositor {
 		try {
 			table = SegmentSlotTable.open(Path.of(ready.controlFile()));
 		} catch (IOException e) {
-			HearthsideMod.LOGGER.error("Could not open player {}'s frame slots at {}", playerIndex + 1, ready.controlFile(), e);
+			if (superseded) {
+				movedOn(playerIndex, ready);
+			} else {
+				HearthsideMod.LOGGER.error("Could not open player {}'s frame slots at {}", playerIndex + 1, ready.controlFile(), e);
+			}
 			return;
 		}
 		if (ready.transport() == Transport.GPU_SHARED) {
@@ -233,8 +255,13 @@ public final class Compositor {
 		try {
 			fresh = GuestImport.open(ready, table, SharedImages.forThisGame());
 		} catch (ImportFailed | RuntimeException e) {
-			HearthsideMod.LOGGER.error("Could not import player {}'s frames", playerIndex + 1, e);
 			table.close();
+			if (superseded) {
+				// Its newer generation is on its way, and is what counts (a failure there is an error, and falls back).
+				movedOn(playerIndex, ready);
+				return;
+			}
+			HearthsideMod.LOGGER.error("Could not import player {}'s frames", playerIndex + 1, e);
 			if (ready.transport() == Transport.GPU_SHARED) {
 				// Spec B section 4: fall back to copying rather than leave this player frozen on their last frame.
 				onImportFailed.accept(playerIndex);
@@ -253,6 +280,12 @@ public final class Compositor {
 		HearthsideMod.LOGGER.info("Hearthside compositor: player {} frames {} {}x{} backend={}", playerIndex + 1,
 				ready.transport(), ready.width(), ready.height(),
 				com.mojang.blaze3d.systems.RenderSystem.getDevice().getDeviceInfo().backendName().toLowerCase(java.util.Locale.ROOT));
+	}
+
+	/** A generation the guest had already moved on from couldn't be imported: one line, no trace (Spec D final review). */
+	private static void movedOn(int playerIndex, ControlMessage.FrameSlotsReady ready) {
+		HearthsideMod.LOGGER.info("Hearthside player {}'s frames moved on before generation {} could be imported",
+				playerIndex + 1, ready.generation());
 	}
 
 	/**
@@ -280,15 +313,20 @@ public final class Compositor {
 	 */
 	public GpuTextureView compose(GpuTextureView hostView, CommandEncoder encoder, int surfaceWidth, int surfaceHeight) {
 		long start = System.nanoTime();
-		if (!canvas.ensure(surfaceWidth, surfaceHeight)) {
-			return hostView;
-		}
-		if (surfaceWidth != layoutWidth || surfaceHeight != layoutHeight) {
-			layoutWidth = surfaceWidth;
-			layoutHeight = surfaceHeight;
-			minecraft.execute(onWindowResized);
-		}
 		try {
+			if (!canvas.ensure(surfaceWidth, surfaceHeight)) {
+				return hostView;
+			}
+			if (surfaceWidth != layoutWidth || surfaceHeight != layoutHeight) {
+				layoutWidth = surfaceWidth;
+				layoutHeight = surfaceHeight;
+				// Runs at once here (the render thread, outside a task): the new layout this very frame.
+				minecraft.execute(onWindowResized);
+				if (active != this) {
+					// The last guest had just left: the new layout ended split-screen, and closed the canvas with it.
+					return hostView;
+				}
+			}
 			releaseFinished();
 			if (!framesFresh) {
 				frames = views.frames(System.nanoTime());
@@ -299,6 +337,8 @@ public final class Compositor {
 			stale.clear();
 			List<Draw> draws = new ArrayList<>();
 			List<CanvasReadback.GuestView> guests = new ArrayList<>();
+			boolean tearCheck = FrameHooks.tearCheck();
+			List<CanvasReadback.SteadyView> steady = new ArrayList<>();
 			for (ViewFrame view : frames) {
 				Rect rect = view.rect();
 				drawn.put(view.seat(), rect);
@@ -313,17 +353,27 @@ public final class Compositor {
 					continue; // the overlay shows the hearth there
 				}
 				Rect target = views.target(view.seat()).orElse(rect);
-				boolean waiting = imp.width() != target.width() || imp.height() != target.height();
+				// The frame size its game was sent: under a reduced render resolution, smaller than its view.
+				Rect frame = views.frame(view.seat()).orElse(target);
+				boolean waiting = imp.width() != frame.width() || imp.height() != frame.height();
 				if (waiting) {
 					stale.add(view.seat());
 				}
 				draws.add(new Draw(view.seat(), imp.hostTexture(), rect, view.alpha(), waiting, imp.rowsTopDown()));
 				framed.add(view.seat());
 				guests.add(new CanvasReadback.GuestView(view.seat() + 1, imp.generation(), rect));
+				if (tearCheck && view.alpha() >= 1f && !waiting && rect.equals(target)) {
+					// Fully faded in, at its frame's size and not gliding: every pixel is the guest's own.
+					steady.add(new CanvasReadback.SteadyView(view.seat() + 1, imp, rect));
+				}
 			}
-			draw(encoder, draws, OverlayPass.texture());
+			// While checking frames, nothing of Hearthside's (borders, name tags) lands on the sampled points.
+			draw(encoder, draws, tearCheck ? Optional.empty() : OverlayPass.texture());
 			retireGone();
 			readback.afterCompose(encoder, canvas, guests, frames);
+			if (tearCheck) {
+				readback.checkTears(encoder, canvas, steady);
+			}
 		} catch (RuntimeException e) {
 			// Never take the game down for a frame: show player 1's own view instead, and say why once.
 			if (!composeFailed) {
@@ -356,10 +406,11 @@ public final class Compositor {
 			ViewPipeline.drawPlaced(encoder, canvas, d.source(), d.rect(),
 					scratch.computeIfAbsent(d.seat(), seat -> new Canvas("hearthside fallback view " + seat)));
 		}
-		if (overlay.isPresent()) {
-			try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside overlay", canvas.view(), Optional.empty())) {
-				ViewPipeline.drawOverlay(pass, overlay.get(), overlaySameSize);
-			}
+		opaqueTexel.ensure(1, 1); // opaque black from creation
+		try (RenderPass pass = encoder.createRenderPass(() -> "Hearthside overlay", canvas.view(), Optional.empty())) {
+			// The copies brought each frame's alpha with them; views are opaque pictures, as the view pipeline draws them.
+			ViewPipeline.makeOpaque(pass, opaqueTexel.view());
+			overlay.ifPresent(texture -> ViewPipeline.drawOverlay(pass, texture, overlaySameSize));
 		}
 	}
 

@@ -25,10 +25,11 @@ import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 /**
- * The host's split-screen settings, {@code <gameDir>/config/hearthside.json}: what each guest's game is given, and how
- * the players share the screen.
+ * The host's split-screen settings, {@code <gameDir>/config/hearthside.json}: what each guest's game is given, how the
+ * players share the screen, how much of the machine a party asks for, and what the player said to switching to Vulkan.
  *
  * <p>Each guest is a full Minecraft, so its heap is fixed rather than a share of the host's, and its render distance is
  * capped so a party fits on a laptop. Values outside their range are clamped; a missing, wrong-typed, unknown or
@@ -39,27 +40,44 @@ import java.util.Objects;
  * (whether three players' free quarter shows the party map).
  *
  * @param guestMemoryMb each guest's maximum heap ({@code -Xmx}), 768..8192 MB
- * @param guestRenderDistance the most chunks a guest renders, 2..32, never above the guest's own setting; {@code 0}
- *     means no cap (the guest's own setting), and so does any negative number (a player writing {@code -1} for "none"
- *     gets none, not the harshest cap)
+ * @param guestRenderDistance the most chunks a guest renders, 2..32, never above the guest's own setting;
+ *     {@link #RENDER_DISTANCE_FROM_PRESET} (in the file, {@code "preset"}) leaves it to the preset; {@code 0} means no
+ *     cap (the guest's own setting), and in the file so does any negative number (a player writing {@code -1} for
+ *     "none" gets none, not the harshest cap)
  * @param layout how the players share the one window
+ * @param preset what each party session is tuned for ({@link SessionTuning}); {@code auto} chooses per session
+ * @param presetForPlayer1 whether player 1's own game takes the preset too; otherwise only guests (and the world's
+ *     simulation distance) do
+ * @param vulkanOffer the answer to the offer to switch to Vulkan, so it is asked once
  */
-public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, LayoutSettings layout) {
+public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, LayoutSettings layout, Preset preset,
+		boolean presetForPlayer1, VulkanOffer vulkanOffer) {
 	public static final int MIN_GUEST_MEMORY_MB = 768;
 	public static final int MAX_GUEST_MEMORY_MB = 8192;
 	public static final int MIN_RENDER_DISTANCE = 2;
 	public static final int MAX_RENDER_DISTANCE = 32;
 	/** {@link #guestRenderDistance()} meaning "as the guest's own setting". */
 	public static final int NO_RENDER_DISTANCE_CAP = 0;
+	/** {@link #guestRenderDistance()} meaning "as the preset caps it", written {@code "preset"}. */
+	public static final int RENDER_DISTANCE_FROM_PRESET = -1;
 
-	public static final SplitScreenConfig DEFAULTS = new SplitScreenConfig(1536, 8);
+	public static final SplitScreenConfig DEFAULTS = new SplitScreenConfig(1536, RENDER_DISTANCE_FROM_PRESET,
+			LayoutSettings.DEFAULTS, Preset.AUTO, false, VulkanOffer.PENDING);
 
 	private static final String MEMORY = "guestMemoryMb";
 	private static final String RENDER_DISTANCE = "guestRenderDistance";
+	private static final String PRESET = "preset";
+	private static final String PRESET_FOR_PLAYER1 = "presetForPlayer1";
 	private static final String TWO_PLAYERS = "twoPlayerLayout";
 	private static final String THREE_PLAYERS = "threePlayerLayout";
 	private static final String PARTY_PANEL = "partyPanel";
-	private static final List<String> FIELDS = List.of(MEMORY, RENDER_DISTANCE, TWO_PLAYERS, THREE_PLAYERS, PARTY_PANEL);
+	private static final String VULKAN_OFFER = "vulkanOffer";
+	private static final List<String> FIELDS = List.of(MEMORY, RENDER_DISTANCE, PRESET, PRESET_FOR_PLAYER1, TWO_PLAYERS,
+			THREE_PLAYERS, PARTY_PANEL, VULKAN_OFFER);
+	/** {@code guestRenderDistance} as written: {@link #RENDER_DISTANCE_FROM_PRESET}. */
+	private static final String FROM_PRESET = "preset";
+	/** What every file held before presets existed, unless a player changed it (plan R6). */
+	private static final int OLD_DEFAULT_RENDER_DISTANCE = 8;
 	private static final System.Logger LOG = System.getLogger(SplitScreenConfig.class.getName());
 	private static final Gson GSON =new GsonBuilder().setPrettyPrinting().create();
 	private static final BigDecimal INT_MIN = BigDecimal.valueOf(Integer.MIN_VALUE);
@@ -67,20 +85,32 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 
 	public SplitScreenConfig {
 		guestMemoryMb = Math.clamp(guestMemoryMb, MIN_GUEST_MEMORY_MB, MAX_GUEST_MEMORY_MB);
-		if (guestRenderDistance <= NO_RENDER_DISTANCE_CAP) {
+		if (guestRenderDistance == RENDER_DISTANCE_FROM_PRESET) {
+			// kept: the preset decides
+		} else if (guestRenderDistance <= NO_RENDER_DISTANCE_CAP) {
 			guestRenderDistance = NO_RENDER_DISTANCE_CAP;
 		} else {
 			guestRenderDistance = Math.clamp(guestRenderDistance, MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE);
 		}
 		Objects.requireNonNull(layout, "layout");
+		Objects.requireNonNull(preset, "preset");
+		Objects.requireNonNull(vulkanOffer, "vulkanOffer");
 	}
 
-	/** The guests' settings with the default layout. */
+	/** The guests' settings, with everything else at its default. */
 	public SplitScreenConfig(int guestMemoryMb, int guestRenderDistance) {
-		this(guestMemoryMb, guestRenderDistance, LayoutSettings.DEFAULTS);
+		this(guestMemoryMb, guestRenderDistance, LayoutSettings.DEFAULTS, Preset.AUTO, false, VulkanOffer.PENDING);
 	}
 
-	/** Whether guests' render distance is capped at all. */
+	public SplitScreenConfig withLayout(LayoutSettings value) {
+		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, value, preset, presetForPlayer1, vulkanOffer);
+	}
+
+	public SplitScreenConfig withVulkanOffer(VulkanOffer value) {
+		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, layout, preset, presetForPlayer1, value);
+	}
+
+	/** Whether guests' render distance is capped at all: by a number, or by the preset (if it caps). */
 	public boolean capsRenderDistance() {
 		return guestRenderDistance != NO_RENDER_DISTANCE_CAP;
 	}
@@ -103,8 +133,29 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 				.withTwo(enumOr(object, TWO_PLAYERS, DEFAULTS.layout().two()))
 				.withThree(enumOr(object, THREE_PLAYERS, DEFAULTS.layout().three()))
 				.withPartyPanel(booleanOr(object, PARTY_PANEL, DEFAULTS.layout().partyPanel()));
-		return new SplitScreenConfig(intOr(object, MEMORY, DEFAULTS.guestMemoryMb()),
-				intOr(object, RENDER_DISTANCE, DEFAULTS.guestRenderDistance()), layout);
+		return new SplitScreenConfig(intOr(object, MEMORY, DEFAULTS.guestMemoryMb()), renderDistance(object), layout,
+				enumOr(object, PRESET, DEFAULTS.preset()),
+				booleanOr(object, PRESET_FOR_PLAYER1, DEFAULTS.presetForPlayer1()),
+				enumOr(object, VULKAN_OFFER, DEFAULTS.vulkanOffer()));
+	}
+
+	/**
+	 * {@code guestRenderDistance} as read: {@code "preset"}, a missing field or an invalid one leave it to the preset (the
+	 * default), and a negative number means no cap. A file from before presets existed (it has no {@code preset} field)
+	 * that holds the old default 8 follows the preset too (plan R6); any other number of chunks it has is kept.
+	 */
+	private static int renderDistance(JsonObject object) {
+		OptionalInt chunks = intIn(object, RENDER_DISTANCE);
+		if (chunks.isEmpty()) {
+			return RENDER_DISTANCE_FROM_PRESET;
+		}
+		if (chunks.getAsInt() < 0) {
+			return NO_RENDER_DISTANCE_CAP;
+		}
+		if (chunks.getAsInt() == OLD_DEFAULT_RENDER_DISTANCE && !object.has(PRESET)) {
+			return RENDER_DISTANCE_FROM_PRESET;
+		}
+		return chunks.getAsInt();
 	}
 
 	/**
@@ -157,7 +208,7 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	 * Writes {@code config} to {@code file} through a temporary file beside it ({@code <name>.tmp}) and a move, so the
 	 * file is never half-written. A temporary file this left is removed again if the write or the move fails.
 	 */
-	private static void replace(Path file, SplitScreenConfig config) throws IOException {
+	public static void replace(Path file, SplitScreenConfig config) throws IOException {
 		Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
 		boolean created = false;
 		try {
@@ -186,10 +237,17 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	public void write(Writer out) throws IOException {
 		JsonObject object = new JsonObject();
 		object.addProperty(MEMORY, guestMemoryMb);
-		object.addProperty(RENDER_DISTANCE, guestRenderDistance);
+		if (guestRenderDistance == RENDER_DISTANCE_FROM_PRESET) {
+			object.addProperty(RENDER_DISTANCE, FROM_PRESET);
+		} else {
+			object.addProperty(RENDER_DISTANCE, guestRenderDistance);
+		}
+		object.addProperty(PRESET, name(preset));
+		object.addProperty(PRESET_FOR_PLAYER1, presetForPlayer1);
 		object.addProperty(TWO_PLAYERS, name(layout.two()));
 		object.addProperty(THREE_PLAYERS, name(layout.three()));
 		object.addProperty(PARTY_PANEL, layout.partyPanel());
+		object.addProperty(VULKAN_OFFER, name(vulkanOffer));
 		try {
 			GSON.toJson(object, out);
 		} catch (JsonIOException e) {
@@ -200,14 +258,19 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 	}
 
 	private static int intOr(JsonObject object, String name, int fallback) {
+		return intIn(object, name).orElse(fallback);
+	}
+
+	/** The whole number in a field; empty if it's missing or anything else. */
+	private static OptionalInt intIn(JsonObject object, String name) {
 		if (!(object.get(name) instanceof JsonPrimitive value) || !value.isNumber()) {
-			return fallback;
+			return OptionalInt.empty();
 		}
 		try {
 			// A huge number still clamps (in the constructor) rather than falling back.
-			return value.getAsBigDecimal().max(INT_MIN).min(INT_MAX).intValueExact();
+			return OptionalInt.of(value.getAsBigDecimal().max(INT_MIN).min(INT_MAX).intValueExact());
 		} catch (ArithmeticException | NumberFormatException e) {
-			return fallback; // a fraction, or not a number after all
+			return OptionalInt.empty(); // a fraction, or not a number after all
 		}
 	}
 
@@ -228,7 +291,7 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 		return fallback;
 	}
 
-	/** How a layout is spelled in the file: {@code SIDE_BY_SIDE} is {@code side_by_side}. */
+	/** How a constant is spelled in the file: {@code SIDE_BY_SIDE} is {@code side_by_side}. */
 	private static String name(Enum<?> constant) {
 		return constant.name().toLowerCase(Locale.ROOT);
 	}

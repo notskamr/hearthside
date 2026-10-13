@@ -57,15 +57,40 @@ starting a party); it applies from the next party.
 
 | Setting | Default | What it does |
 |---|---|---|
+| `preset` | `auto` | How hard the extra players' games work: `quality`, `balanced`, `performance`, or `auto`, which picks one for this PC each time you open Co-op (it's in the log: `Hearthside preset auto → …`). See **Performance presets** below. |
+| `presetForPlayer1` | `false` | `true` gives player 1's own game the preset's render distance, lighter graphics and frame-rate cap too. |
 | `guestMemoryMb` | 1536 | Memory for each extra player's game, in MB (768–8192). Lower it on a tight machine; raise it for big modpacks. |
-| `guestRenderDistance` | 8 | The most chunks an extra player's game renders (2–32). `0` lets each player use their own setting. Player 1 keeps theirs. |
+| `guestRenderDistance` | `"preset"` | The most chunks an extra player's game renders (2–32). `"preset"` uses the preset's; `0` lets each player use their own setting. Player 1 keeps theirs, unless `presetForPlayer1` is on. |
+| `vulkanOffer` | `pending` | Your answer to the "runs smoother on Vulkan" card (`accepted` or `declined`). Set it back to `pending` to see the card again. |
 | `twoPlayerLayout` | `side_by_side` | `side_by_side` or `stacked` (top and bottom). |
 | `threePlayerLayout` | `grid_with_panel` | `grid_with_panel` (a party map in the fourth corner), `wide_top` or `tall_left`. |
 | `partyPanel` | `true` | Shows the party map in the free corner with three players. |
 
-Graphics: Minecraft's own **Options → Video Settings → Graphics API** picks OpenGL or Vulkan; the other players follow
-player 1. Each extra player can change their own video settings (including Sodium's) from their pause menu; they stay
-theirs. Fullscreen is player 1's alone.
+**Performance presets.** Each extra player's game is a whole Minecraft, so a laptop works hard with three or four.
+The preset applies for the session only; nobody's own settings are changed.
+
+| | Quality | Balanced | Performance |
+|---|---|---|---|
+| Extra players' render distance | their own | at most 8 | at most 6 |
+| Extra players' graphics | their own | their own | lighter: fast leaves, no clouds, fewer particles, nearer entities, no biome blend |
+| Extra players' frame rate | your screen's | your screen's | at most 45 |
+| World simulation distance | your own | your own | at most 6 |
+| Extra players' resolution | full | full | slightly lower on big views, with text the same size as yours |
+
+`auto` picks **Performance** on integrated graphics (most laptops), on graphics it can't identify, or under 12 GB of
+memory; **Balanced** on a graphics card with 3–4 players (it counts the connected controllers) or a window bigger than
+1440p; and **Quality** otherwise. The lower resolution only applies to views big enough to keep text sharp: on a 1080p
+TV with three or four players, Performance saves through render distance, lighter graphics and the frame-rate cap.
+
+**Graphics.** Minecraft's own **Options → Video Settings → Graphics API** picks OpenGL or Vulkan; the other players
+follow player 1. On some PCs (most Intel laptops) OpenGL can't hand each player's picture straight to player 1's
+window, so it is copied every frame; their Vulkan can. On such a PC, the first time you open Co-op, a card says "Split-screen
+runs smoother on Vulkan on this PC": **Switch and restart** switches and restarts Minecraft for you; **Not now** is
+remembered. It isn't offered with Iris installed, because Iris can't start on Vulkan.
+
+Every view shows the same GUI size: player 1's GUI scale (Options → Video Settings) sets everyone's, or **Auto** picks
+the size that fits the smallest view. Each extra player can change their own video settings (including Sodium's) from
+their pause menu; they stay theirs. Fullscreen is player 1's alone.
 
 ## Known limitations
 
@@ -74,6 +99,10 @@ theirs. Fullscreen is player 1's alone.
 - If a controller disconnects mid-game, reconnect it to carry on; a proper "Reconnect your controller" screen comes next.
 - Skins: Minecraft's built-in skins only. Your own skin file or a player's skin by name comes soon.
 - On the lobby's name keyboard, type with the controller; the PC keyboard can't type into it yet.
+- Each player's own Minecraft settings (brightness, FOV, volumes…) belong to the seat they sit in, not their profile;
+  per-profile settings and controller sensitivity come with the next update.
+- **Switch and restart** starts Minecraft again the way your launcher started it. If it doesn't come back (some
+  launchers can't be restarted from inside the game), start Minecraft yourself: it's already set to Vulkan.
 - Windows only.
 
 ## When something goes wrong
@@ -81,6 +110,7 @@ theirs. Fullscreen is player 1's alone.
 Send these files (and roughly when it happened):
 - `.minecraft/logs/latest.log` — player 1's game
 - `.minecraft/hearthside/satellite-1/logs/latest.log` (and `-2`, `-3`) — the other players' games
+- `.minecraft/logs/hearthside-relaunch.log` — if **Switch and restart** didn't bring Minecraft back
 
 To start fresh, close Minecraft and delete `.minecraft/hearthside` (profiles and the extra players' game folders) and
 `.minecraft/config/hearthside.json`.

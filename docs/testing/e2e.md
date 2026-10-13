@@ -289,6 +289,54 @@ Found while building this:
 - Mods' screens can draw widgets the hint placement can't see (Sodium's Done was covered), so controller hints show on
   Minecraft's own screens only.
 
+## Laptops and performance (Spec D) — 2026-10-12, same machine
+
+After the first friend-laptop test (Intel integrated graphics, a TV, three players): copied frames hardened and moved
+to shared memory, performance presets, one GUI size for every view, the Vulkan offer, and hints that toasts never
+cover. New switches: `-Pe2eForceCopy=true` (every frame copied, as on Intel's OpenGL) and `-Pe2ePreset=<name>` (every
+party on that preset). This desktop's real Vulkan probe reports "AMD Radeon RX 9060 XT can share frames", and Auto
+picks Quality here (discrete GPU, 31 GB RAM) on both backends.
+
+| Run (head `13dc21c`) | Result |
+|---|---|
+| Full, OpenGL | 123/123 |
+| Full, OpenGL, every frame copied | 120/123 — V1, C12 and V3 test GPU sharing itself; they now step aside in such a run |
+| Full, Vulkan (host and guests), validation on | 122/123 (H5, a 60 ms stick nudge lost between two slow validated frames; hardened and passing 2/2 alone); 0 validation errors in every log |
+| Full, Vulkan host with OpenGL guests | 123/123 |
+
+Composite cost, host CPU, p95, one guest: OpenGL 0.044 ms shared, 0.294 ms copied (budget 1 ms); Vulkan with validation
+0.222 ms; mixed 0.103 ms. Memory (two players): player 1 2.1–2.7 GB, a guest 1.3–1.7 GB.
+
+| # | Check | Result |
+|---|---|---|
+| F1 | The guest paints whole frames in two alternating colours while copying is slowed 4 ms on both sides: 600 copied frames judged at 13 points each, none torn, none another colour | PASS (a deliberately half-published frame is caught: 15 of 600) |
+| F2 | Copying keeps a guest's pixels in page-file-backed shared memory: the guest's folder holds only `frames-<gen>.slots`; C5 finds no pixel file on Windows | PASS — FAILED before the change |
+| F3 | Every texture Hearthside creates starts full of garbage (as Intel leaves it) and guest frames are half transparent: the host shows exactly the guest's colours edge to edge, on the copy transport and the shared one | PASS (360/0/0 each) |
+| U1 | At 1920×1080, every view's GUI is the same size: as is; player 1 fixed at 4, and at 1 (smaller than Auto); a guest whose own options say GUI scale 1 (the laptop's cause); a faked 150% display scale; fullscreen and back | PASS — FAILED before the change |
+| E1 | A forced Performance preset: the guest renders 6 chunks, light graphics, 45 fps in effect; its frame snaps to the party's GUI scale; the server simulates at most 6; frames arrive; after a save the guest's options.txt still has its own values (render distance, fps, leaves, clouds, particles, entity distance, biome blend, graphics preset) | PASS |
+| E2 | Auto chooses from the machine when a party is created (GPU type and memory faked): integrated → Performance, 8 GB → Performance, discrete 32 GB → Quality or Balanced with its reason | PASS |
+| E3 | `presetForPlayer1`: player 1's own game takes the preset for the session (not its resolution); a save writes player 1's own values; leaving split-screen puts them back | PASS |
+| K1 | The Vulkan offer: not with Iris (logged); the card, Not now by controller (remembered); Switch saves Vulkan and logs the relaunch (token redacted); a relaunch that dies asks the player to start Minecraft again; no Vulkan loader → no card, no crash; the real probe on this machine | PASS — FAILED before the change |
+| H7 | Toasts never cover the hints, which move clear and stay drawn; no keyboard tutorial toast for player 1 holding a controller (even while the mouse drives a menu), and one already up goes when they take or reconnect a controller (user report); one hint row per frame; a bundle offers Choose and Take out, and the right stick chooses | PASS — FAILED before the change |
+| Q1 | The guest's render distance is capped at the party preset's cap (none under Quality) | PASS |
+| Q1b | Under Balanced, a guest's own 12 survives a save while the server hears 8 | PASS |
+
+Screenshots: `docs/screenshots/laptops/` — the Vulkan offer and its restart card, hints beside toasts, bundle hints, two
+players at Performance on a 2560×1440 window (full size at a party scale of 3), three players at Performance.
+
+Found while building this:
+- The desktop never reproduced the laptop's artifacts: the copy path's slot hand-over holds even slowed on both sides,
+  and poisoned new textures never reached a steady frame. The laptop decides (OpenGL, Vulkan with
+  `-Dhearthside.forceCopy=true`, and Vulkan sharing, to separate the transport from the backend).
+- The laptop's GUI-size mismatch wasn't display scaling (both games size their GUI from framebuffer pixels) but each
+  game's own GUI-scale setting, and Tall left's uneven views.
+- Minecraft's OpenGL backend reports every non-Intel GPU as "other", so Auto asks Vulkan which kind of GPU OpenGL runs on.
+- Minecraft's frame-rate slider holds only tens, and Sodium resets other values to 60 and saves it: the option keeps
+  the rate rounded down, and the frame-rate limiter gets the exact 45.
+- At a party GUI scale of 3, a guest at 2/3 resolution has soft text after the stretch: reduced resolution applies from a
+  scale of 4 (0.75).
+- When the last guest's fade and a window resize coincided, one frame failed to compose (since Spec C); fixed.
+
 ## Guests' settings (batch review fixes) — 2026-10-11, same machine
 
 | # | Check | Result |

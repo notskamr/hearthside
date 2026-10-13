@@ -20,6 +20,7 @@ import dev.hearthside.core.compositor.SharingFacts;
 import dev.hearthside.core.compositor.Transport;
 import dev.hearthside.core.compositor.TransportChoice;
 import dev.hearthside.core.compositor.ViewportMath;
+import dev.hearthside.core.compositor.VirtualSize;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.protocol.ControlMessage;
 import dev.hearthside.core.session.InWorldSignal;
@@ -28,6 +29,7 @@ import dev.hearthside.fabric.client.compositor.backend.ExportDevice;
 import dev.hearthside.fabric.client.compositor.backend.ExportedSlot;
 import dev.hearthside.fabric.client.compositor.backend.ImportFailed;
 import dev.hearthside.fabric.client.compositor.backend.SharedImages;
+import dev.hearthside.fabric.client.satellite.SessionOptions;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.DirectoryStream;
@@ -54,8 +56,12 @@ public final class FrameExporter {
 
 	private final Minecraft minecraft;
 	private final ControlConnection connection;
+	/** This game's player number (2 to 4), for the log. */
+	private final int player;
 	private final Path dir;
 	private final boolean pattern = "1".equals(System.getenv("HEARTHSIDE_E2E_PATTERN"));
+	/** E2E ({@link FrameHooks#SOLID_FRAMES}): the solid frames' alpha, or 0. */
+	private final int solidAlpha = FrameHooks.solidFramesAlpha();
 	private final InWorldSignal world = new InWorldSignal();
 	/** When this game last told the host it was in the world (0 once checked). */
 	private long liveSince;
@@ -75,15 +81,16 @@ public final class FrameExporter {
 	private int droppedFrames;
 	private long fpsWindowStart = System.nanoTime();
 
-	private FrameExporter(Minecraft minecraft, ControlConnection connection) {
+	private FrameExporter(Minecraft minecraft, ControlConnection connection, int player) {
 		this.minecraft = minecraft;
 		this.connection = connection;
+		this.player = player;
 		this.dir = minecraft.gameDirectory.toPath().toAbsolutePath();
 	}
 
-	/** Called once the control channel is up; any thread. */
-	public static void install(Minecraft minecraft, ControlConnection connection) {
-		instance = new FrameExporter(minecraft, connection);
+	/** Called once the control channel is up, for player {@code player} (2 to 4); any thread. */
+	public static void install(Minecraft minecraft, ControlConnection connection, int player) {
+		instance = new FrameExporter(minecraft, connection, player);
 		minecraft.execute(() -> instance.deleteOldFiles());
 	}
 
@@ -92,11 +99,26 @@ public final class FrameExporter {
 		return instance;
 	}
 
-	/** The host gave this player a viewport: render at its size, paced to the host's display. Render thread. */
-	public void onViewport(Rect rect, int refreshHz) {
-		VirtualSizing.apply(minecraft, ViewportMath.virtualSize(rect, 1.0));
-		minecraft.options.framerateLimit().set(Math.clamp(refreshHz, 10, 260));
-		reallocate(rect.width(), rect.height(), false);
+	/**
+	 * The host gave this player a viewport: render at the frame size it was sent (the view's own, or smaller under a
+	 * reduced render resolution; the host stretches it over the view) and at the party's GUI scale, paced to the host's
+	 * display. Render thread.
+	 */
+	public void onViewport(ControlMessage.SetViewport viewport) {
+		Rect rect = viewport.rect();
+		VirtualSize size = ViewportMath.virtualSize(new Rect(0, 0, viewport.frameWidth(), viewport.frameHeight()), 1.0);
+		boolean resizes = !VirtualSizing.current().equals(Optional.of(size));
+		boolean rescales = GuiScaleOverride.forced() != viewport.guiScale();
+		GuiScaleOverride.set(viewport.guiScale());
+		VirtualSizing.apply(minecraft, size);
+		if (rescales && !resizes) {
+			// Same size, new scale: lay the GUI out again (a new size does that by itself).
+			minecraft.resizeGui();
+		}
+		GuiScaleOverride.log(player, minecraft.getWindow(), rect.width(), rect.height());
+		// Paced to the host's display, or the preset's lower cap; for the session only, never the guest's own setting.
+		SessionOptions.limitFramerate(minecraft.options, viewport.refreshHz());
+		reallocate(size.framebufferWidth(), size.framebufferHeight(), false);
 	}
 
 	/**
@@ -125,7 +147,13 @@ public final class FrameExporter {
 			droppedFrames++;
 			return; // the host still holds every slot; drop this frame
 		}
-		current.draw(claimed.getAsInt(), mainColor, RenderSystem.getDevice().createCommandEncoder(), ++frame);
+		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
+		if (solidAlpha > 0) {
+			// E2E: the whole frame in one colour, the other one next frame, through the real export path.
+			encoder.clearColorTexture(mainColor.texture(),
+					FrameHooks.colour(frame % 2 == 0 ? FrameHooks.SOLID_A : FrameHooks.SOLID_B, solidAlpha));
+		}
+		current.draw(claimed.getAsInt(), mainColor, encoder, ++frame);
 		exportedFrames++;
 		observeWorld();
 	}
@@ -215,8 +243,9 @@ public final class FrameExporter {
 		}
 		if (choice == Transport.COPY) {
 			try {
-				current = new CopiedFrames(controlFile, table, width, height, pattern, this::deleteOldFiles);
-			} catch (RuntimeException e) {
+				current = new CopiedFrames(controlFile, table, width, height, pattern, FrameHooks.slowCopyMs(),
+						this::deleteOldFiles);
+			} catch (IOException | RuntimeException e) {
 				HearthsideMod.LOGGER.error("Could not set up the copy transport at {}", controlFile, e);
 				table.close();
 				return;
@@ -359,6 +388,12 @@ public final class FrameExporter {
 					ExportedSlot memory = device.export(description, name);
 					frames.exported[slot] = memory;
 					frames.textures[slot] = images.importSlot(description, memory.byHandle(), "hearthside slot " + name);
+					// Opaque black from the start, like every texture Hearthside creates. Nothing is published before a
+					// slot is fully drawn, and the host imports only once FrameSlotsReady is sent, so this can't race it.
+					CommandEncoder encoder = gpu.createCommandEncoder();
+					images.beforeUse(frames.textures[slot], encoder);
+					Canvas.startBlack(frames.textures[slot]);
+					images.afterUse(frames.textures[slot], encoder);
 					frames.views[slot] = gpu.createTextureView(frames.textures[slot]);
 					table.setMemorySize(slot, memory.allocationSize());
 					table.setMemoryType(slot, memory.memoryType());
@@ -425,33 +460,39 @@ public final class FrameExporter {
 
 	/**
 	 * The fallback: each frame is drawn into a texture of this game's own, read back into a slot's buffer, and copied
-	 * into that slot's region of the shared {@link PixelFile} from the readback's callback, which then publishes the slot.
-	 * A readback that lands after the generation was retired drops its frame; the pixel file, buffers and table are only
-	 * closed once no readback is still on its way (Review Focus 2).
+	 * into that slot's region of the shared {@link PixelMemory} from the readback's callback, which then publishes the
+	 * slot. A readback that lands after the generation was retired drops its frame; the pixel memory, buffers and table
+	 * are only closed once no readback is still on its way (Review Focus 2).
 	 */
 	private static final class CopiedFrames extends Frames {
-		private final PixelFile pixels;
+		private final PixelMemory pixels;
 		private final GpuTexture staging;
 		private final GpuTextureView stagingView;
 		private final GpuBuffer[] buffers;
 		private final boolean pattern;
+		/** E2E: the pause halfway through writing a frame into the pixel memory ({@link FrameHooks#SLOW_COPY_MS}). */
+		private final int slowCopyMs;
 		private final Runnable afterClose;
 		private int inFlight;
 		private boolean closeRequested;
 		private boolean closed;
 
-		CopiedFrames(Path controlFile, SegmentSlotTable table, int width, int height, boolean pattern, Runnable afterClose) {
+		CopiedFrames(Path controlFile, SegmentSlotTable table, int width, int height, boolean pattern, int slowCopyMs,
+				Runnable afterClose) throws IOException {
 			super(table, width, height);
 			this.pattern = pattern;
+			this.slowCopyMs = slowCopyMs;
 			this.afterClose = afterClose;
 			GpuDevice device = RenderSystem.getDevice();
-			PixelFile file = PixelFile.open(PixelFile.forControlFile(controlFile), width, height, table.slots());
+			// Created before FrameSlotsReady goes out: the host only ever opens it.
+			PixelMemory file = PixelMemory.create(controlFile.toString(), width, height, table.slots());
 			GpuTexture texture = null;
 			GpuBuffer[] readbacks = new GpuBuffer[table.slots()];
 			try {
 				texture = device.createTexture("hearthside export " + table.generation(),
 						GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_COPY_SRC
 								| GpuTexture.USAGE_COPY_DST, GpuFormat.RGBA8_UNORM, width, height, 1, 1);
+				Canvas.startBlack(texture);
 				long bytes = (long) width * height * 4;
 				for (int slot = 0; slot < readbacks.length; slot++) {
 					int index = slot;
@@ -480,7 +521,7 @@ public final class FrameExporter {
 		void draw(int slot, GpuTextureView source, CommandEncoder encoder, long frame) {
 			drawFrame(encoder, source, staging, stagingView, pattern);
 			inFlight++;
-			// Rows land bottom-up, as the texture stores them: the pixel file's layout.
+			// Rows land bottom-up, as the texture stores them: the pixel memory's layout.
 			encoder.copyTextureToBuffer(staging, buffers[slot], 0, () -> landed(slot, frame), 0);
 		}
 
@@ -492,7 +533,16 @@ public final class FrameExporter {
 					slots.abandon(slot);
 				} else {
 					try (GpuBufferSlice.MappedView read = buffers[slot].map(true, false)) {
-						pixels.region(slot).put(read.data());
+						ByteBuffer region = pixels.region(slot);
+						if (slowCopyMs > 0) {
+							// E2E: the first half of the rows, a pause, then the rest, as a slow machine might.
+							int half = height / 2 * width * 4;
+							region.put(read.data().slice(0, half));
+							FrameHooks.pause(slowCopyMs);
+							region.put(read.data().slice(half, region.capacity() - half));
+						} else {
+							region.put(read.data());
+						}
 					}
 					slots.publish(slot, frame);
 				}

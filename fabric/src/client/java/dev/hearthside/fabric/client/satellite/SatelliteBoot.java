@@ -64,14 +64,14 @@ public final class SatelliteBoot {
 			return;
 		}
 		minecraft.options.pauseOnLostFocus = false;
-		// Vanilla's first-play tutorial says "Move with W, A, S and D": wrong for someone on a controller.
-		minecraft.options.tutorialStep = net.minecraft.client.tutorial.TutorialSteps.NONE;
-		minecraft.getTutorial().setStep(net.minecraft.client.tutorial.TutorialSteps.NONE);
+		// Vanilla's keyboard tutorial toasts are filtered (ToastFilterMixin), never the tutorial step: setting it saves
+		// options, which would change the guest's own tutorial progress.
 		HearthsideMod.LOGGER.info("Hearthside satellite ignores OS keyboard and mouse");
 		// World audio plays once, from the host; per-player UI sounds return with Plan 5.
 		minecraft.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
-		// The host's render-distance cap, for this session only: a party has to fit on a laptop.
-		SatelliteRenderDistance.apply(minecraft);
+		// The host's preset (render-distance cap, light graphics, frame-rate cap), for this session only: a party has to
+		// fit on a laptop.
+		SessionOptions.applyForGuest(minecraft);
 
 		applier = new InputApplier(minecraft);
 		FrameHook.register(applier::onFrame);
@@ -97,7 +97,7 @@ public final class SatelliteBoot {
 			return;
 		}
 		if (!Presentation.satelliteTiled()) {
-			FrameExporter.install(minecraft, connection);
+			FrameExporter.install(minecraft, connection, index + 1);
 		}
 		connection.onMessage(message -> handle(minecraft, message));
 		connection.onClose(() -> {
@@ -113,7 +113,7 @@ public final class SatelliteBoot {
 			case ControlMessage.SetViewport m -> minecraft.execute(() -> {
 				FrameExporter exporter = FrameExporter.instance();
 				if (exporter != null) {
-					exporter.onViewport(m.rect(), m.refreshHz());
+					exporter.onViewport(m);
 				} else {
 					WindowPlacer.place(minecraft.getWindow(), m.rect());
 				}

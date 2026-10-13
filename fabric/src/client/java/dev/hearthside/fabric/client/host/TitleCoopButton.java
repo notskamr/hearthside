@@ -63,9 +63,20 @@ public final class TitleCoopButton {
 	}
 
 	private static void openLobby(Minecraft minecraft, TitleScreen title) {
+		// The controller that pressed Co-op (if one did) becomes player 1's, even when the Vulkan offer comes first:
+		// not the one that answers it.
+		Integer pad = TitleInput.pressingPad();
+		if (!VulkanOfferScreen.offerBefore(minecraft, title, answering -> openLobby(minecraft, title, pad, answering))) {
+			openLobby(minecraft, title, pad, null);
+		}
+	}
+
+	/** @param answering the controller that answered the offer, still holding its button (null for none) */
+	private static void openLobby(Minecraft minecraft, TitleScreen title, Integer pad, Integer answering) {
 		try {
-			// The controller that pressed Co-op (if one did) becomes player 1's.
-			minecraft.gui.setScreen(new LobbyScreen(title, Party.openLobby(minecraft, TitleInput.pressingPad())));
+			Party party = Party.openLobby(minecraft, pad);
+			party.answeringPad = answering;
+			minecraft.gui.setScreen(new LobbyScreen(title, party));
 		} catch (IOException e) {
 			HearthsideMod.LOGGER.error("Hearthside could not start a co-op party", e);
 		}
