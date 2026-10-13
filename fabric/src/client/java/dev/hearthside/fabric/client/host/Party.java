@@ -1733,7 +1733,42 @@ public final class Party {
 		apply(flow.tick());
 	}
 
+	// ---- Add player (player 1's pause menu, Spec E section 3.4) ----
+
+	/** Whether the Add player prompt is up: a free controller's single A joins. Render thread. */
+	private boolean addPlayerShowing;
+
+	/**
+	 * Whether every guest seat is taken, however the guests came (plan R3: Add player is greyed out). Render thread.
+	 */
+	public boolean partyFull() {
+		return nextFreeIndex() < 0 || flow.partyFull();
+	}
+
+	/** Player 1 chose Add player: for 15 s one A on a free controller joins. Nothing with a full party. Render thread. */
+	public void openAddPlayer() {
+		if (!partyFull()) {
+			apply(flow.addPlayer());
+		}
+	}
+
+	public boolean addPlayerShowing() {
+		return addPlayerShowing;
+	}
+
+	/** Player 1's B or Esc while the prompt is up. Render thread. */
+	public void cancelAddPlayer() {
+		apply(flow.cancelAddPlayer(), "cancelled");
+	}
+
 	private void apply(JoinFlow.Result result) {
+		// The flow hides the Add player prompt as a newcomer takes a seat (in the same result) or, from its tick, as it ends.
+		boolean joined = result.effects().stream().anyMatch(e -> e instanceof JoinFlow.Effect.ClaimSeat);
+		apply(result, joined ? "joined" : "expired");
+	}
+
+	/** {@code hidden}: why an Add player prompt in {@code result} closed, for the log. */
+	private void apply(JoinFlow.Result result, String hidden) {
 		for (JoinFlow.Effect effect : result.effects()) {
 			switch (effect) {
 				case JoinFlow.Effect.ShowJoinPrompt prompt -> joinToast.show(prompt.controller(),
@@ -1771,9 +1806,20 @@ public final class Party {
 				// A crackle as the fire takes another player.
 				case JoinFlow.Effect.ClaimSeat claim -> dev.hearthside.fabric.client.ui.HearthSounds.play(
 						dev.hearthside.fabric.client.ui.HearthSounds.Ui.JOIN);
-				// Not wired yet: Add player (plan 5c2a Task 5).
-				case JoinFlow.Effect.ShowAddPlayerPrompt show -> { }
-				case JoinFlow.Effect.HideAddPlayerPrompt hide -> { }
+				case JoinFlow.Effect.ShowAddPlayerPrompt show -> {
+					addPlayerShowing = true;
+					HearthsideMod.LOGGER.info("Hearthside add player prompt shown");
+					// Its line follows the free controllers as they come and go.
+					joinToast.showAddPlayer(System.nanoTime(), JoinFlow.ADD_PLAYER_WINDOW, hostReduceMotion, () -> {
+						HostInput current = input;
+						return current == null || current.freePadCount() == 0 ? null : current.freePadStyle();
+					});
+				}
+				case JoinFlow.Effect.HideAddPlayerPrompt hide -> {
+					addPlayerShowing = false;
+					HearthsideMod.LOGGER.info("Hearthside add player prompt {}", hidden);
+					joinToast.hideAddPlayer(System.nanoTime());
+				}
 			}
 		}
 	}

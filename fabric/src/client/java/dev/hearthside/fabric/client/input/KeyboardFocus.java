@@ -162,6 +162,11 @@ public final class KeyboardFocus {
 		return false;
 	}
 
+	/** A press of {@code key} that Hearthside took elsewhere: its repeats are swallowed as in {@link #heldRepeat}. */
+	public static void swallowRepeats(int key) {
+		heldKey = key;
+	}
+
 	/** F1 to F24 (fullscreen, screenshots, the debug screen): never typing, so always player 1's own. */
 	private static boolean functionKey(int key) {
 		return key >= InputConstants.KEY_F1 && key <= InputConstants.KEY_F12

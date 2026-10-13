@@ -4509,6 +4509,8 @@ public final class E2eDriver {
 			// (b) The prompt expires after 15 s.
 			chooseAddPlayer();
 			waitFor("the add-player prompt", Duration.ofSeconds(5), () -> hostLogSince(mark).contains("hearthside add player prompt shown"));
+			Thread.sleep(400); // slid into place
+			windowShot("add-player-connect"); // no free controller yet: "Connect a controller, then press A"
 			jumpJoinClock(16);
 			waitFor("(b) the prompt expired", Duration.ofSeconds(5),
 					() -> hostLogSince(mark).contains("hearthside add player prompt expired"));
@@ -4518,6 +4520,8 @@ public final class E2eDriver {
 			Thread.sleep(300);
 			long joined = hostLogLength();
 			chooseAddPlayer();
+			Thread.sleep(400);
+			windowShot("add-player"); // "Press A on a new controller to join"
 			press(ADD_PAD, PadButton.A);
 			waitFor("(a) one A joins: a newcomer choosing a profile", Duration.ofSeconds(5),
 					() -> onRender(() -> card(2) != null));
@@ -4762,9 +4766,11 @@ public final class E2eDriver {
 			press(HOST_PAD, PadButton.START);
 			waitFor("player 1's pause menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
 			check(onRender(this::focusedLabel).equals("Resume"), "it opens on Resume (got " + onRender(this::focusedLabel) + ")");
-			// Player 1's menu has Split-screen… between Resume and Options… (Spec E section 3.5).
+			// Player 1's menu has Add player, then Split-screen…, between Resume and Options… (Spec E sections 3.4, 3.5).
 			press(HOST_PAD, PadButton.DPAD_DOWN);
-			check(onRender(this::focusedLabel).equals("Split-screen…"), "the D-pad moves to Split-screen… (got " + onRender(this::focusedLabel) + ")");
+			check(onRender(this::focusedLabel).equals("Add player"), "the D-pad moves to Add player (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check(onRender(this::focusedLabel).equals("Split-screen…"), "then Split-screen… (got " + onRender(this::focusedLabel) + ")");
 			press(HOST_PAD, PadButton.DPAD_DOWN);
 			check(onRender(this::focusedLabel).equals("Options…"), "and on to Options… (got " + onRender(this::focusedLabel) + ")");
 			press(HOST_PAD, PadButton.A);
@@ -4773,7 +4779,7 @@ public final class E2eDriver {
 			waitFor("B from Options back to the menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
 			check(onRender(this::focusedLabel).equals("Resume"), "back on Resume (got " + onRender(this::focusedLabel) + ")");
 
-			for (int i = 0; i < 4; i++) {
+			for (int i = 0; i < 5; i++) {
 				press(HOST_PAD, PadButton.DPAD_DOWN);
 			}
 			check(onRender(this::focusedLabel).equals("Leave game"), "the D-pad reaches Leave game (got " + onRender(this::focusedLabel) + ")");
