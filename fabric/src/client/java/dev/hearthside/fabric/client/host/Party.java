@@ -21,6 +21,7 @@ import dev.hearthside.core.launch.LaunchCommand;
 import dev.hearthside.core.launch.LaunchCommandBuilder;
 import dev.hearthside.core.launch.SatelliteLaunch;
 import dev.hearthside.core.launch.UnsupportedLauncherException;
+import dev.hearthside.core.layout.BorderStyle;
 import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
@@ -189,6 +190,11 @@ public final class Party {
 		volatile ControlConnection connection;
 		/** The frame-slot generation this guest's game announced last, as it arrived (ahead of the import it queues). */
 		volatile int announcedGeneration;
+		/**
+		 * Whether this guest renders at a reduced resolution: the party's preset as their game launched. A preset player 1
+		 * chooses later waits for the next player to join (Spec E section 5).
+		 */
+		volatile boolean reducedResolution;
 
 		Slot(int index, GuestProfile profile) {
 			this.index = index;
@@ -646,9 +652,13 @@ public final class Party {
 			// A chosen preset replaces Auto's choice; back to Auto, the party's own Auto choice again (plan R5).
 			preset = next.preset() != Preset.AUTO ? next.preset() : autoChoice != null ? autoChoice : choosePreset();
 		}
-		views.settings(next.layout());
-		if (!sameArrangement(before.layout(), next.layout())) {
+		LayoutSettings was = before.layout(), now = next.layout();
+		views.settings(now);
+		if (!sameArrangement(was, now)) {
 			afterGuestsChanged();
+		} else if (!was.nameTags() && now.nameTags() || was.borders() == BorderStyle.OFF && now.borders() != BorderStyle.OFF) {
+			// Back on: shown at once, so player 1 sees the setting take.
+			views.showTags(System.nanoTime());
 		}
 	}
 
@@ -719,6 +729,7 @@ public final class Party {
 				Path dir = SatelliteDirectories.prepare(gameDir, index);
 				// The party's preset, for this game's session: a drop-in gets the same as everyone (plan R5).
 				SessionTuning tuning = tuning();
+				slot.reducedResolution = tuning.reducedResolution();
 				LaunchCommand command = LaunchCommandBuilder.build(host,
 						// A placeholder: the seat's game takes its player's name when sent into the world.
 						new SatelliteLaunch(index, controlServer.port(), dir, "Seat" + index, slot.secret, presentation(),
@@ -2009,8 +2020,7 @@ public final class Party {
 			minecraft.resizeGui();
 		}
 		views.target(0).ifPresent(host -> GuiScaleOverride.log(1, window, host.width(), host.height()));
-		// Guests only, even when player 1 takes the preset (plan R4).
-		boolean reducedResolution = tuning().reducedResolution();
+		// Guests only, even when player 1 takes the preset (plan R4); each at the resolution they launched with.
 		for (Slot guest : guests) {
 			ControlConnection connection = guest.connection;
 			Rect target = views.target(guest.index).orElse(null);
@@ -2018,7 +2028,7 @@ public final class Party {
 				continue;
 			}
 			ControlMessage.SetViewport viewport = partyScale < 1 ? new ControlMessage.SetViewport(target, refresh)
-					: viewport(target, refresh, GuiScaleRule.forView(target, partyScale, reducedResolution));
+					: viewport(target, refresh, GuiScaleRule.forView(target, partyScale, guest.reducedResolution));
 			views.sentFrame(guest.index, new Rect(0, 0, viewport.frameWidth(), viewport.frameHeight()));
 			send(connection, viewport);
 		}

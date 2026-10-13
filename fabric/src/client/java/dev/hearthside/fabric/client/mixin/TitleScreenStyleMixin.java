@@ -16,7 +16,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * The title screen's background in the Cozy-hearth style instead of the panorama (host only; Spec A section 4.1), or
- * Minecraft's own if player 1 chose it (Spec E section 3.5): each title screen takes the setting as it is created.
+ * Minecraft's own if player 1 chose it (Spec E section 3.5): the title screen takes the setting each time it is shown,
+ * including the same one shown again (Mod Menu's Configure goes back to the title screen it came from).
  */
 @Mixin(TitleScreen.class)
 public abstract class TitleScreenStyleMixin extends Screen {
@@ -24,7 +25,7 @@ public abstract class TitleScreenStyleMixin extends Screen {
 		super(null);
 	}
 
-	@Inject(method = "<init>(ZLnet/minecraft/client/gui/components/LogoRenderer;)V", at = @At("TAIL"))
+	@Inject(method = "init", at = @At("HEAD"))
 	private void hearthside$style(CallbackInfo ci) {
 		if (HearthsideClient.role() != Role.HOST) {
 			return;

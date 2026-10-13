@@ -58,6 +58,8 @@ public final class SplitScreenScreen extends Screen implements PadScreen {
 	/** Where the sections' headings and the swap rows' names go, laid out in {@link #init}. */
 	private int columnW, leftX, rightX, rowH, rowGap, liveHeadingY, swapHeadingY, nextHeadingY, captionY;
 	private final List<int[]> swapNames = new ArrayList<>();
+	/** The view order Swap views lists. */
+	private List<Integer> shownOrder = List.of();
 
 	public SplitScreenScreen(Screen parent) {
 		super(Component.literal("Split-screen"));
@@ -143,6 +145,7 @@ public final class SplitScreenScreen extends Screen implements PadScreen {
 		leftX = width / 2 - columnW - 5;
 		rightX = width / 2 + 5;
 		List<Integer> order = viewOrder();
+		shownOrder = order;
 		// The live column is the taller: shrink the rows a little where the view is short (a stacked split).
 		int liveRows = 7 + order.size();
 		int room = height - 26 - TOP - 2 * HEADING_H - (order.isEmpty() ? 0 : SECTION_GAP);
@@ -235,11 +238,40 @@ public final class SplitScreenScreen extends Screen implements PadScreen {
 		}
 		List<Integer> order = party.viewOrder();
 		party.setViewOrder(step < 0 ? ViewOrder.earlier(order, seat) : ViewOrder.later(order, seat));
-		rebuildWidgets();
+		rebuildKeepingFocus();
 		Map<Integer, Button> buttons = swaps.get(seat);
-		if (buttons != null) {
-			Button same = buttons.get(step);
-			setFocused(same.active ? same : buttons.get(-step));
+		if (buttons != null && !buttons.get(step).active) {
+			// They're first or last now: the other way is the one left.
+			setFocused(buttons.get(-step));
+		}
+	}
+
+	/** Swap views follows players joining and leaving while the screen is open. */
+	@Override
+	public void tick() {
+		super.tick();
+		if (!viewOrder().equals(shownOrder)) {
+			rebuildKeepingFocus();
+		}
+	}
+
+	/** Lays the screen out again, the focus staying on the same setting, or on the same player's swap button. */
+	private void rebuildKeepingFocus() {
+		var focused = getFocused();
+		int row = rows.indexOf(focused);
+		int[] swap = null;
+		for (Map.Entry<Integer, Map<Integer, Button>> seat : swaps.entrySet()) {
+			for (Map.Entry<Integer, Button> step : seat.getValue().entrySet()) {
+				if (step.getValue() == focused) {
+					swap = new int[] {seat.getKey(), step.getKey()};
+				}
+			}
+		}
+		rebuildWidgets();
+		if (row >= 0 && row < rows.size()) {
+			setFocused(rows.get(row));
+		} else if (swap != null && swaps.containsKey(swap[0])) {
+			setFocused(swaps.get(swap[0]).get(swap[1]));
 		}
 	}
 

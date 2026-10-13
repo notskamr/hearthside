@@ -12,12 +12,12 @@ public final class TitleStyle {
 	private static final EmberLayer EMBERS = new EmberLayer(29, 50);
 	/** Set once each part has been drawn (the E2E checks the style is applied). */
 	public static volatile boolean drewBackground, drewButtons;
-	/** The style of the title screen open now, as the setting was when it opened. */
+	/** The style of the title screen open now, as the setting was when it was shown. */
 	private static volatile TitleStyleSetting style = TitleStyleSetting.HEARTHSIDE;
 
 	private TitleStyle() {}
 
-	/** A title screen is opening: it keeps this style until the next one opens. */
+	/** A title screen is being shown (a new one, or the same one again): it keeps this style until it is shown next. */
 	public static void opening(TitleStyleSetting setting) {
 		style = setting;
 	}

@@ -152,6 +152,11 @@ final class Views implements ViewSource {
 		return changedAt;
 	}
 
+	/** Name tags or borders came back on: the tags show again for a while, as after a layout change. */
+	void showTags(long now) {
+		changedAt = now;
+	}
+
 	/** Where the party panel is drawn now, and how opaque: it fades in as it appears and out as it goes. */
 	record PanelDraw(Rect rect, float alpha) {}
 
