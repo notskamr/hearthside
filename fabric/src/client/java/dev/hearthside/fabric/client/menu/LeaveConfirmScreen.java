@@ -3,6 +3,7 @@ package dev.hearthside.fabric.client.menu;
 import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.input.MenuNav;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.ui.DrawsOwnSelection;
 import dev.hearthside.fabric.client.ui.HearthButton;
 import dev.hearthside.fabric.client.ui.HearthDraw;
 import dev.hearthside.fabric.client.ui.HintChip;
@@ -15,7 +16,7 @@ import net.minecraft.util.FormattedCharSequence;
  * Player 1's Leave game asks first (Spec E section 3.1), since everyone's game closes with theirs: a Cozy-hearth card
  * over the world. Leave is vanilla's Save and Quit; Keep playing (or Esc, or B) goes back to the pause menu.
  */
-final class LeaveConfirmScreen extends Screen implements PadScreen {
+final class LeaveConfirmScreen extends Screen implements PadScreen, DrawsOwnSelection {
 	static final Component TITLE = Component.literal("Leave the world? Everyone's game will close.");
 	/** The title as the card shows it: the question, then what it means, each on its own line(s). */
 	private static final Component QUESTION = Component.literal("Leave the world?"),

@@ -81,13 +81,13 @@ public final class MenuNavigator {
 	}
 
 	/**
-	 * The focused widget's outline in the driver's colour, while a controller (or the arrow keys) moved it. Hearthside's
-	 * own buttons light up as the selection themselves: no second ring around them.
+	 * The focused widget's outline in the driver's colour, while a controller (or the arrow keys) moved it. The pause
+	 * menu's buttons light up as the selection themselves: no second ring around them.
 	 */
 	private static void outline(Minecraft minecraft, Screen screen, GuiGraphicsExtractor g) {
 		if (minecraft.getLastInputType() != InputType.KEYBOARD_ARROW
 				|| !(screen.getFocused() instanceof AbstractWidget widget) || !widget.visible
-				|| widget instanceof DrawsOwnSelection) {
+				|| widget instanceof DrawsOwnSelection || screen instanceof DrawsOwnSelection) {
 			return;
 		}
 		g.outline(widget.getX() - 2, widget.getY() - 2, widget.getWidth() + 4, widget.getHeight() + 4,
