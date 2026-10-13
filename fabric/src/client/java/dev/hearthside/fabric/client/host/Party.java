@@ -136,6 +136,10 @@ public final class Party {
 	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
 			Thread.ofPlatform().daemon().name("hearthside-restarts").factory());
 	private final Map<Integer, Slot> slots = new ConcurrentSkipListMap<>();
+	/** By seat, the games of guests who left, asked to quit and still given time to close themselves ({@link #endSlot}). */
+	private final Map<Integer, SatelliteSupervisor> quitting = new ConcurrentHashMap<>();
+	/** How long a leaving guest's game has to close itself before it is killed. */
+	private static final Duration QUIT_GRACE = Duration.ofSeconds(5);
 	private final Thread shutdownHook = new Thread(this::stopAllSatellites, "hearthside-shutdown");
 	/** The controller loop; created and used on the render thread. */
 	private volatile HostInput input;
@@ -743,6 +747,11 @@ public final class Party {
 		// The seat may still be fading out from whoever had it last: the newcomer starts afresh.
 		leaving.remove(index);
 		phases.remove(index);
+		// Its last game may still be closing, in the folder the newcomer's game uses: it goes now.
+		SatelliteSupervisor closing = quitting.remove(index);
+		if (closing != null) {
+			closing.stop();
+		}
 
 		Slot slot = new Slot(index, profile);
 		Path satelliteDir = gameDir.resolve("hearthside").resolve("satellite-" + index);
@@ -823,6 +832,9 @@ public final class Party {
 			endSlot(slot);
 		}
 		slots.clear();
+		// The party's done: nothing is left to fade or wait for, and nothing may outlive it.
+		quitting.values().forEach(SatelliteSupervisor::stop);
+		quitting.clear();
 		controlServer.close();
 		scheduler.shutdownNow();
 		WorldLink link = world;
@@ -851,16 +863,31 @@ public final class Party {
 		HearthsideMod.LOGGER.info("Hearthside session closed");
 	}
 
+	/**
+	 * Stops a guest's game: asked to quit, it gets {@link #QUIT_GRACE} to close itself before it is killed. Killing a
+	 * game mid-frame stalls player 1's game on the GPU for longer than a leaving view takes to fade out (D5); one that
+	 * quits by itself does not. Any thread.
+	 */
 	private void endSlot(Slot slot) {
 		ControlConnection connection = slot.connection;
+		boolean asked = false;
 		if (connection != null) {
 			try {
 				connection.send(new ControlMessage.Lifecycle(LifecycleCommand.QUIT));
+				asked = true;
 			} catch (IOException ignored) {
 				// the supervisor stops the process regardless
 			}
 		}
-		slot.supervisor.stop();
+		if (!asked) {
+			slot.supervisor.stop();
+			return;
+		}
+		slot.supervisor.stopAfter(QUIT_GRACE);
+		SatelliteSupervisor before = quitting.put(slot.index, slot.supervisor);
+		if (before != null && before != slot.supervisor) {
+			before.stop();
+		}
 	}
 
 	// ---- Join flow: controllers joining with A, A (Spec A section 3.2) ----
@@ -2135,6 +2162,7 @@ public final class Party {
 		for (Slot slot : slots.values()) {
 			slot.supervisor.stop();
 		}
+		quitting.values().forEach(SatelliteSupervisor::stop);
 	}
 
 	private HelloVerdict verifyHello(ControlMessage.Hello hello) {
