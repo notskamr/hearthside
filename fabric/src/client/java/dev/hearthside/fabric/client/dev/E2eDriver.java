@@ -2708,6 +2708,15 @@ public final class E2eDriver {
 			pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> screen.focusedRow().equals("name"));
 			press(HOST_PAD, PadButton.A);
 			check(onRender(screen::typing), "A on the name opens the keyboard");
+			// Player 1's PC keyboard on it (Spec E section 3.6): a held Backspace deletes three, Enter keeps the name.
+			String before = onRender(screen::worldName);
+			pcHoldKey(InputConstants.KEY_BACKSPACE, 2);
+			pcKey(InputConstants.KEY_RETURN);
+			String kept = onRender(screen::worldName);
+			check(kept.equals(before.substring(0, before.length() - 3)) && !onRender(screen::typing),
+					"a held Backspace deleted three characters and Enter kept the name (" + before + " → " + kept + ")");
+			press(HOST_PAD, PadButton.A);
+			check(onRender(screen::typing), "A on the name opens the keyboard again");
 			press(HOST_PAD, PadButton.B);
 			Thread.sleep(600);
 			check(onRender(() -> minecraft.gui.screen() == screen && !screen.typing()),
@@ -3970,7 +3979,8 @@ public final class E2eDriver {
 	 * N8, the lobby half (Spec E section 3.6): player 1's PC keyboard types into a lobby card's name keyboard alongside
 	 * the controller. Letters replace the suggestion, Backspace deletes, a character a name can't have changes nothing,
 	 * Enter accepts the name. SDL text input is on while the card types (else no characters arrive), a space never presses
-	 * a focused lobby button, and a held Esc backs out of the keyboard once. The in-world half is N8b.
+	 * a focused lobby button, a held Backspace keeps deleting and a held Esc backs out of the keyboard once. The in-world
+	 * half is N8b.
 	 */
 	private void pcKeyboardTypesIntoTheLobbyCard() throws Exception {
 		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
@@ -3996,11 +4006,13 @@ public final class E2eDriver {
 			check(spaced.equals("Robin_"), "a space typed _ into the name (got " + spaced + ")");
 			check(!onRender(() -> Party.current().hostClaimArmed() || Party.current().hostHasController()),
 					"and didn't press + Controller, which had focus");
-			pcKey(InputConstants.KEY_BACKSPACE);
-			pcKey(InputConstants.KEY_BACKSPACE);
-			pcType("#");
+			// Held Backspace: a press and two repeats delete three characters, as in a text box.
+			pcHoldKey(InputConstants.KEY_BACKSPACE, 2);
+			String held = onRender(() -> card(1).keyboard().text());
+			check(held.equals("Rob"), "a held Backspace (a press, two repeats) deleted three characters (got " + held + ")");
+			pcType("i#");
 			String typed = onRender(() -> card(1).keyboard().text());
-			check(typed.equals("Robi"), "the PC keyboard typed Robin, deleted the n and refused # (got " + typed + ")");
+			check(typed.equals("Robi"), "the PC keyboard typed i and refused # (got " + typed + ")");
 			pcKey(InputConstants.KEY_RETURN);
 			check(onRender(() -> card(1).setup().step()) == QuickSetup.Step.SKIN, "Enter accepts the typed name");
 			waitFor("text input off once the keyboard closed", Duration.ofSeconds(2), () -> !textInputActive());
@@ -4130,6 +4142,20 @@ public final class E2eDriver {
 			}
 		}
 		return seats;
+	}
+
+	/** Player 1's PC keyboard holding {@code key} down: its press, {@code repeats} of the OS's key repeats, its release. */
+	private void pcHoldKey(int key, int repeats) throws Exception {
+		onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, new KeyEvent(key, 0, 0));
+			for (int i = 0; i < repeats; i++) {
+				minecraft.keyboardHandler.keyPress(window, InputConstants.REPEAT, new KeyEvent(key, 0, 0));
+			}
+			minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, new KeyEvent(key, 0, 0));
+			return null;
+		});
+		Thread.sleep(100);
 	}
 
 	/** Whether SDL delivers typed characters to player 1's window now (text input on). */
