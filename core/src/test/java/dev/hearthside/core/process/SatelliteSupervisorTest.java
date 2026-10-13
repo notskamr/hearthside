@@ -114,6 +114,51 @@ class SatelliteSupervisorTest {
 	}
 
 	@Test
+	void stopAfterLetsTheProcessEndByItself() throws Exception {
+		// Asked to quit, the game ends on its own: never killed mid-frame, never restarted, nothing reported.
+		supervisor.start();
+		FakeProcess p = launcher.last();
+		supervisor.stopAfter(Duration.ofSeconds(5));
+		assertThat(p.destroyed).isFalse();
+		assertThat(supervisor.isRunning()).isFalse();
+		p.exit.complete(0);
+		scheduler.runNext();
+		assertThat(p.destroyed).isFalse();
+		assertThat(events).containsExactly("started");
+		assertThat(launcher.attempts).isEqualTo(1);
+	}
+
+	@Test
+	void stopAfterEndsAProcessStillRunningOnceTheGraceIsOver() throws Exception {
+		supervisor.start();
+		FakeProcess p = launcher.last();
+		supervisor.stopAfter(Duration.ofSeconds(5));
+		scheduler.runNext();
+		assertThat(p.destroyed).isTrue();
+		assertThat(events).containsExactly("started");
+		assertThat(launcher.attempts).isEqualTo(1);
+	}
+
+	@Test
+	void stopEndsAProcessStillQuittingAtOnce() throws Exception {
+		supervisor.start();
+		FakeProcess p = launcher.last();
+		supervisor.stopAfter(Duration.ofSeconds(5));
+		supervisor.stop();
+		assertThat(p.destroyed).isTrue();
+	}
+
+	@Test
+	void aCrashWhileQuittingIsNotRestarted() throws Exception {
+		supervisor.start();
+		supervisor.stopAfter(Duration.ofSeconds(5));
+		launcher.last().crash();
+		assertThat(events).containsExactly("started");
+		scheduler.runNext();
+		assertThat(launcher.attempts).isEqualTo(1);
+	}
+
+	@Test
 	void stopDuringBackoffNeverRelaunches() throws Exception {
 		supervisor.start();
 		launcher.last().crash();

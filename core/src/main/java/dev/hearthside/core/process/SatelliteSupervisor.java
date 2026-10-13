@@ -13,7 +13,7 @@ import java.util.function.Supplier;
 
 /**
  * Keeps one satellite process running: restarts it after crashes per {@link RestartPolicy}, gives
- * up when the policy says so, and never launches anything after {@link #stop()}.
+ * up when the policy says so, and never launches anything after {@link #stop()} or {@link #stopAfter}.
  */
 public final class SatelliteSupervisor {
 	private static final System.Logger LOG = System.getLogger(SatelliteSupervisor.class.getName());
@@ -41,6 +41,8 @@ public final class SatelliteSupervisor {
 	/** Bumped by stop(), so restarts scheduled before it become no-ops. */
 	private int generation;
 	private RunningProcess current;
+	/** Asked to quit by {@link #stopAfter}, and given until its grace is over to end by itself; null when none. */
+	private RunningProcess quitting;
 	private Instant startedAt;
 	private int consecutiveFailures;
 
@@ -68,6 +70,43 @@ public final class SatelliteSupervisor {
 		current = null;
 		if (process != null) {
 			process.destroy();
+		}
+		RunningProcess asked = quitting;
+		quitting = null;
+		if (asked != null && asked.isAlive()) {
+			asked.destroy();
+		}
+	}
+
+	/**
+	 * As {@link #stop()}, for a process already asked to quit: it is left to end by itself, and forcibly ended only if it
+	 * is still running after {@code grace} (or at a {@link #stop()} before then). Killing a game mid-frame stalls every
+	 * other game on the GPU for a moment; one that quits by itself does not.
+	 */
+	public synchronized void stopAfter(Duration grace) {
+		stopped = true;
+		generation++;
+		RunningProcess process = current;
+		current = null;
+		if (process == null) {
+			return;
+		}
+		quitting = process;
+		try {
+			scheduler.schedule(() -> endQuitting(process), grace);
+		} catch (RuntimeException e) {
+			// Nothing to wait with (shutting down): end it now rather than leave it running.
+			quitting = null;
+			process.destroy();
+		}
+	}
+
+	private synchronized void endQuitting(RunningProcess process) {
+		if (quitting == process) {
+			quitting = null;
+			if (process.isAlive()) {
+				process.destroy();
+			}
 		}
 	}
 
