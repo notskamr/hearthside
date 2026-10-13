@@ -4231,15 +4231,18 @@ public final class E2eDriver {
 			press(HOST_PAD, PadButton.START);
 			waitFor("player 1's pause menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
 			check(onRender(this::focusedLabel).equals("Resume"), "it opens on Resume (got " + onRender(this::focusedLabel) + ")");
+			// Player 1's menu has Split-screen… between Resume and Options… (Spec E section 3.5).
 			press(HOST_PAD, PadButton.DPAD_DOWN);
-			check(onRender(this::focusedLabel).equals("Options…"), "the D-pad moves to Options… (got " + onRender(this::focusedLabel) + ")");
+			check(onRender(this::focusedLabel).equals("Split-screen…"), "the D-pad moves to Split-screen… (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check(onRender(this::focusedLabel).equals("Options…"), "and on to Options… (got " + onRender(this::focusedLabel) + ")");
 			press(HOST_PAD, PadButton.A);
 			waitFor("vanilla's Options", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof OptionsScreen));
 			press(HOST_PAD, PadButton.B);
 			waitFor("B from Options back to the menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
 			check(onRender(this::focusedLabel).equals("Resume"), "back on Resume (got " + onRender(this::focusedLabel) + ")");
 
-			for (int i = 0; i < 3; i++) {
+			for (int i = 0; i < 4; i++) {
 				press(HOST_PAD, PadButton.DPAD_DOWN);
 			}
 			check(onRender(this::focusedLabel).equals("Leave game"), "the D-pad reaches Leave game (got " + onRender(this::focusedLabel) + ")");

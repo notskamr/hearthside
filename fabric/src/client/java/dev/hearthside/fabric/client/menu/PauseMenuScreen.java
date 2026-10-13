@@ -7,6 +7,7 @@ import dev.hearthside.core.input.PadButton;
 import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.HearthsideClient;
 import dev.hearthside.fabric.client.host.Party;
+import dev.hearthside.fabric.client.host.SplitScreenScreen;
 import dev.hearthside.fabric.client.ui.GlassButton;
 import dev.hearthside.fabric.client.ui.HearthDraw;
 import dev.hearthside.fabric.client.ui.HintChip;
@@ -34,7 +35,8 @@ import net.minecraft.network.chat.Component;
 public final class PauseMenuScreen extends Screen implements PadScreen {
 	private static final Component TITLE = Component.literal("Paused");
 	private static final Component RESUME = Component.literal("Resume"), OPTIONS = Component.literal("Options…"),
-			GAME_MENU = Component.literal("Game menu…"), LEAVE = Component.literal("Leave game");
+			GAME_MENU = Component.literal("Game menu…"), LEAVE = Component.literal("Leave game"),
+			SPLIT_SCREEN = Component.literal("Split-screen…");
 	private static final int BUTTON_W = 150, BUTTON_H = 20, GAP = 4, PAD = 10, MARGIN = 6, HINT_GAP = 4;
 	/** The hotbar and experience bar at the bottom of the view, kept clear. */
 	private static final int HUD = 30;
@@ -68,6 +70,10 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 		entries.add(new Entry(OPTIONS, () -> minecraft.gui.setScreen(new OptionsScreen(this, minecraft.options)), true));
 		entries.add(new Entry(GAME_MENU, this::openGameMenu, true));
 		entries.add(new Entry(LEAVE, this::leave, true));
+		if (!guest) {
+			// Player 1's split-screen settings, applied live (Spec E section 3.5); guests' menus don't have them.
+			addEntry(1, SPLIT_SCREEN, () -> minecraft.gui.setScreen(new SplitScreenScreen(this)), true);
+		}
 	}
 
 	/**
@@ -101,7 +107,8 @@ public final class PauseMenuScreen extends Screen implements PadScreen {
 	 */
 	public void addEntry(int index, Component label, Runnable action, boolean active) {
 		entries.add(Math.clamp(index, 0, entries.size()), new Entry(label, action, active));
-		if (minecraft.gui.screen() == this) {
+		// Shown already: lay the column out again (before then, init does).
+		if (minecraft != null && minecraft.gui != null && minecraft.gui.screen() == this) {
 			rebuildWidgets();
 		}
 	}

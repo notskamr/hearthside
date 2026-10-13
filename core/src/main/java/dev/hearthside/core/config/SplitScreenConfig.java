@@ -22,8 +22,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalInt;
 
@@ -126,6 +128,38 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 
 	public SplitScreenConfig withTitleStyle(TitleStyleSetting value) {
 		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, layout, preset, presetForPlayer1, vulkanOffer, value);
+	}
+
+	public SplitScreenConfig withGuestMemoryMb(int value) {
+		return new SplitScreenConfig(value, guestRenderDistance, layout, preset, presetForPlayer1, vulkanOffer, titleStyle);
+	}
+
+	public SplitScreenConfig withGuestRenderDistance(int value) {
+		return new SplitScreenConfig(guestMemoryMb, value, layout, preset, presetForPlayer1, vulkanOffer, titleStyle);
+	}
+
+	public SplitScreenConfig withPreset(Preset value) {
+		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, layout, value, presetForPlayer1, vulkanOffer,
+				titleStyle);
+	}
+
+	public SplitScreenConfig withPresetForPlayer1(boolean value) {
+		return new SplitScreenConfig(guestMemoryMb, guestRenderDistance, layout, preset, value, vulkanOffer, titleStyle);
+	}
+
+	/**
+	 * The fields that differ from {@code before}, in the file's order, each as the file writes it: key to value (a string
+	 * without its quotes), such as {@code twoPlayerLayout=stacked} or {@code nameTags=false}.
+	 */
+	public Map<String, String> changesFrom(SplitScreenConfig before) {
+		JsonObject now = toJson(), then = before.toJson();
+		Map<String, String> changes = new LinkedHashMap<>();
+		for (String field : FIELDS) {
+			if (!now.get(field).equals(then.get(field))) {
+				changes.put(field, now.get(field).getAsString());
+			}
+		}
+		return changes;
 	}
 
 	/** Whether guests' render distance is capped at all: by a number, or by the preset (if it caps). */
@@ -257,6 +291,17 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 
 	/** Writes every field, pretty-printed, so players can find them all in the file. */
 	public void write(Writer out) throws IOException {
+		try {
+			GSON.toJson(toJson(), out);
+		} catch (JsonIOException e) {
+			throw e.getCause() instanceof IOException io ? io : new IOException(e);
+		}
+		out.write(System.lineSeparator());
+		out.flush();
+	}
+
+	/** Every field as the file holds it, in the file's order. */
+	private JsonObject toJson() {
 		JsonObject object = new JsonObject();
 		object.addProperty(MEMORY, guestMemoryMb);
 		if (guestRenderDistance == RENDER_DISTANCE_FROM_PRESET) {
@@ -274,13 +319,7 @@ public record SplitScreenConfig(int guestMemoryMb, int guestRenderDistance, Layo
 		object.addProperty(LAYOUT_ANIMATION, layout.layoutAnimation());
 		object.addProperty(VULKAN_OFFER, name(vulkanOffer));
 		object.addProperty(TITLE_STYLE, name(titleStyle));
-		try {
-			GSON.toJson(object, out);
-		} catch (JsonIOException e) {
-			throw e.getCause() instanceof IOException io ? io : new IOException(e);
-		}
-		out.write(System.lineSeparator());
-		out.flush();
+		return object;
 	}
 
 	private static int intOr(JsonObject object, String name, int fallback) {
