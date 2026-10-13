@@ -26,6 +26,7 @@
 		"OptionInstanceAccessor",
 		"OptionsSubScreenAccessor",
 		"SatelliteGrabMixin",
+		"HostKeyboardMixin",
 		"HostMouseMixin",
 		"HostPresentMixin",
 		"SatelliteFrameMixin",

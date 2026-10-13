@@ -7,6 +7,7 @@ import dev.hearthside.core.profile.ProfileCarousel;
 import dev.hearthside.core.profile.QuickSetup;
 import dev.hearthside.core.profile.SkinRef;
 import dev.hearthside.core.ui.Tween;
+import dev.hearthside.fabric.client.input.KeyboardFocus;
 import dev.hearthside.fabric.client.mixin.DefaultPlayerSkinInvoker;
 import dev.hearthside.fabric.client.ui.EmberLayer;
 import dev.hearthside.fabric.client.ui.HearthButton;
@@ -15,12 +16,15 @@ import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.HintChip;
 import dev.hearthside.fabric.client.ui.KeyboardWidget;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.function.Supplier;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.PlayerSkinWidget;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
+import net.minecraft.client.input.CharacterEvent;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.PlayerModelType;
@@ -31,7 +35,7 @@ import net.minecraft.world.entity.player.PlayerSkin;
  * wall lit by firelight from below with drifting embers, a parchment card per player in a frame of their colour, faint
  * glass cards for empty seats, and button hints along the bottom. A controller presses A to take a card, then picks or
  * makes its profile on it; Y on a ready card picks again; X opens More (controls, managing profiles); Menu (or Start)
- * goes on to choose a world together.
+ * goes on to choose a world together. Player 1's PC keyboard can type on a card's name keyboard.
  */
 public final class LobbyScreen extends Screen {
 	private static final int SEATS = 4, CARD_GAP = 10, HEADER = 30, FOOTER = 30;
@@ -120,6 +124,30 @@ public final class LobbyScreen extends Screen {
 	 */
 	@Override
 	protected void setInitialFocus() {
+	}
+
+	/** Player 1's PC keyboard types into a typing card's name keyboard (the one used last, with several). */
+	@Override
+	public boolean charTyped(CharacterEvent event) {
+		Optional<KeyboardFocus.Target> card = typingCard();
+		if (card.isPresent()) {
+			KeyboardFocus.charTyped(card.get(), event.codepoint());
+			return true;
+		}
+		return super.charTyped(event);
+	}
+
+	/**
+	 * On a typing card, Backspace deletes, Enter accepts the name and Esc closes the keyboard (as B does). No other key
+	 * but the function keys reaches the lobby meanwhile: a space typed into a name must not press a focused button.
+	 */
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		return KeyboardFocus.keyPressed(typingCard(), event.key()) || super.keyPressed(event);
+	}
+
+	private Optional<KeyboardFocus.Target> typingCard() {
+		return KeyboardFocus.among(party.openNameKeyboards());
 	}
 
 	/** On to choosing a world, with the party kept. */
@@ -260,7 +288,7 @@ public final class LobbyScreen extends Screen {
 
 	private boolean typing(int seat) {
 		SeatCard card = seat == 0 ? null : party.seatCard(seat);
-		return card != null && card.setup() != null && card.setup().step() == QuickSetup.Step.NAME;
+		return card != null && card.keyboardOpen();
 	}
 
 	private void drawTaken(GuiGraphicsExtractor g, int seat, Card c) {

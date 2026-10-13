@@ -47,6 +47,7 @@ import dev.hearthside.fabric.HearthsideMod;
 import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
+import dev.hearthside.fabric.client.input.KeyboardFocus;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.fabric.client.satellite.SessionOptions;
 import dev.hearthside.fabric.client.satellite.SodiumVersion;
@@ -505,6 +506,8 @@ public final class Party {
 			if (party != null) {
 				party.followGuiScaleSetting();
 			}
+			// SDL sends typed characters only while text input is on; screen changes turn it off, so it is kept on here.
+			KeyboardFocus.keepTextInput(client, () -> party != null && party.pcKeyboardTarget().isPresent());
 		});
 		// When player 1 plays alone there is no overlay pass: the join toast draws on their HUD instead.
 		net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry.attachElementAfter(
@@ -949,6 +952,41 @@ public final class Party {
 
 	boolean hasSeatCard(int player) {
 		return cards.containsKey(player);
+	}
+
+	// ---- Player 1's PC keyboard on the on-screen keyboards (Spec E section 3.6) ----
+
+	/** The cards on their name step now, by seat: the on-screen name keyboards that are open. */
+	public List<SeatCard> openNameKeyboards() {
+		List<SeatCard> open = new ArrayList<>();
+		for (int seat = 1; seat < 4; seat++) {
+			SeatCard card = cards.get(seat);
+			if (card != null && card.keyboardOpen()) {
+				open.add(card);
+			}
+		}
+		return open;
+	}
+
+	/**
+	 * An in-world newcomer's name keyboard player 1's PC keyboard types into now, or empty: only while player 1 plays on
+	 * a controller with no screen open (ruling R8), so on keyboard and mouse their keys stay theirs. Render thread.
+	 */
+	public java.util.Optional<KeyboardFocus.Target> newcomerKeyboard() {
+		if (!inWorld() || !hostHasController() || minecraft.gui.screen() != null) {
+			return java.util.Optional.empty();
+		}
+		return KeyboardFocus.among(openNameKeyboards());
+	}
+
+	/** Where player 1's PC keyboard types now: a lobby card, the New World keyboard or a newcomer's, or empty. */
+	java.util.Optional<KeyboardFocus.Target> pcKeyboardTarget() {
+		return switch (minecraft.gui.screen()) {
+			case LobbyScreen lobby -> KeyboardFocus.among(openNameKeyboards());
+			case NewWorldScreen newWorld -> newWorld.pcKeyboard();
+			case null -> newcomerKeyboard();
+			default -> java.util.Optional.empty();
+		};
 	}
 
 	/** That seat's controller drives its card. Render thread. */

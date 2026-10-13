@@ -7,6 +7,7 @@ import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.ProfileCarousel;
 import dev.hearthside.core.profile.QuickSetup;
 import dev.hearthside.core.ui.KeyboardModel;
+import dev.hearthside.fabric.client.input.KeyboardFocus;
 import dev.hearthside.fabric.client.ui.HearthSounds;
 import java.time.Duration;
 import java.util.List;
@@ -16,9 +17,9 @@ import java.util.function.Supplier;
 /**
  * One seat's lobby card while its player picks or creates a profile (Spec A sections 3.1, 5.2): the profile carousel,
  * then for New, quick setup with the on-screen keyboard; X opens More (the profile's controls, managing profiles).
- * That seat's controller drives only its card. Render thread.
+ * That seat's controller drives only its card; player 1's PC keyboard can type on its name keyboard. Render thread.
  */
-public final class SeatCard {
+public final class SeatCard implements KeyboardFocus.Target {
 	public enum Outcome { NONE, CONFIRMED, LEAVE, CONTROLS, MANAGE }
 
 	public enum Stage { CAROUSEL, SETUP, MORE }
@@ -160,16 +161,16 @@ public final class SeatCard {
 	private Outcome setup(int pressed, int dx, int dy) {
 		switch (setup.step()) {
 			case NAME -> {
+				if (pressed != 0 || dx != 0 || dy != 0) {
+					KeyboardFocus.used(this);
+				}
 				if (dx != 0 || dy != 0) {
 					keyboard.move(dx, dy);
 					keyboardMoved = true;
 					HearthSounds.play(HearthSounds.Ui.TICK);
 				}
 				if (down(pressed, PadButton.B)) {
-					// Back out of quick setup to the carousel.
-					stage = Stage.CAROUSEL;
-					setup = null;
-					keyboard = null;
+					backOutOfSetup();
 					return Outcome.NONE;
 				}
 				if (down(pressed, PadButton.A)) {
@@ -263,6 +264,41 @@ public final class SeatCard {
 		keyboardMoved = false;
 		nameProblem = null;
 		stage = Stage.SETUP;
+		KeyboardFocus.used(this);
+	}
+
+	/** Back out of quick setup to the carousel. */
+	private void backOutOfSetup() {
+		stage = Stage.CAROUSEL;
+		setup = null;
+		keyboard = null;
+	}
+
+	// ---- Player 1's PC keyboard on the name keyboard (Spec E section 3.6) ----
+
+	@Override
+	public boolean keyboardOpen() {
+		return stage == Stage.SETUP && setup != null && setup.step() == QuickSetup.Step.NAME;
+	}
+
+	@Override
+	public boolean typeChar(char c) {
+		return keyboard.typeChar(c);
+	}
+
+	@Override
+	public void backspace() {
+		keyboard.delete();
+	}
+
+	@Override
+	public void enter() {
+		acceptName();
+	}
+
+	@Override
+	public void escape() {
+		backOutOfSetup();
 	}
 
 	/**

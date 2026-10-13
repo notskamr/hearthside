@@ -8,6 +8,7 @@ import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.session.WorldNames;
 import dev.hearthside.core.ui.KeyboardModel;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.input.KeyboardFocus;
 import dev.hearthside.fabric.client.menu.MenuNavigator;
 import dev.hearthside.fabric.client.menu.PadScreen;
 import dev.hearthside.fabric.client.ui.HearthButton;
@@ -22,10 +23,13 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.CreateWorldScreen;
+import net.minecraft.client.input.CharacterEvent;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FileUtil;
 import net.minecraft.world.Difficulty;
@@ -69,6 +73,33 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 	private int keyboardButtons = -1;
 	private final NavRepeater keysX = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
 	private final NavRepeater keysY = new NavRepeater(Duration.ofMillis(300), Duration.ofMillis(80));
+	/** Player 1's PC keyboard on the open on-screen keyboard, as its controller's buttons (Spec E section 3.6). */
+	private final KeyboardFocus.Target pcKeys = new KeyboardFocus.Target() {
+		@Override
+		public boolean keyboardOpen() {
+			return keyboard != null;
+		}
+
+		@Override
+		public boolean typeChar(char c) {
+			return keyboard.typeChar(c);
+		}
+
+		@Override
+		public void backspace() {
+			keyboard.delete();
+		}
+
+		@Override
+		public void enter() {
+			keepTyped();
+		}
+
+		@Override
+		public void escape() {
+			closeKeyboard();
+		}
+	};
 
 	/** @param takenNames the names of existing worlds (the default name avoids them) */
 	public NewWorldScreen(Screen parent, Party party, Collection<String> takenNames) {
@@ -207,6 +238,7 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 				keyboard = KeyboardModel.forText(name, 32);
 				keyboardPlayer = player;
 				keyboardButtons = -1;
+				KeyboardFocus.used(pcKeys);
 			} else {
 				MenuNavigator.apply(minecraft, this, action, party.colorOf(player));
 			}
@@ -247,13 +279,42 @@ public final class NewWorldScreen extends Screen implements PadScreen {
 			HearthSounds.play(HearthSounds.Ui.PAGE);
 		}
 		if (down(pressed, PadButton.START)) {
-			name = keyboard.text();
-			nameBox.setValue(name);
-			HearthSounds.play(HearthSounds.Ui.KNOCK);
-			closeKeyboard();
+			keepTyped();
 		} else if (down(pressed, PadButton.B)) {
 			closeKeyboard();
 		}
+	}
+
+	/** The on-screen keyboard while it is open, for player 1's PC keyboard; otherwise empty. */
+	Optional<KeyboardFocus.Target> pcKeyboard() {
+		return keyboard != null ? Optional.of(pcKeys) : Optional.empty();
+	}
+
+	/** Menu (or Enter): the typed name goes into the name box, and the keyboard closes. */
+	private void keepTyped() {
+		name = keyboard.text();
+		nameBox.setValue(name);
+		HearthSounds.play(HearthSounds.Ui.KNOCK);
+		closeKeyboard();
+	}
+
+	/**
+	 * While the on-screen keyboard is open, player 1's PC keyboard types on it rather than into the name box under it
+	 * (which takes the name only when it is kept), so the two never disagree.
+	 */
+	@Override
+	public boolean charTyped(CharacterEvent event) {
+		if (keyboard != null) {
+			KeyboardFocus.charTyped(pcKeys, event.codepoint());
+			return true;
+		}
+		return super.charTyped(event);
+	}
+
+	/** Backspace, Enter and Esc work the open on-screen keyboard; no other key but the function keys reaches the screen. */
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		return KeyboardFocus.keyPressed(pcKeyboard(), event.key()) || super.keyPressed(event);
 	}
 
 	/** The button that closed the keyboard is still down: a fresh MenuNav ignores it, so it doesn't also press here. */

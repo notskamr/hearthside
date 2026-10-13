@@ -71,6 +71,23 @@ public final class KeyboardModel {
 		}
 	}
 
+	/**
+	 * A character typed on a PC keyboard (Spec E section 3.6). It types only what this keyboard's keys could type (a
+	 * name: letters, digits and "_", a space being "_"), and only while there's room; false means nothing changed.
+	 */
+	public boolean typeChar(char c) {
+		char typed = c == ' ' && mode == Mode.NAME ? '_' : c;
+		if (!offers(typed)) {
+			return false;
+		}
+		replaceSuggestion();
+		if (text.length() >= max) {
+			return false;
+		}
+		text.append(typed);
+		return true;
+	}
+
 	public void nextLayer() {
 		setLayer(cycle(1));
 	}
@@ -128,7 +145,7 @@ public final class KeyboardModel {
 	}
 
 	private Layer cycle(int direction) {
-		Layer[] layers = mode == Mode.NAME ? new Layer[] {Layer.LOWER, Layer.UPPER} : Layer.values();
+		Layer[] layers = layers();
 		int index = 0;
 		for (int i = 0; i < layers.length; i++) {
 			if (layers[i] == layer) {
@@ -143,6 +160,26 @@ public final class KeyboardModel {
 		List<String> rows = rows(layer);
 		row = Math.min(row, rows.size() - 1);
 		column = Math.min(column, rows.get(row).length() - 1);
+	}
+
+	/** Whether one of this keyboard's layers has the key (text has a space bar too). */
+	private boolean offers(char c) {
+		if (c == ' ') {
+			return mode == Mode.TEXT;
+		}
+		for (Layer each : layers()) {
+			for (String keys : rows(each)) {
+				if (keys.indexOf(c) >= 0) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** A name has no symbols layer. */
+	private Layer[] layers() {
+		return mode == Mode.NAME ? new Layer[] {Layer.LOWER, Layer.UPPER} : Layer.values();
 	}
 
 	private static List<String> rows(Layer layer) {
