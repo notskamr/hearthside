@@ -86,6 +86,23 @@ public final class SatelliteBoot {
 			return CompletableFuture.completedFuture(answer);
 		});
 		ClientLifecycleEvents.CLIENT_STARTED.register(SatelliteBoot::start);
+		ClientLifecycleEvents.CLIENT_STOPPING.register(SatelliteBoot::stopping);
+	}
+
+	/**
+	 * This game is stopping (quit by the host, or its window closed): the exported frames are let go before Minecraft
+	 * tears its GPU device down. If that fails, Minecraft stops regardless.
+	 */
+	private static void stopping(Minecraft minecraft) {
+		FrameExporter exporter = FrameExporter.instance();
+		if (exporter == null) {
+			return;
+		}
+		try {
+			exporter.stopping();
+		} catch (RuntimeException | LinkageError e) {
+			HearthsideMod.LOGGER.error("Hearthside couldn't let go of its exported frames as the game stopped", e);
+		}
 	}
 
 	private static void start(Minecraft minecraft) {
