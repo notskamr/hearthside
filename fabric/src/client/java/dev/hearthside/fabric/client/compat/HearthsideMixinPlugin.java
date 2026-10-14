@@ -16,33 +16,54 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
  * ({@code WorldFreezeMixin}, on the {@code Gui.isPausing()} call in {@code Minecraft.runTick}) is optional: if another
  * mod redirects that call the hook has nothing to attach to, Minecraft starts regardless, and pausing together falls
  * back to vanilla's pause (player 1's pause freezes everyone). Applies every mixin as listed.
+ *
+ * <p>MixinExtras attaches the hook only after every mixin's {@link #postApply}, so Minecraft's class is kept from there
+ * and looked at once it is finished: as the game starts ({@link #freezeHookApplied}, called then).
  */
 public final class HearthsideMixinPlugin implements IMixinConfigPlugin {
 	private static final Logger LOGGER = LoggerFactory.getLogger("hearthside");
 	private static final String FREEZE_MIXIN = "WorldFreezeMixin";
 	private static final String FREEZE_HANDLER = "freezeOnlyWhenEveryoneIsPaused";
-	/** Assumed applied until Minecraft's class shows otherwise. */
-	private static volatile boolean freezeHookApplied = true;
+	/** Minecraft's class as Mixin transforms it, until it is looked at. */
+	private static ClassNode minecraftClass;
+	/** Whether the freeze hook applied; null until looked at. */
+	private static Boolean freezeHookApplied;
 
-	/** Whether player 1's pause can leave the world running while others play (the freeze hook applied). */
-	public static boolean freezeHookApplied() {
+	/**
+	 * Whether player 1's pause can leave the world running while others play (the freeze hook applied). The first call,
+	 * as the game starts, looks and logs if it didn't; assumed applied if that can't be told.
+	 */
+	public static synchronized boolean freezeHookApplied() {
+		if (freezeHookApplied == null) {
+			ClassNode target = minecraftClass;
+			minecraftClass = null;
+			boolean applied = true;
+			try {
+				applied = target == null || callsHandler(target, "runTick");
+			} catch (RuntimeException e) {
+				// Can't tell: the hook is assumed applied, as it is when nothing else touches that call.
+				LOGGER.warn("Hearthside couldn't check its pause hook", e);
+			}
+			if (!applied) {
+				LOGGER.warn("Hearthside's pausing together is off: another mod changes how Minecraft decides to pause, so "
+						+ "player 1's pause freezes everyone, as in vanilla");
+			}
+			freezeHookApplied = applied;
+		}
 		return freezeHookApplied;
+	}
+
+	/** A game that never freezes the world (a guest's): Minecraft's class isn't looked at, and is let go. */
+	public static synchronized void forget() {
+		minecraftClass = null;
 	}
 
 	@Override
 	public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
-		if (!mixinClassName.endsWith("." + FREEZE_MIXIN)) {
-			return;
-		}
-		try {
-			if (!callsHandler(targetClass, "runTick")) {
-				freezeHookApplied = false;
-				LOGGER.warn("Hearthside's pausing together is off: another mod changes how Minecraft decides to pause, so "
-						+ "player 1's pause freezes everyone, as in vanilla");
+		if (mixinClassName.endsWith("." + FREEZE_MIXIN)) {
+			synchronized (HearthsideMixinPlugin.class) {
+				minecraftClass = targetClass;
 			}
-		} catch (RuntimeException e) {
-			// Can't tell: the hook is assumed applied, as it is when nothing else touches that call.
-			LOGGER.warn("Hearthside couldn't check its pause hook", e);
 		}
 	}
 

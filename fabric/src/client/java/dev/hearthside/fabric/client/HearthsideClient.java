@@ -2,6 +2,7 @@ package dev.hearthside.fabric.client;
 
 import dev.hearthside.core.Role;
 import dev.hearthside.fabric.HearthsideMod;
+import dev.hearthside.fabric.client.compat.HearthsideMixinPlugin;
 import dev.hearthside.fabric.client.compositor.ViewPipeline;
 import dev.hearthside.fabric.client.dev.E2eDriver;
 import dev.hearthside.fabric.client.dev.GuestFullscreenAttempt;
@@ -36,8 +37,12 @@ public final class HearthsideClient implements ClientModInitializer {
 			TitleCoopButton.register();
 			ViewPipeline.registerReloadListener();
 			ClientLifecycleEvents.CLIENT_STARTED.register(TitleInput::register);
+			// Whether pausing together's freeze hook applied, logged as the game starts if it didn't.
+			ClientLifecycleEvents.CLIENT_STARTED.register(client -> HearthsideMixinPlugin.freezeHookApplied());
 			E2eDriver.registerIfEnabled();
 		} else {
+			// Only player 1's game freezes the world: the class kept for that look is let go.
+			ClientLifecycleEvents.CLIENT_STARTED.register(client -> HearthsideMixinPlugin.forget());
 			SatelliteBoot.register();
 			GuestVideoSettings.register();
 			GuestFullscreenAttempt.registerIfEnabled();
