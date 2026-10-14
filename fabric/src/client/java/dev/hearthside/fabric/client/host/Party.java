@@ -49,6 +49,7 @@ import dev.hearthside.fabric.client.dev.FakeGamepadSource;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.input.FrameHook;
 import dev.hearthside.fabric.client.input.KeyboardFocus;
+import dev.hearthside.fabric.client.input.RealMouse;
 import dev.hearthside.fabric.client.input.SdlGamepadSource;
 import dev.hearthside.fabric.client.satellite.SessionOptions;
 import dev.hearthside.fabric.client.satellite.SodiumVersion;
@@ -136,8 +137,13 @@ public final class Party {
 	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
 			Thread.ofPlatform().daemon().name("hearthside-restarts").factory());
 	private final Map<Integer, Slot> slots = new ConcurrentSkipListMap<>();
-	/** By seat, the games of guests who left, asked to quit and still given time to close themselves ({@link #endSlot}). */
+	/**
+	 * By seat, the games of guests who left, asked to quit and still given time to close themselves ({@link #endSlot}).
+	 * Changed from the render thread and, as the party closes, the server thread: every change holds its lock.
+	 */
 	private final Map<Integer, SatelliteSupervisor> quitting = new ConcurrentHashMap<>();
+	/** The party closed: a game asked to quit from now on is stopped at once, as those waiting were. Under quitting's lock. */
+	private boolean quittingClosed;
 	/** How long a leaving guest's game has to close itself before it is killed. */
 	private static final Duration QUIT_GRACE = Duration.ofSeconds(5);
 	private final Thread shutdownHook = new Thread(this::stopAllSatellites, "hearthside-shutdown");
@@ -583,6 +589,39 @@ public final class Party {
 				session.close();
 			}
 		});
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+			Party party = current;
+			if (party != null) {
+				party.gameStopping();
+			}
+			// Kept from party to party, so let go of even with none open.
+			try {
+				OverlayPass.release();
+			} catch (RuntimeException e) {
+				HearthsideMod.LOGGER.error("Hearthside couldn't let go of its overlay as the game stopped", e);
+			}
+		});
+	}
+
+	/** Minecraft is stopping: split-screen ends now, and doesn't start again. Render thread. */
+	private boolean stopping;
+
+	/**
+	 * Minecraft is stopping (render thread, before it leaves the world and tears its GPU device down): the views'
+	 * imported frames, the canvas and the party map are let go now. The party closing with the world would only queue
+	 * that for a frame that never comes, and the device would go with them still alive. If that fails, Minecraft stops
+	 * regardless.
+	 */
+	private void gameStopping() {
+		stopping = true;
+		try {
+			leaveSplitScreen();
+			if (Compositor.active() != null) {
+				Compositor.deactivate(minecraft);
+			}
+		} catch (RuntimeException e) {
+			HearthsideMod.LOGGER.error("Hearthside couldn't let go of the views' frames as the game stopped", e);
+		}
 	}
 
 	/** The party for the co-op lobby: the current one, or a new one waiting for a world. Render thread. */
@@ -748,7 +787,10 @@ public final class Party {
 		leaving.remove(index);
 		phases.remove(index);
 		// Its last game may still be closing, in the folder the newcomer's game uses: it goes now.
-		SatelliteSupervisor closing = quitting.remove(index);
+		SatelliteSupervisor closing;
+		synchronized (quitting) {
+			closing = quitting.remove(index);
+		}
 		if (closing != null) {
 			closing.stop();
 		}
@@ -832,9 +874,15 @@ public final class Party {
 			endSlot(slot);
 		}
 		slots.clear();
-		// The party's done: nothing is left to fade or wait for, and nothing may outlive it.
-		quitting.values().forEach(SatelliteSupervisor::stop);
-		quitting.clear();
+		// The party's done: nothing is left to fade or wait for, and nothing may outlive it (nor a game asked to quit on the
+		// render thread from now on: endSlot stops it at once).
+		List<SatelliteSupervisor> waiting;
+		synchronized (quitting) {
+			quittingClosed = true;
+			waiting = List.copyOf(quitting.values());
+			quitting.clear();
+		}
+		waiting.forEach(SatelliteSupervisor::stop);
 		controlServer.close();
 		scheduler.shutdownNow();
 		WorldLink link = world;
@@ -884,8 +932,16 @@ public final class Party {
 			return;
 		}
 		slot.supervisor.stopAfter(QUIT_GRACE);
-		SatelliteSupervisor before = quitting.put(slot.index, slot.supervisor);
-		if (before != null && before != slot.supervisor) {
+		SatelliteSupervisor before;
+		boolean closed;
+		synchronized (quitting) {
+			closed = quittingClosed;
+			before = closed ? null : quitting.put(slot.index, slot.supervisor);
+		}
+		if (closed) {
+			// The party closed meanwhile: its scheduler may never end this game's grace.
+			slot.supervisor.stop();
+		} else if (before != null && before != slot.supervisor) {
 			before.stop();
 		}
 	}
@@ -1102,10 +1158,14 @@ public final class Party {
 
 	/**
 	 * An in-world newcomer's name keyboard player 1's PC keyboard types into now, or empty: only while player 1 plays on
-	 * a controller with no screen open (ruling R8), so on keyboard and mouse their keys stay theirs. Render thread.
+	 * a controller with no screen open (ruling R8), so on keyboard and mouse their keys stay theirs. Holding a controller
+	 * isn't playing on it: their mouse and controller take turns, and the one used last is what they play on
+	 * ({@link RealMouse#handOff()}: mouse-look takes over, the controller's next input takes back). SDL text input
+	 * follows this too ({@link #pcKeyboardTarget}). Render thread.
 	 */
 	public java.util.Optional<KeyboardFocus.Target> newcomerKeyboard() {
-		if (!inWorld() || !hostHasController() || minecraft.gui.screen() != null) {
+		if (!inWorld() || !hostHasController() || minecraft.gui.screen() != null
+				|| RealMouse.handOff().owner() != dev.hearthside.core.input.PointerHandOff.Owner.PAD) {
 			return java.util.Optional.empty();
 		}
 		return KeyboardFocus.among(openNameKeyboards());
@@ -2040,8 +2100,13 @@ public final class Party {
 	private final java.util.Set<ControlConnection> toldPause = new java.util.HashSet<>();
 	/** Whether the world was paused at the last client tick. Render thread. */
 	private boolean worldWasPaused;
-	/** Pausing together failed once: from then on player 1's pause is vanilla's and guests aren't told. Render thread. */
-	private boolean pauseFailed;
+	/**
+	 * Pausing together failed once, or its freeze hook never applied (another mod took that call first): player 1's
+	 * pause is vanilla's and guests aren't told. Render thread.
+	 */
+	private boolean pauseFailed = !dev.hearthside.fabric.client.compat.HearthsideMixinPlugin.freezeHookApplied();
+	/** Working out the pause menu's status line failed once (logged). Render thread. */
+	private static boolean pauseLineFailed;
 
 	/**
 	 * Whether player 1's pause may freeze the world: everyone in it is paused (a dropped controller counts as paused),
@@ -2051,11 +2116,28 @@ public final class Party {
 		return pauseFailed || pauseDecision().freeze();
 	}
 
-	/** Player 1's pause menu's status line now ("" outside split-screen in a world). Render thread. */
+	/**
+	 * Player 1's pause menu's status line now ("" outside split-screen in a world, or if it can't be worked out). Their
+	 * menu is open, so they count as paused; it never names them either way. Render thread.
+	 */
 	public static String pauseLine() {
 		Party party = current;
-		return party == null || party.pauseFailed || !party.pausingTogether() ? ""
-				: dev.hearthside.core.session.PauseLine.of(party.pauseDecision());
+		try {
+			return party == null || party.pauseFailed || !party.pausingTogether() ? ""
+					: party.ownPauseLine(party.pauseDecision());
+		} catch (RuntimeException e) {
+			// Never break the pause menu: tickPause meets the same failure and goes vanilla. Logged the first time only.
+			if (!pauseLineFailed) {
+				pauseLineFailed = true;
+				HearthsideMod.LOGGER.error("Hearthside couldn't work out the pause menu's status line", e);
+			}
+			return "";
+		}
+	}
+
+	/** {@code decision}'s status line for player 1's own menu. */
+	private String ownPauseLine(dev.hearthside.core.session.PausePolicy.Decision decision) {
+		return dev.hearthside.core.session.PauseLine.forPlayer(decision, minecraft.getUser().getName());
 	}
 
 	private boolean pausingTogether() {
@@ -2134,7 +2216,7 @@ public final class Party {
 			}
 			HearthsideMod.LOGGER.info("Hearthside world {} still playing={}", decision.freeze() ? "frozen" : "running",
 					String.join(",", decision.stillPlaying()));
-			dev.hearthside.fabric.client.menu.PauseMenuScreen.setStatus(dev.hearthside.core.session.PauseLine.of(decision));
+			dev.hearthside.fabric.client.menu.PauseMenuScreen.setStatus(ownPauseLine(decision));
 		}
 		if (decision == null) {
 			return;
@@ -2363,6 +2445,9 @@ public final class Party {
 
 	/** Re-lays out the views, or leaves split-screen mode when the last guest has gone. Render thread. */
 	private void afterGuestsChanged() {
+		if (stopping) {
+			return; // nothing is laid out again as Minecraft stops
+		}
 		List<Slot> guests = new ArrayList<>(slots.values());
 		if (world == null) {
 			// In the lobby guests' games wait hidden; views are laid out once a world is open.

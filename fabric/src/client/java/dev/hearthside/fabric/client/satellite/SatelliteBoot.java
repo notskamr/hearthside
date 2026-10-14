@@ -51,8 +51,10 @@ public final class SatelliteBoot {
 	private static volatile ControlConnection control;
 	/** The pause state last told to the host (null: not yet). Render thread. */
 	private static Boolean toldPaused;
-	/** The pause menu's status line from the host's last PauseStatus in this world ("" for none). Render thread. */
-	private static String pauseLine = "";
+	/** The host's last PauseStatus in this world, as a decision (null for none). Render thread. */
+	private static PausePolicy.Decision lastPause;
+	/** Working out the pause menu's status line failed once (logged). Render thread. */
+	private static boolean pauseLineFailed;
 	private static boolean wasInWorld;
 	/** Telling the host failed once; not tried again. Render thread. */
 	private static boolean pauseFailed;
@@ -84,6 +86,23 @@ public final class SatelliteBoot {
 			return CompletableFuture.completedFuture(answer);
 		});
 		ClientLifecycleEvents.CLIENT_STARTED.register(SatelliteBoot::start);
+		ClientLifecycleEvents.CLIENT_STOPPING.register(SatelliteBoot::stopping);
+	}
+
+	/**
+	 * This game is stopping (quit by the host, or its window closed): the exported frames are let go before Minecraft
+	 * tears its GPU device down. If that fails, Minecraft stops regardless.
+	 */
+	private static void stopping(Minecraft minecraft) {
+		FrameExporter exporter = FrameExporter.instance();
+		if (exporter == null) {
+			return;
+		}
+		try {
+			exporter.stopping();
+		} catch (RuntimeException | LinkageError e) {
+			HearthsideMod.LOGGER.error("Hearthside couldn't let go of its exported frames as the game stopped", e);
+		}
 	}
 
 	private static void start(Minecraft minecraft) {
@@ -153,7 +172,7 @@ public final class SatelliteBoot {
 	private static void tellPause(Minecraft minecraft) {
 		boolean inWorld = minecraft.level != null;
 		if (wasInWorld && !inWorld) {
-			pauseLine = "";
+			lastPause = null;
 			PauseMenuScreen.setStatus("");
 			PauseMenuScreen.setControllerAway(false);
 			pausedFor = null;
@@ -173,9 +192,22 @@ public final class SatelliteBoot {
 		}
 	}
 
-	/** The status line the host last sent for this world, for a pause menu as it opens ("" for none). Render thread. */
+	/**
+	 * The status line from the host's last word in this world, for this game's pause menu ("" for none). It never names
+	 * this game's own player: a menu opening now may be ahead of the host hearing that they paused. Never throws (the
+	 * pause menu must open regardless): "" if it can't be worked out. Render thread.
+	 */
 	public static String pauseLine() {
-		return pauseLine;
+		PausePolicy.Decision decision = lastPause;
+		try {
+			return decision == null ? "" : PauseLine.forPlayer(decision, Minecraft.getInstance().getUser().getName());
+		} catch (RuntimeException e) {
+			if (!pauseLineFailed) {
+				pauseLineFailed = true;
+				HearthsideMod.LOGGER.error("Hearthside couldn't work out the pause menu's status line", e);
+			}
+			return "";
+		}
 	}
 
 	private static void connect(Minecraft minecraft, int port, int index, String secret) {
@@ -285,8 +317,8 @@ public final class SatelliteBoot {
 			case ControlMessage.PauseStatus m -> minecraft.execute(() -> {
 				HearthsideMod.LOGGER.info("Hearthside world {} still playing={}", m.frozen() ? "frozen" : "running",
 						String.join(",", m.stillPlaying()));
-				pauseLine = PauseLine.of(new PausePolicy.Decision(m.frozen(), m.stillPlaying()));
-				PauseMenuScreen.setStatus(pauseLine);
+				lastPause = new PausePolicy.Decision(m.frozen(), m.stillPlaying());
+				PauseMenuScreen.setStatus(pauseLine());
 			});
 			case ControlMessage.SetPadStyle m -> {
 				HearthsideMod.LOGGER.info("Hearthside SetPadStyle {}", m.style());

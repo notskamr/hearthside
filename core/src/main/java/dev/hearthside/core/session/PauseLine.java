@@ -19,4 +19,13 @@ public final class PauseLine {
 					+ names.getLast() + " are still playing";
 		};
 	}
+
+	/**
+	 * The line for {@code self}'s own pause menu: never naming them, though the decision may still count them as playing
+	 * (their menu opened before the host heard they paused).
+	 */
+	public static String forPlayer(PausePolicy.Decision decision, String self) {
+		List<String> others = decision.stillPlaying().stream().filter(name -> !name.equals(self)).toList();
+		return of(new PausePolicy.Decision(decision.freeze(), others));
+	}
 }

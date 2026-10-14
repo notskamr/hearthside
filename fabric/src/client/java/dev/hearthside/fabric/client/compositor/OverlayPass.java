@@ -74,6 +74,19 @@ public final class OverlayPass {
 		return drawn && target != null ? Optional.ofNullable(target.getColorTextureView()) : Optional.empty();
 	}
 
+	/**
+	 * Lets go of the overlay's target (made again by the next pass that needs it): Minecraft is stopping, and its GPU
+	 * device must not go with the target still alive. Render thread.
+	 */
+	public static void release() {
+		TextureTarget old = target;
+		target = null;
+		drawn = false;
+		if (old != null) {
+			old.destroyBuffers();
+		}
+	}
+
 	/** At the end of the host's frame: renders every layer at the window's size, while compositing. */
 	public static void run(Minecraft minecraft, GameRenderer gameRenderer) {
 		drawn = false;

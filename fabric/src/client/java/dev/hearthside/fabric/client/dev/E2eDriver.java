@@ -13,6 +13,7 @@ import dev.hearthside.core.config.TitleStyleSetting;
 import dev.hearthside.core.config.VulkanOffer;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
+import dev.hearthside.core.input.PointerHandOff;
 import dev.hearthside.core.input.RemapModel;
 import dev.hearthside.core.layout.BorderStyle;
 import dev.hearthside.core.layout.ConsoleLayout;
@@ -40,6 +41,7 @@ import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.ui.HearthTextField;
 import dev.hearthside.fabric.client.menu.TitleInput;
+import dev.hearthside.fabric.client.input.RealMouse;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
@@ -4325,15 +4327,29 @@ public final class E2eDriver {
 	 * short (the satellite logs them in E2E runs).
 	 */
 	private static List<List<String>> drawnStatuses(String satelliteLog, int skip) {
+		return drawnStatuses(satelliteLog, skip, false);
+	}
+
+	/** As {@link #drawnStatuses(String, int)}, with the layouts cut short too if {@code evenCut}. */
+	private static List<List<String>> drawnStatuses(String satelliteLog, int skip, boolean evenCut) {
 		Matcher m = Pattern.compile("hearthside pause status lines=\\d+ truncated=(true|false) drawn=([^\\r\\n]*)")
 				.matcher(satelliteLog);
 		List<List<String>> layouts = new ArrayList<>();
 		for (int n = 0; m.find(); n++) {
-			if (n >= skip && m.group(1).equals("false")) {
+			if (n >= skip && (evenCut || m.group(1).equals("false"))) {
 				layouts.add(List.of(m.group(2).split("\\|")));
 			}
 		}
 		return layouts;
+	}
+
+	/**
+	 * A player's own menu never names them as still playing (final review M1): of Player2's menu's layouts after its
+	 * {@code skip} first ones, those naming Player2 (the log is lower case).
+	 */
+	private List<String> guestMenusNamingTheGuest(int skip) throws IOException {
+		return drawnStatuses(satelliteLog(), skip, true).stream().map(d -> String.join(" ", d))
+				.filter(line -> line.contains("player2")).toList();
 	}
 
 	/** The open screen's narration, which carries the pause menu's status line. Render thread. */
@@ -4383,6 +4399,8 @@ public final class E2eDriver {
 			waitFor("Player2's menu laid out for \"" + guestLine + "\"", Duration.ofSeconds(10),
 					() -> drawnStatuses(satelliteLog(), statusLines).stream().anyMatch(d -> wholeStatus(d, guestLine)));
 			windowShot("status-line");
+			List<String> naming = guestMenusNamingTheGuest(statusLines);
+			check(naming.isEmpty(), "Player2's menu never names Player2 as still playing, even as it opens (drew " + naming + ")");
 			int ownPlaying = count("hearthside pause state playing");
 			press(102, PadButton.B);
 			waitFor("Player2's game says it's playing", Duration.ofSeconds(10),
@@ -4461,6 +4479,9 @@ public final class E2eDriver {
 			Thread.sleep(1000);
 			check(gameTime(server) > resumed, "(c) Player2 resuming starts the world again");
 			check(onRender(this::narration).contains("Player2 is still playing"), "and player 1's menu says so");
+			// Player2's START at (b) opened their menu while the host's last word still had Player2 playing.
+			List<String> namingAfter = guestMenusNamingTheGuest(statusLines);
+			check(namingAfter.isEmpty(), "nor when Player2 pauses after player 1 (drew " + namingAfter + ")");
 			if (sound) {
 				String state = soundState(probe);
 				check(state.equals("playing"),
@@ -5024,8 +5045,9 @@ public final class E2eDriver {
 
 	/**
 	 * N8b, the in-world half (Spec E section 3.6, ruling R8): a newcomer's name keyboard in their own view takes player
-	 * 1's PC keyboard only while player 1 plays on a controller with no screen open. On keyboard and mouse their keys stay
-	 * theirs: W reaches their forward key and nothing is typed. On a controller W never reaches it; characters type,
+	 * 1's PC keyboard only while player 1 plays on a controller with no screen open. On keyboard and mouse (with no
+	 * controller, or holding one but looking with the mouse) their keys stay theirs: W reaches their forward key and nothing
+	 * is typed. Once the controller is used again W never reaches it; characters type,
 	 * Backspace deletes, and Esc closes the keyboard as B does (no pause menu); function keys stay player 1's, and SDL text
 	 * input is on only while the keyboard takes their keys (ruling P-12).
 	 */
@@ -5063,8 +5085,21 @@ public final class E2eDriver {
 			Thread.sleep(200);
 			check(!textInputActive(), "and text input stays off");
 
+			// Player 1 holds a controller but plays on keyboard and mouse (review I1): mouse-look takes their screen back
+			// from the controller, and their keys stay theirs.
 			claimHostPad();
-			check(onRender(() -> minecraft.gui.screen() == null), "player 1 is on a controller with no screen open");
+			check(onRender(() -> minecraft.gui.screen() == null), "player 1 holds a controller with no screen open");
+			osLook(6, 2);
+			osLook(6, 2);
+			check(pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
+					"holding a controller but playing on the mouse, W reaches player 1's forward key");
+			pcType("w");
+			String stillKept = onRender(() -> card(s).keyboard().text());
+			check(stillKept.equals(suggested), "and nothing is typed into the newcomer's keyboard (got " + stillKept + ")");
+			waitFor("text input off while player 1 plays on the mouse", Duration.ofSeconds(2), () -> !textInputActive());
+
+			// The controller used again: the keyboard is free, and typing goes to the newcomer once more.
+			nudgeHostPad();
 			check(!pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
 					"on a controller, W doesn't reach player 1's forward key");
 			// Function keys never type: they stay player 1's (F5 changes the camera; put back after).
@@ -5103,6 +5138,34 @@ public final class E2eDriver {
 	}
 
 	private static final int N8B_PAD = 114;
+
+	/** Player 1's mouse-look in play: an OS move with relative motion, as SDL sends it while the cursor is held. */
+	private void osLook(double dx, double dy) throws Exception {
+		onRender(() -> {
+			var window = minecraft.getWindow();
+			// Well away from the centre, where grabbing the cursor warped it, so it's never mistaken for that warp's echo.
+			double x = window.getScreenWidth() / 2.0 + 40 + dx, y = window.getScreenHeight() / 2.0 + 40 + dy;
+			minecraft.mouseHandler.onMove(window.handle(), x, y, dx, dy);
+			return null;
+		});
+		Thread.sleep(50);
+	}
+
+	/**
+	 * Player 1's right stick nudged in play, held until the game has seen it (a fixed few ms could fall between two slow
+	 * frames under Vulkan validation): the controller is what they play on again.
+	 */
+	private void nudgeHostPad() throws Exception {
+		PADS.set(HOST_PAD, new InputFrame(0, 0, 0, 0, 0.5f, 0, 0, 0));
+		try {
+			Thread.sleep(60);
+			waitFor("player 1's controller used", Duration.ofSeconds(2),
+					() -> onRender(() -> RealMouse.handOff().owner() == PointerHandOff.Owner.PAD));
+		} finally {
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+		}
+		Thread.sleep(150);
+	}
 
 	/** Seats with a card open (newcomers choosing) and not in {@code known}, as bits by seat. Render thread. */
 	private int newCardSeats(int known) {

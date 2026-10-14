@@ -1,6 +1,7 @@
 {
 	"required": true,
 	"package": "dev.hearthside.fabric.client.mixin",
+	"plugin": "dev.hearthside.fabric.client.compat.HearthsideMixinPlugin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
 		"backend.FrontendGpuDeviceAccessor",

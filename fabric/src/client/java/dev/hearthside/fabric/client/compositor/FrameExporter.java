@@ -80,6 +80,8 @@ public final class FrameExporter {
 	private int exportedFrames;
 	private int droppedFrames;
 	private long fpsWindowStart = System.nanoTime();
+	/** Minecraft is stopping: every slot is let go, and none is made again. */
+	private boolean stopped;
 
 	private FrameExporter(Minecraft minecraft, ControlConnection connection, int player) {
 		this.minecraft = minecraft;
@@ -216,8 +218,26 @@ public final class FrameExporter {
 		return TransportChoice.decide(facts, copyOnly || Presentation.forceCopy()).transport();
 	}
 
+	/**
+	 * Minecraft is stopping (render thread, before it tears its GPU device down): every slot's images, memory and handles
+	 * are let go now, or the device would go with them still alive. The host already holds its own imports of the frames
+	 * it shows. Nothing is exported or allocated after this.
+	 */
+	public void stopping() {
+		stopped = true;
+		Frames last = previous, now = current;
+		previous = null;
+		current = null;
+		if (last != null) {
+			last.closeAtOnce();
+		}
+		if (now != null) {
+			now.closeAtOnce();
+		}
+	}
+
 	private void reallocate(int width, int height, boolean force) {
-		if (!force && current != null && current.width == width && current.height == height) {
+		if (stopped || !force && current != null && current.width == width && current.height == height) {
 			return;
 		}
 		retireCurrent();
@@ -347,6 +367,11 @@ public final class FrameExporter {
 
 		/** Lets go of everything (Minecraft destroys textures and buffers once the GPU has finished with them). */
 		abstract void close();
+
+		/** As {@link #close}, without waiting for anything still on its way: Minecraft is stopping. */
+		void closeAtOnce() {
+			close();
+		}
 	}
 
 	/**
@@ -528,6 +553,9 @@ public final class FrameExporter {
 		/** A readback has landed (render thread, a frame or two later). */
 		private void landed(int slot, long frame) {
 			inFlight--;
+			if (closed) {
+				return; // closed at once as Minecraft stops: its buffers and table are gone
+			}
 			try {
 				if (retired) {
 					slots.abandon(slot);
@@ -573,6 +601,13 @@ public final class FrameExporter {
 			if (inFlight == 0) {
 				closeNow();
 			}
+		}
+
+		@Override
+		void closeAtOnce() {
+			retired = true;
+			closeRequested = true;
+			closeNow();
 		}
 
 		private void closeNow() {
