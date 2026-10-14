@@ -337,6 +337,65 @@ Found while building this:
   scale of 4 (0.75).
 - When the last guest's fade and a window resize coincided, one frame failed to compose (since Spec C); fixed.
 
+## In-game menus (5c2a) — 2026-10-13, same machine
+
+Each player's own pause menu in their own game, the world freezing only when everyone in it is paused (protocol v6),
+the reconnect card and take-over, Add player, Split-screen options applied live, and player 1's PC keyboard typing into
+on-screen keyboards. Mod compatibility is part of the contract: a stand-in mod button (added to vanilla's pause screen
+through Fabric's `ScreenEvents`, as Mod Menu does) must survive every path. The join clock can jump ahead for tests
+(`Party.e2eTimeShift`), so the real 60 s take-over and 15 s Add player windows are exercised without waiting.
+
+| Run (head `6275eea`) | Result |
+|---|---|
+| Full, OpenGL | 138/138, step 7 PASS (the guest exited 1744 ms after the host was killed) |
+| Full, Vulkan (host and guests), validation on | 138/138, step 7 PASS (1846 ms); 0 validation errors in every log |
+
+Composite cost, host CPU, p95, one guest: OpenGL 0.049 ms, Vulkan with validation 0.206 ms. Memory (two players):
+player 1 2.0–2.4 GB, a guest 1.5–1.7 GB.
+
+| # | Check | Result |
+|---|---|---|
+| N1 | A guest's START opens Hearthside's pause menu in its own game (Resume, Options…, Game menu…, Leave game; Resume focused); the D-pad and A open vanilla's Options and its pause screen, and B comes back to the menu each time; Resume closes it | PASS — FAILED before |
+| N1b | Player 1 on a controller: START opens their own menu, Resume focused; the D-pad and A open Options, B comes back; B resumes; on the Leave confirm, B is Keep playing | PASS |
+| N2 | Alone, the pause key opens vanilla's pause screen, with a stand-in mod's button (added through Fabric's `ScreenEvents`, as Mod Menu does) | PASS |
+| N2b | In split-screen player 1 gets Hearthside's menu, which other mods still see as a pause screen; Game menu… opens vanilla's pause screen with the mod's button; closing it comes back to the menu | PASS — FAILED before |
+| N3 | Player 1 paused while Player2 plays: the world's time runs and player 1's menu says (and narrates) "The world keeps going — Player2 is still playing", drawn whole even in a quarter view, and no player's menu ever names them; Player2 pausing too freezes it within a second, both menus say so, sounds pause; a newcomer still picking a profile doesn't count; Player2 resuming starts it again and player 1's sounds play though their menu is still open | PASS — FAILED before |
+| N4 | Player 1's Leave game asks first ("Leave the world? Everyone's game will close.", Keep playing goes back); a guest's Leave game takes them out and closes their game | PASS — FAILED before |
+| N5 | Unplugging a guest's controller dims their view behind "Reconnect your controller" and opens their pause menu (drawn hidden under the card); replugging undoes both; a menu they opened themselves stays open through a drop and reconnect; a minute later (the join clock jumped) a new controller's single A takes them over where they stand, without that A reaching their game, and becomes their profile's controller; pad 102 takes them back | PASS — FAILED before |
+| N5b | A newcomer whose controller drops while picking a profile: the picker gives way to the reconnect card, and comes back on reconnect | PASS — FAILED before |
+| N6 | Player 1's Add player closes the menu and shows the prompt (below Minecraft's own toasts), which expires after 15 s, after which Esc opens the pause menu at once; one A on a free controller joins; a controller whose double-A prompt was pending joins with its next A; with a take-over pending the prompt says whom A takes over; Esc and player 1's B cancel it | PASS — FAILED before |
+| N6b | With four players, Add player is greyed out | PASS — FAILED before |
+| N7 | Split-screen: the stacked layout glides live; borders and name tags off go at once, and back on show at once; Swap views puts player 1 on the right; the file keeps the values; with layout animation off the views snap; the title style applies the next time the title screen is shown, the same screen object included | PASS — FAILED before |
+| N7b | At 2720×1440, a preset chosen on Split-screen leaves Player2's frame size alone through a relayout (it applies to the next player who joins) | PASS — FAILED before |
+| N8 | Player 1's PC keyboard types into a lobby card's name keyboard: letters replace the suggestion, Backspace (held, it repeats) deletes, `#` is refused, a space beside a focused button types `_` and presses nothing, a held Esc backs out once, Enter accepts; SDL text input is on while it types and off after | PASS — FAILED before |
+| N8b | In the world, with player 1 on keyboard and mouse — or holding a controller but playing on the mouse — W moves player 1 and nothing is typed; with player 1 playing on a controller, typing reaches the newcomer's keyboard and F5 still reaches player 1 | PASS — FAILED before |
+| N9 | While a newcomer's view fades in, player 1's border keeps its brightness, sampled every frame where it meets the newcomer's view | PASS — FAILED before (darkest 1, floor 61) |
+| D5 | (fixed) A leaving view fades out where it is: player 1's game now asks the guest's game to quit and kills it only after 5 s, because killing it at once stalled player 1's frame for ~290 ms, longer than the fade | PASS — FAILED before |
+| D9 | (extended) In tiled windows (nothing draws a reconnect card), a dropped guest's own pause menu stays visible | PASS — FAILED before |
+
+Screenshots: `docs/screenshots/in-game-menus/` — a guest's menu with its status line (`status-line`), player 1's menu in
+a quarter view (`pause-menu-cramped`), vanilla's Options opened from a guest's menu, the Leave confirm, Split-screen,
+the reconnect card (over a view and over a profile picker), the take-over line, and the Add player prompt (with a free
+controller, without one, and naming a pending take-over).
+
+Found while building this:
+- In 26.3, characters arrive only while SDL text input is on (vanilla turns it on just for a focused text box), so
+  player 1's PC keyboard typed nothing on a real keyboard until Hearthside turned it on while an on-screen keyboard
+  types; the E2E now checks `SDL_TextInputActive`, since calling `charTyped` directly can't see this.
+- Force-killing a leaving guest's game stalled player 1's next frame for ~290 ms (longer than the 250 ms fade), so a
+  leaving view vanished instead of fading: the guest's game is now asked to quit and killed only after 5 s.
+- Quitting gracefully then showed both games leaving their shared-frame GPU objects for Minecraft's shutdown (18 and 34
+  leaked objects under validation): both now release them as the game stops.
+- After everyone unfroze, player 1's game kept its sounds paused while their menu stayed open — the couch's only audio
+  (guests are muted): sounds now follow the world in split-screen.
+- A player who holds a controller isn't necessarily playing on it: the newcomer's keyboard takes player 1's keys only
+  while the controller was used last.
+- A reconnect card over a menu or a profile picker read as two stacked dialogs: what's under the card isn't drawn while
+  that player's controller is away.
+
+Owed by hand (real hardware): typing on a real PC keyboard into a lobby card and into an in-world newcomer's keyboard;
+a real controller's drop, replug and take-over; Mod Menu's Configure button.
+
 ## Guests' settings (batch review fixes) — 2026-10-11, same machine
 
 | # | Check | Result |

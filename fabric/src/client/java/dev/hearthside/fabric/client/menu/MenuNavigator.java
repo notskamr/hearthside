@@ -2,6 +2,7 @@ package dev.hearthside.fabric.client.menu;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.hearthside.core.input.MenuNav;
+import dev.hearthside.fabric.client.ui.DrawsOwnSelection;
 import dev.hearthside.fabric.client.ui.HearthSounds;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.InputType;
@@ -79,10 +80,14 @@ public final class MenuNavigator {
 				ScreenEvents.afterExtract(screen).register((s, g, mouseX, mouseY, delta) -> outline(minecraft, s, g)));
 	}
 
-	/** The focused widget's outline in the driver's colour, while a controller (or the arrow keys) moved it. */
+	/**
+	 * The focused widget's outline in the driver's colour, while a controller (or the arrow keys) moved it. The pause
+	 * menu's buttons light up as the selection themselves: no second ring around them.
+	 */
 	private static void outline(Minecraft minecraft, Screen screen, GuiGraphicsExtractor g) {
 		if (minecraft.getLastInputType() != InputType.KEYBOARD_ARROW
-				|| !(screen.getFocused() instanceof AbstractWidget widget) || !widget.visible) {
+				|| !(screen.getFocused() instanceof AbstractWidget widget) || !widget.visible
+				|| widget instanceof DrawsOwnSelection || screen instanceof DrawsOwnSelection) {
 			return;
 		}
 		g.outline(widget.getX() - 2, widget.getY() - 2, widget.getWidth() + 4, widget.getHeight() + 4,

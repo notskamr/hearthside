@@ -42,9 +42,20 @@ Hearthside starts the other players' games itself, hidden, when they join — th
 - Press **Start** (Menu) to choose a world, or create one.
 
 **In the world.** Each player sees their own view; the layout makes room as players come and go.
-- To join mid-game, press **A twice** on a new controller.
-- A player leaves from their pause menu (**Start**, then **Disconnect**).
-- When player 1 leaves the world, everyone's game closes.
+- To join mid-game, press **A twice** on a new controller, or let player 1 choose **Add player** from their pause menu:
+  then one **A** on any free controller joins within 15 seconds (B on player 1's controller or Esc cancels it). A player
+  joining while everyone in the world is paused waits on their card until someone resumes.
+- **Start** (Esc for player 1 on the keyboard) opens your own pause menu, in your own view: **Resume**, **Options…**,
+  **Game menu…** (Minecraft's own pause menu, with any other mod's buttons) and **Leave game**. Player 1's also has
+  **Add player** and **Split-screen…**. Move with the D-pad or the stick, A picks, B resumes. Playing alone, the pause
+  key opens Minecraft's own pause menu.
+- The world keeps going while anyone is still playing (your menu says who), and freezes when everyone in it has paused.
+- If a controller disconnects, that player's view dims behind "Reconnect your controller" and their game pauses; plug it
+  back in to carry on. After a minute, one **A** on another controller takes that player over, right where they stand.
+- **Leave game** takes a player out of the world and closes their game. Player 1's asks first, because everyone's game
+  closes with theirs.
+- Player 1's PC keyboard can type names into the on-screen keyboards (on a lobby card, for a new world, or for a
+  newcomer in the world while player 1 plays on a controller).
 
 **Controls on a controller** (Bedrock layout by default): A jump, B sneak, triggers attack and use, bumpers switch items,
 X crafting, Y inventory, D-pad down drops one item (hold it to drop the whole stack), Start pauses. In menus a pointer
@@ -52,8 +63,12 @@ follows the left stick; A picks, X takes half a stack, Y moves a stack, B closes
 
 ## Settings
 
-`.minecraft/config/hearthside.json` is created the first time you open Co-op. Edit it with Minecraft closed (or before
-starting a party); it applies from the next party.
+Player 1's pause menu has **Split-screen…**, where the settings below change in-game: the layout and look apply at once
+(the views glide to the new layout), and the preset, render distance and memory apply to the next player who joins.
+With Mod Menu installed, its **Configure** button for Hearthside opens the same screen.
+
+They are saved in `.minecraft/config/hearthside.json`, created the first time you open Co-op. You can also edit it with
+Minecraft closed; it applies from the next party.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -65,6 +80,13 @@ starting a party); it applies from the next party.
 | `twoPlayerLayout` | `side_by_side` | `side_by_side` or `stacked` (top and bottom). |
 | `threePlayerLayout` | `grid_with_panel` | `grid_with_panel` (a party map in the fourth corner), `wide_top` or `tall_left`. |
 | `partyPanel` | `true` | Shows the party map in the free corner with three players. |
+| `borders` | `thin` | The line around each view, in its player's colour: `thin`, `colour` (twice as thick) or `off`. |
+| `nameTags` | `true` | Each player's name in the corner of their view for a few seconds after the layout changes. |
+| `layoutAnimation` | `true` | `false` moves the views straight to their new places instead of gliding. |
+| `titleStyle` | `hearthside` | The title screen's look: `hearthside` (the plank wall and firelight) or `vanilla`. |
+
+**Swap views** on the Split-screen screen moves a player earlier or later in the layout, so player 1 needn't be
+top-left. It lasts until everyone else has left.
 
 **Performance presets.** Each extra player's game is a whole Minecraft, so a laptop works hard with three or four.
 The preset applies for the session only; nobody's own settings are changed.
@@ -94,13 +116,13 @@ their pause menu; they stay theirs. Fullscreen is player 1's alone.
 
 ## Known limitations
 
-- Each player's pause menu is Minecraft's own for now. Changing controls mid-game, adding a player from the pause menu
-  and "pause only when everyone has paused" come in the next update.
-- If a controller disconnects mid-game, reconnect it to carry on; a proper "Reconnect your controller" screen comes next.
+- Changing your controls or profile mid-game, and controller sensitivity and stick calibration, come in the next update.
 - Skins: Minecraft's built-in skins only. Your own skin file or a player's skin by name comes soon.
-- On the lobby's name keyboard, type with the controller; the PC keyboard can't type into it yet.
 - Each player's own Minecraft settings (brightness, FOV, volumes…) belong to the seat they sit in, not their profile;
-  per-profile settings and controller sensitivity come with the next update.
+  per-profile settings come with the next update.
+- Only player 1 can open Split-screen (they're the party's settings).
+- A few things look for Minecraft's own pause screen by name (for example the friends key); they work from
+  **Game menu…**.
 - **Switch and restart** starts Minecraft again the way your launcher started it. If it doesn't come back (some
   launchers can't be restarted from inside the game), start Minecraft yourself: it's already set to Vulkan.
 - Windows only.

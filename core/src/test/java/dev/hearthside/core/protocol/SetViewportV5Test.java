@@ -25,11 +25,6 @@ class SetViewportV5Test {
 	}
 
 	@Test
-	void protocolVersionIsFive() {
-		assertThat(ControlCodec.PROTOCOL_VERSION).isEqualTo(5);
-	}
-
-	@Test
 	void setViewportRoundTripsTheScaleAndFrame() throws IOException {
 		var message = new ControlMessage.SetViewport(new Rect(960, 0, 960, 1080), 60, 2, 640, 720);
 		assertThat(roundTrip(message)).isEqualTo(message);

@@ -153,7 +153,11 @@ final class HostInput implements Runnable {
 		// In the world player 1's mouse and controller take turns on their screens (the lobby's pointer is everyone's).
 		hostApplier.shareWithMouse(true);
 		long now = System.nanoTime();
-		update.frames().forEach((player, frame) -> {
+		update.frames().forEach((player, padFrame) -> {
+			if (player == 0) {
+				cancelAddPlayerOnB(padFrame);
+			}
+			InputFrame frame = withoutHeldPress(player, padFrame);
 			if (player == 0) {
 				hostApplier.accept(frame);
 			} else if (session.hasSeatCard(player)) {
@@ -185,17 +189,19 @@ final class HostInput implements Runnable {
 	 * hold a controller, and hidden in play; their controller moves it and A clicks under it. Their applier centres it
 	 * as each screen opens from play. When they move or click the mouse it drives instead, as without a controller (no
 	 * pointer, no controller hints), until the stick, D-pad or A takes over again. Only one pointer ever shows: the OS
-	 * arrow is hidden while theirs is drawn.
+	 * arrow is hidden while theirs is drawn. Hearthside's own screens (their pause menu) have no pointer: the controller
+	 * moves the selection, and the OS arrow shows only once the mouse drives.
 	 */
 	private void showHostPointer() {
 		Screen screen = minecraft.gui.screen();
-		boolean show = screen != null && !(screen instanceof PadScreen) && !hostApplier.mouseDriving();
+		boolean padScreen = screen instanceof PadScreen;
+		boolean show = screen != null && !padScreen && !hostApplier.mouseDriving();
 		if (show && !VirtualCursor.isDrawn()) {
 			// It may still wear the colour of a guest who drove the lobby.
 			VirtualCursor.setTint(session.colorOf(0));
 		}
 		VirtualCursor.setDrawn(show);
-		OsCursor.setHidden(show);
+		OsCursor.setHidden(show || (padScreen && !hostApplier.mouseDriving()));
 		ButtonGuideRenderer.setScreenHintsHidden(hostApplier.mouseDriving());
 	}
 
@@ -353,6 +359,7 @@ final class HostInput implements Runnable {
 		lastSent.remove(player);
 		lastSentAt.remove(player);
 		styles.remove(player);
+		heldPresses.remove(player);
 	}
 
 	private final Map<Integer, PadStyle> padStyles = new java.util.concurrent.ConcurrentHashMap<>();
@@ -411,6 +418,8 @@ final class HostInput implements Runnable {
 					RealMouse.handOff().padGone();
 					RealMouse.resync(minecraft);
 				} else {
+					// An A still held from a take-over went with the controller: the next one is a real press.
+					heldPresses.remove(lost.player());
 					session.sendToGuest(lost.player(), new ControlMessage.Lifecycle(LifecycleCommand.PAUSE));
 					session.onPadLost(lost.player());
 				}
@@ -585,6 +594,37 @@ final class HostInput implements Runnable {
 		}
 	}
 
+	/**
+	 * A free controller took over a guest whose controller dropped: it is theirs now, and the A that took them over,
+	 * still held, doesn't also press in their game.
+	 */
+	void takeOver(int instanceId, int player) {
+		assignPad(instanceId, player);
+		heldPresses.put(player, InputFrame.buttons(PadButton.A));
+	}
+
+	/**
+	 * Buttons a controller still holds from a press Hearthside took (a guest's A that took them over, player 1's B that
+	 * cancelled Add player); their game gets them only once released.
+	 */
+	private final Map<Integer, Integer> heldPresses = new HashMap<>();
+	/** Player 1's controller's buttons last frame in the world, for press edges. */
+	private int hostButtons;
+
+	/**
+	 * Player 1's B in play while the Add player prompt is up cancels it (plan P-9), and presses nothing else until let
+	 * go. With a screen open, B is that screen's as ever.
+	 */
+	private void cancelAddPlayerOnB(InputFrame frame) {
+		int b = InputFrame.buttons(PadButton.B);
+		boolean pressed = (frame.buttons() & ~hostButtons & b) != 0;
+		hostButtons = frame.buttons();
+		if (pressed && minecraft.gui.screen() == null && session.addPlayerShowing()) {
+			session.cancelAddPlayer();
+			heldPresses.merge(0, b, (x, y) -> x | y);
+		}
+	}
+
 	void assignPad(int instanceId, int player) {
 		if (player > 0) {
 			guestPads.add(instanceId);
@@ -605,6 +645,22 @@ final class HostInput implements Runnable {
 
 	private void chat(Component message) {
 		minecraft.gui.chatListener().handleSystemMessage(message, false);
+	}
+
+	/** A player's frame without the buttons still held from a press Hearthside took (see {@link #heldPresses}). */
+	private InputFrame withoutHeldPress(int player, InputFrame frame) {
+		Integer held = heldPresses.get(player);
+		if (held == null) {
+			return frame;
+		}
+		int still = held & frame.buttons();
+		if (still == 0) {
+			heldPresses.remove(player);
+			return frame;
+		}
+		heldPresses.put(player, still);
+		return new InputFrame(frame.sequence(), frame.buttons() & ~still, frame.leftX(), frame.leftY(), frame.rightX(),
+				frame.rightY(), frame.leftTrigger(), frame.rightTrigger());
 	}
 
 	/** Frames differ in sequence every poll; compare the controller state only. */

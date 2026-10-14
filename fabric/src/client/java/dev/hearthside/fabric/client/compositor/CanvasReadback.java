@@ -80,6 +80,37 @@ final class CanvasReadback {
 		if (Compositor.e2eGapSampling) {
 			sampleGaps(encoder, canvas, frames);
 		}
+		if (Compositor.e2eBorderSampling) {
+			sampleBorders(encoder, canvas, frames);
+		}
+	}
+
+	private static final String[] EDGES = {"top", "right", "bottom", "left"};
+
+	/**
+	 * E2E: reads the middle of each of player 1's four border edges as the overlay draws them (their view in the
+	 * overlay's GUI units, each GUI pixel read at its middle window pixel), and logs them.
+	 */
+	private static void sampleBorders(CommandEncoder encoder, Canvas canvas, List<ViewFrame> frames) {
+		int scale = OverlayPass.lastScale();
+		ViewFrame host = frames.stream().filter(view -> view.seat() == 0).findFirst().orElse(null);
+		if (scale <= 0 || host == null) {
+			return;
+		}
+		Rect r = OverlayPass.inGui(host.rect(), scale);
+		int[][] edges = {{r.x() + r.width() / 2, r.y()}, {r.x() + r.width() - 1, r.y() + r.height() / 2},
+				{r.x() + r.width() / 2, r.y() + r.height() - 1}, {r.x(), r.y() + r.height() / 2}};
+		List<int[]> points = new ArrayList<>();
+		for (int[] gui : edges) {
+			points.add(new int[] {gui[0] * scale + scale / 2, gui[1] * scale + scale / 2});
+		}
+		readPixels(encoder, canvas, points, rgb -> {
+			for (int i = 0; i < rgb.length; i++) {
+				if (rgb[i] >= 0) {
+					HearthsideMod.LOGGER.info("Hearthside border probe seat=0 edge={} rgb={}", EDGES[i], hex(rgb[i]));
+				}
+			}
+		});
 	}
 
 	/** E2E: saves the canvas as drawn this frame (every view and the overlay): what the players see. */

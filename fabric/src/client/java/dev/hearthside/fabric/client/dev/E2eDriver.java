@@ -9,14 +9,19 @@ import dev.hearthside.core.input.InputFrame;
 import dev.hearthside.core.config.Preset;
 import dev.hearthside.core.config.SessionTuning;
 import dev.hearthside.core.config.SplitScreenConfig;
+import dev.hearthside.core.config.TitleStyleSetting;
 import dev.hearthside.core.config.VulkanOffer;
 import dev.hearthside.core.input.PadButton;
 import dev.hearthside.core.input.PadStyle;
+import dev.hearthside.core.input.PointerHandOff;
 import dev.hearthside.core.input.RemapModel;
+import dev.hearthside.core.layout.BorderStyle;
 import dev.hearthside.core.layout.ConsoleLayout;
 import dev.hearthside.core.layout.LayoutSettings;
 import dev.hearthside.core.layout.Rect;
 import dev.hearthside.core.layout.TwoPlayerSplit;
+import dev.hearthside.core.layout.ViewFrame;
+import dev.hearthside.core.layout.ViewOrder;
 import dev.hearthside.core.profile.GuestProfile;
 import dev.hearthside.core.profile.HostProfile;
 import dev.hearthside.core.profile.PlayerColors;
@@ -30,10 +35,13 @@ import dev.hearthside.fabric.HearthsideMod;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.hearthside.fabric.client.compositor.Compositor;
+import dev.hearthside.fabric.client.compositor.OverlayLayer;
+import dev.hearthside.fabric.client.compositor.OverlayPass;
 import dev.hearthside.fabric.client.host.LobbyScreen;
 import dev.hearthside.fabric.client.input.ButtonGuideRenderer;
 import dev.hearthside.fabric.client.ui.HearthTextField;
 import dev.hearthside.fabric.client.menu.TitleInput;
+import dev.hearthside.fabric.client.input.RealMouse;
 import dev.hearthside.fabric.client.input.VirtualCursor;
 import dev.hearthside.fabric.client.ui.HearthSprites;
 import dev.hearthside.fabric.client.ui.TitleStyle;
@@ -69,9 +77,12 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
+import net.minecraft.client.CameraType;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.events.ContainerEventHandler;
 import net.minecraft.client.gui.components.events.GuiEventListener;
@@ -95,6 +106,7 @@ import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.PreferredGraphicsApi;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.client.gui.components.toasts.Toast;
@@ -114,6 +126,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.sdl.SDLKeyboard;
 import org.lwjgl.sdl.SDLMouse;
 import org.lwjgl.sdl.SDLVideo;
 import net.minecraft.util.HttpUtil;
@@ -138,7 +151,7 @@ public final class E2eDriver {
 			{"X1"}, {"X1b"},
 			{"H1"},
 			// The lobby block (fake pads), from the title screen.
-			{"K1"}, {"E2"}, {"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
+			{"K1"}, {"E2"}, {"N8"}, {"B7"}, {"T3"}, {"T4"}, {"T1"}, {"T2", "T1"}, {"L5"},
 			{"W3", "L5"}, {"W4", "L5"}, {"W5", "L5"}, {"W6", "L5"}, {"W7", "L5"}, {"W8", "L5"},
 			{"W10", "L5"}, {"W11", "L5"}, {"W9", "L5"}, {"L6", "W9"},
 			{"B6"}, {"B4", "B6"}, {"L1", "B4"}, {"L2", "L1"}, {"L9", "L2"}, {"R1", "L9"}, {"R2", "R1"}, {"L11", "R1"},
@@ -149,16 +162,17 @@ public final class E2eDriver {
 			{"V2", "C2"}, {"U1", "C2"}, {"V4", "C2"}, {"V5", "C2"}, {"V7", "C2"}, {"V8", "C2"}, {"C5", "1"}, {"C5b", "C5"},
 			{"F1", "1"}, {"F2", "1"}, {"F3", "1"}, {"E1", "1"},
 			{"C6", "C2"}, {"C12", "1"}, {"V3", "1"}, {"V9", "1"}, {"Q3", "C2"}, {"Q4", "C2"}, {"Q4b", "C2"},
-			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"},
+			{"N7", "C2"}, {"N7b", "C2"},
+			{"C7", "C2"}, {"D4", "C7"}, {"C7b", "C7"}, {"N6b", "C7b"},
 			{"V10", "C7b"}, {"D5", "C7b"},
 			{"D6", "D5"},
 			{"C7c", "C7"}, {"G1", "C6", "D6"}, {"C9", "1"}, {"C11", "1"}, {"3", "1"}, {"C8", "3"}, {"4"}, {"4b", "1"},
 			{"5", "1"}, {"C10", "5"}, {"D7"}, {"D8"}, {"Q2", "1"}, {"E3", "1"},
 			// The in-world pad block (fake pads).
-			{"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
+			{"N2"}, {"P0"}, {"B2"}, {"D3", "B2"}, {"B3", "B2"}, {"D2", "P0", "B2"}, {"D1", "D2"}, {"P1", "D2"},
 			{"P2", "P1"}, {"P3", "P1"}, {"P4", "P1"}, {"P7", "P1"}, {"P5", "P1"}, {"P6", "P1"},
-			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
-			{"P10", "P5"}, {"P8", "P1"}, {"P9", "P1"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
+			{"M1", "P5"}, {"H2", "P1"}, {"M2", "M1"}, {"M3", "P5"}, {"N1", "P5"}, {"N2b", "P5"}, {"N1b", "P5"}, {"N3", "P5"}, {"N5", "P5"}, {"N9", "P5"}, {"N5b", "P5"}, {"N6", "P5"}, {"A1", "P5"}, {"A2", "P5"}, {"A3", "P5"},
+			{"P10", "P5"}, {"P8", "P1"}, {"N4", "P5"}, {"P9", "P1"}, {"N8b"}, {"H3"}, {"H4"}, {"H5"}, {"H5b"}, {"H6"}, {"H7"}, {"S2", "B3", "P9"},
 			{"6"},
 			// The tiled session.
 			{"D9"}, {"7"},
@@ -218,6 +232,7 @@ public final class E2eDriver {
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
 				step("K1 Vulkan is offered once where it lets frames be shared, never with Iris, and relaunches the game", this::vulkanOffer);
 				step("E2 Auto chooses a preset from the machine when a party is created", this::autoChoosesFromTheMachine);
+				step("N8 player 1's PC keyboard types into a lobby card's name keyboard", this::pcKeyboardTypesIntoTheLobbyCard);
 				step("B7 the title screen has a Co-op button that opens the lobby", this::titleCoopOpensLobby);
 				step("T3 the title screen draws Hearthside's background and buttons", this::titleStyled);
 				step("T4 with Minecraft in the background, a controller does nothing on the title screen", this::titleIgnoresBackgroundPad);
@@ -303,9 +318,13 @@ public final class E2eDriver {
 			step("Q3 a guest's own Sodium settings survive its next launch", this::guestSodiumSettingsSurvive);
 			step("Q4 a guest can't switch to fullscreen", this::guestRefusesFullscreen);
 			step("Q4b an untested Sodium version leaves Sodium's options alone instead of crashing guests", this::untestedSodiumLeftAlone);
+			step("N7 Split-screen options apply live: layout glides, borders and name tags at once, swap views, saved, title style next time",
+					() -> sampleGaps(this::splitScreenOptions));
+			step("N7b a preset chosen on Split-screen leaves guests already in the world as they were", this::presetWaitsForTheNextJoin);
 			step("C7 a third player joins and the layout makes room without GL errors", () -> sampleGaps(this::thirdPlayerJoins));
 			step("D4 with three players the free quarter shows the party map", this::partyPanelShows);
 			step("C7b a fourth player joins the four-view layout", () -> sampleGaps(this::fourthJoins));
+			step("N6b with four players, Add player is greyed out", this::addPlayerGreyedWhenFull);
 			step("V10 with four players the guests drop almost no frames", this::fourPlayersDropAlmostNothing);
 			step("D5 a leaving view fades out, then the others glide", () -> sampleGaps(this::leavingFades));
 			step("D6 a guest who quits from their own game leaves the party", () -> sampleGaps(this::guestQuitsItself));
@@ -326,6 +345,7 @@ public final class E2eDriver {
 			step("Q2 a stacked two-player layout from config/hearthside.json", this::stackedLayoutFromConfig);
 			step("E3 presetForPlayer1 gives player 1's own game the preset for the session, and saves keep their own", this::presetForPlayerOne);
 			if (Boolean.getBoolean("hearthside.e2e.fakePads")) {
+				step("N2 alone, the pause key opens vanilla's pause screen, a mod's button and all", this::alonePauseIsVanilla);
 				step("P0 Player2 profile rebinds JUMP to Y", this::rebindPlayer2Jump);
 				long dropInSounds = System.nanoTime();
 				step("B2 in a world, one A on a new controller does not join", this::oneADoesNotJoin);
@@ -344,12 +364,23 @@ public final class E2eDriver {
 				step("H2 button hints draw glyph sprites for the guest's controller family", this::hintsUseGlyphSprites);
 				step("M2 closing a menu with B does not leak sneak into the world", this::closeWithoutSneakLeak);
 				step("M3 START opens the pause menu, B closes it", this::pauseMenuOpensAndCloses);
+				step("N1 a guest's START opens Hearthside's pause menu; Options… and Game menu… open vanilla's and come back", this::guestPauseMenu);
+				step("N2b in split-screen player 1 gets Hearthside's menu, and Game menu… keeps every mod's button", this::splitScreenPauseKeepsModButtons);
+				step("N1b player 1's controller drives their pause menu by focus; Options… comes back; B is Resume, and Keep playing on the Leave confirm", this::hostPadPauseMenu);
+				step("N3 the world freezes only when everyone in it is paused, and every menu says so", this::pauseTogether);
+				step("N5 a dropped controller dims its player's view and pauses them; replugging undoes it; after a minute another controller takes over", this::droppedController);
+				step("N9 a joining view's fade never dims player 1's border", this::joinFadeKeepsBorders);
+				step("N5b a controller dropping while its player picks a profile dims the picker under the reconnect card", this::droppedWhilePicking);
+				step("N6 player 1's Add player: one A on a free controller joins; the prompt expires, and Esc cancels it", this::addPlayer);
 				step("A1 RT punches a mob", this::triggerPunches);
 				step("A2 holding RT mines a block in the unfocused guest window", this::triggerMines);
 				step("A3 LT places a block", this::triggerPlaces);
 				step("P10 holding Drop throws the whole stack; a tap throws one", this::dropTapAndHold);
 				step("P8 satellite got the PlayStation pad style", this::padStyleReached);
+				step("N4 player 1's Leave game asks first; a guest's Leave game takes them out and closes their game", this::leaveGame);
 				step("P9 Player2 leaves", this::player2Leaves);
+				step("N8b player 1's PC keyboard types into a newcomer's keyboard only while player 1 plays on a controller",
+						this::pcKeyboardTypesIntoANewcomersKeyboard);
 				step("H3 player 1 on a controller gets a pointer on Minecraft's screens and can respawn", this::hostPointerOnScreens);
 				step("H4 controller hints on Minecraft's screens never cover anything and offer only what works", this::hintsStayClear);
 				step("H5 player 1 can switch between the controller pointer and the mouse at any time", this::pointerOrMouse);
@@ -1427,7 +1458,7 @@ public final class E2eDriver {
 					: SplitScreenConfig.read(new java.io.StringReader(new String(before, StandardCharsets.UTF_8)));
 			try (java.io.Writer out = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
 				new SplitScreenConfig(config.guestMemoryMb(), config.guestRenderDistance(), config.layout(), Preset.PERFORMANCE,
-						true, config.vulkanOffer()).write(out);
+						true, config.vulkanOffer(), config.titleStyle()).write(out);
 			}
 			reopenWorld();
 			check(hostLogSince(0).contains("hearthside preset performance (config)"), "the party took Performance from the config");
@@ -1655,6 +1686,283 @@ public final class E2eDriver {
 			return null;
 		});
 		Thread.sleep(100);
+	}
+
+	/** N7's overlay recorder: the scale and the views (GUI units) the overlay last drew, and seat 1's rects while recording. */
+	private volatile int overlayScale;
+	private volatile List<ViewFrame> overlayViews = List.of();
+	private volatile java.util.Set<Rect> recording;
+
+	private ViewFrame drawnView(int seat) {
+		return overlayViews.stream().filter(v -> v.seat() == seat).findFirst().orElseThrow(
+				() -> new AssertionError("missing: seat " + seat + "'s view in the overlay"));
+	}
+
+	/** The composited colour at a GUI pixel (the middle of it), after the overlay. */
+	private int probeAt(int guiX, int guiY) throws Exception {
+		int s = overlayScale;
+		return probePixel(guiX * s + s / 2, guiY * s + s / 2);
+	}
+
+	/** The composited colour at a framebuffer pixel, after the overlay. */
+	private int probePixel(int x, int y) throws Exception {
+		long mark = hostLogLength();
+		Compositor.e2eProbePoint = new int[] {x, y};
+		try {
+			Pattern line = Pattern.compile("hearthside overlay probe rgb=([0-9a-f]{6})");
+			String[] rgb = {null};
+			// The second line after the mark: the first may come from a read started before the point moved.
+			waitFor("an overlay probe at " + x + "," + y, Duration.ofSeconds(5), () -> {
+				Matcher m = line.matcher(hostLogSince(mark));
+				int n = 0;
+				while (m.find()) {
+					if (++n == 2) {
+						rgb[0] = m.group(1);
+					}
+				}
+				return rgb[0] != null;
+			});
+			return Integer.parseInt(rgb[0], 16);
+		} finally {
+			Compositor.e2eProbePoint = null;
+		}
+	}
+
+	/** Applies a change to player 1's Split-screen settings, as the Split-screen screen does. */
+	private void applySplitScreen(java.util.function.UnaryOperator<SplitScreenConfig> change) throws Exception {
+		onRender(() -> {
+			Party.current().applySettings(change.apply(Party.current().config()));
+			return null;
+		});
+	}
+
+	/** Seat 1's distinct rects drawn while {@code body} runs and for {@code millis} after. */
+	private java.util.Set<Rect> recordSeatOne(ThrowingRunnable body, long millis) throws Exception {
+		recording = java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
+		try {
+			body.run();
+			Thread.sleep(millis);
+			synchronized (recording) {
+				return new java.util.LinkedHashSet<>(recording);
+			}
+		} finally {
+			recording = null;
+		}
+	}
+
+	/**
+	 * N7 (Spec E section 3.5): player 1's pause menu opens Split-screen, whose changes apply live. Moving player 1 later
+	 * puts them on the right. The stacked layout glides there; borders off and name tags off disappear at once; with
+	 * layout animation off the views snap. The file keeps the new values; the title style applies the next time the
+	 * title screen opens. Everything is put back afterwards.
+	 */
+	private void splitScreenOptions() throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("config").resolve("hearthside.json");
+		byte[] before = Files.exists(file) ? Files.readAllBytes(file) : null;
+		SplitScreenConfig start = onRender(() -> Party.current().config());
+		List<Integer> order = onRender(() -> Party.current().viewOrder());
+		OverlayLayer recorder = (g, context) -> {
+			overlayScale = context.guiScale();
+			overlayViews = context.views();
+			java.util.Set<Rect> into = recording;
+			if (into != null) {
+				context.views().stream().filter(v -> v.seat() == 1).forEach(v -> into.add(v.rect()));
+			}
+		};
+		OverlayPass.register(recorder);
+		long mark = hostLogLength();
+		try {
+			waitFor("the overlay drawn", Duration.ofSeconds(5), () -> overlayScale > 0 && overlayViews.size() == 2);
+			check(start.layout().two() == LayoutSettings.TwoPlayer.SIDE_BY_SIDE && start.layout().borders() == BorderStyle.THIN
+					&& start.layout().nameTags() && start.layout().layoutAnimation(), "starts from the defaults");
+
+			// The way in: player 1's pause menu.
+			onRender(() -> {
+				minecraft.pauseGame(false);
+				pressLabelled("Split-screen…");
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.screen() != null
+					&& minecraft.gui.screen().getClass().getSimpleName().equals("SplitScreenScreen")),
+					"player 1's pause menu opens the Split-screen screen");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+
+			// Swap views: player 1 later goes right, and back.
+			onRender(() -> {
+				Party.current().setViewOrder(ViewOrder.later(Party.current().viewOrder(), 0));
+				return null;
+			});
+			waitFor("player 1's view on the right", Duration.ofSeconds(5),
+					() -> drawnView(0).rect().x() > drawnView(1).rect().x());
+			onRender(() -> {
+				Party.current().setViewOrder(order);
+				return null;
+			});
+			waitFor("player 1's view back on the left", Duration.ofSeconds(5),
+					() -> drawnView(0).rect().x() < drawnView(1).rect().x());
+			Thread.sleep(800);
+
+			// The stacked layout, gliding.
+			Rect sideBySide = drawnView(1).rect();
+			java.util.Set<Rect> glide = recordSeatOne(() -> applySplitScreen(
+					c -> c.withLayout(c.layout().withTwo(LayoutSettings.TwoPlayer.STACKED))), 1200);
+			Rect stacked = drawnView(1).rect();
+			log("   seat 1 drew " + glide.size() + " rects from " + sideBySide + " to " + stacked);
+			check(stacked.y() > 0 && stacked.width() > sideBySide.width(), "the guest's view moved below player 1's");
+			check(glide.size() >= 3, "the views glided there (" + glide.size() + " distinct rects)");
+			check(hostLogSince(mark).contains("hearthside split-screen applied twoplayerlayout=stacked"), "and logged it");
+
+			// Within the name tags' 4 s after the layout change: a tag and a border on the guest's view.
+			int colour = onRender(() -> Party.current().colorOf(1)) & 0xFFFFFF;
+			int tagX = stacked.x() + 14, tagY = stacked.y() + 13; // the colour square in the name tag
+			int borderX = stacked.x() + 1, borderY = stacked.y(); // the top border, over the guest's magenta corner
+			check(probeAt(tagX, tagY) == colour, "the guest's name tag shows after the layout change");
+			check(probeAt(borderX, borderY) != 0xFF00FF, "the guest's view has its border");
+			applySplitScreen(c -> c.withLayout(c.layout().withBorders(BorderStyle.OFF).withNameTags(false)));
+			Thread.sleep(200);
+			check(probeAt(tagX, tagY) != colour, "name tags off: the tag went at once");
+			check(probeAt(borderX, borderY) == 0xFF00FF, "borders off: the border went at once");
+			String applied = hostLogSince(mark);
+			check(applied.contains("hearthside split-screen applied borders=off")
+					&& applied.contains("hearthside split-screen applied nametags=false"), "and logged both");
+
+			// Saved.
+			SplitScreenConfig saved = SplitScreenConfig.read(new java.io.StringReader(Files.readString(file)));
+			check(saved.layout().two() == LayoutSettings.TwoPlayer.STACKED && saved.layout().borders() == BorderStyle.OFF
+					&& !saved.layout().nameTags(), "config/hearthside.json has the new values");
+
+			// Back on, long after the layout change's tags would have faded: they show at once, as after a layout change.
+			Thread.sleep(4600);
+			applySplitScreen(c -> c.withLayout(c.layout().withBorders(BorderStyle.THIN).withNameTags(true)));
+			Thread.sleep(200);
+			check(probeAt(tagX, tagY) == colour, "name tags back on: the tag shows at once");
+			check(probeAt(borderX, borderY) != 0xFF00FF, "borders back on: the border shows at once");
+
+			// Layout animation off: back to side by side in one step.
+			java.util.Set<Rect> snap = recordSeatOne(() -> applySplitScreen(c -> c.withLayout(
+					c.layout().withLayoutAnimation(false).withTwo(LayoutSettings.TwoPlayer.SIDE_BY_SIDE))), 1200);
+			log("   seat 1 drew " + snap + " with layout animation off");
+			check(snap.size() <= 2, "with layout animation off the views snap (" + snap.size() + " distinct rects)");
+			check(drawnView(1).rect().equals(sideBySide), "back side by side");
+
+			// The title style applies the next time the title screen opens.
+			applySplitScreen(c -> c.withTitleStyle(TitleStyleSetting.VANILLA));
+			TitleStyle.drewBackground = false;
+			TitleStyle.drewButtons = false;
+			onRender(() -> {
+				minecraft.gui.setScreen(new TitleScreen());
+				return null;
+			});
+			Thread.sleep(600);
+			check(!TitleStyle.drewBackground && !TitleStyle.drewButtons, "the vanilla title style: Minecraft's own title screen");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			applySplitScreen(c -> c.withTitleStyle(TitleStyleSetting.HEARTHSIDE));
+			onRender(() -> {
+				minecraft.gui.setScreen(new TitleScreen());
+				return null;
+			});
+			Thread.sleep(600);
+			check(TitleStyle.drewBackground && TitleStyle.drewButtons, "and Hearthside's again when switched back");
+
+			// Shown again, the same title screen takes the new style: Mod Menu's Configure goes back to the one it came from.
+			TitleScreen same = onRender(() -> (TitleScreen) minecraft.gui.screen());
+			onRender(() -> {
+				minecraft.gui.setScreen(new dev.hearthside.fabric.client.host.SplitScreenScreen(same));
+				return null;
+			});
+			applySplitScreen(c -> c.withTitleStyle(TitleStyleSetting.VANILLA));
+			TitleStyle.drewBackground = false;
+			TitleStyle.drewButtons = false;
+			onRender(() -> {
+				minecraft.gui.screen().onClose();
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.screen() == same), "Split-screen goes back to the title screen it came from");
+			Thread.sleep(600);
+			check(!TitleStyle.drewBackground && !TitleStyle.drewButtons, "that same title screen is now Minecraft's own");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				Party.current().setViewOrder(order);
+				Party.current().applySettings(start);
+				return null;
+			});
+			OverlayPass.unregister(recorder);
+			Thread.sleep(1000); // the views settle back before the next step
+			if (before != null) {
+				Files.write(file, before);
+			} else {
+				Files.deleteIfExists(file);
+			}
+		}
+	}
+
+	/**
+	 * N7b (Spec E sections 3.5 and 5): a preset chosen on the Split-screen screen waits for the next player to join. In a
+	 * window big enough for Performance to reduce a guest's resolution, Guest2 (already in the world) keeps their frame
+	 * size through a relayout after player 1 picks a preset whose resolution differs from theirs.
+	 */
+	private void presetWaitsForTheNextJoin() throws Exception {
+		Path file = minecraft.gameDirectory.toPath().resolve("config").resolve("hearthside.json");
+		byte[] before = Files.exists(file) ? Files.readAllBytes(file) : null;
+		SplitScreenConfig start = onRender(() -> Party.current().config());
+		List<Integer> order = onRender(() -> Party.current().viewOrder());
+		Rect window = onRender(() -> WindowPlacer.bounds(minecraft.getWindow()));
+		long handle = onRender(() -> minecraft.getWindow().handle());
+		try {
+			// Views big enough for a GUI scale of 4 (over 1280 wide), where Performance renders guests at a reduced resolution.
+			onRender(() -> SDLVideo.SDL_SetWindowSize(handle, 2720, 1440));
+			String[] seen = {""};
+			waitFor("Guest2's frame at the bigger window", Duration.ofSeconds(10), () -> {
+				GuiScaleLine guest = lastGuiScale(satelliteLog(), 2);
+				seen[0] = String.valueOf(guest);
+				return guest != null && guest.viewWidth() >= 1300;
+			});
+			Thread.sleep(1500);
+			GuiScaleLine launched = lastGuiScale(satelliteLog(), 2);
+			boolean reduced = launched.frameWidth() < launched.viewWidth();
+			Preset other = reduced ? Preset.QUALITY : Preset.PERFORMANCE;
+			log("   Guest2 at launch: " + launched + (reduced ? " (reduced)" : " (full)") + "; player 1 picks " + other);
+			GuiScaleRule.ViewScale wouldBe = GuiScaleRule.forView(new Rect(0, 0, launched.viewWidth(), launched.viewHeight()),
+					reduced ? launched.scale() + 1 : launched.scale(), !reduced);
+			check(wouldBe.frameWidth() != launched.frameWidth(), "that preset would size Guest2's frame differently (" + wouldBe + ")");
+			applySplitScreen(c -> c.withPreset(other));
+			// A relayout: player 1 swaps views and back.
+			onRender(() -> {
+				Party.current().setViewOrder(ViewOrder.later(Party.current().viewOrder(), 0));
+				return null;
+			});
+			Thread.sleep(800);
+			onRender(() -> {
+				Party.current().setViewOrder(order);
+				return null;
+			});
+			Thread.sleep(1500);
+			GuiScaleLine now = lastGuiScale(satelliteLog(), 2);
+			log("   Guest2 after the relayout: " + now);
+			check(now.frameWidth() == launched.frameWidth() && now.frameHeight() == launched.frameHeight(),
+					"Guest2, already in the world, keeps their frame size (" + launched.frameWidth() + "x"
+							+ launched.frameHeight() + ", now " + now.frameWidth() + "x" + now.frameHeight() + ")");
+		} finally {
+			onRender(() -> {
+				Party.current().setViewOrder(order);
+				Party.current().applySettings(start);
+				SDLVideo.SDL_SetWindowSize(handle, window.width(), window.height());
+				return null;
+			});
+			Thread.sleep(2000); // the views settle back before the next step
+			if (before != null) {
+				Files.write(file, before);
+			} else {
+				Files.deleteIfExists(file);
+			}
+		}
 	}
 
 	private long sevenMark;
@@ -2022,7 +2330,7 @@ public final class E2eDriver {
 		}
 	}
 
-	private static final int TILED_PAD = 130;
+	private static final int TILED_PAD = 130, TILED_TAKEOVER_PAD = 131;
 
 	/** D9: with tiled windows nothing would draw a card, so A, A joins straight away as that controller's profile. */
 	private void tiledDropIn() throws Exception {
@@ -2036,12 +2344,37 @@ public final class E2eDriver {
 			check(onRender(() -> Party.current().seatCard(1)) == null, "no card: nothing would draw it");
 			check(onRender(() -> Party.current().profileOf(1)) != null, "a profile was picked for the controller");
 			waitFor("the newcomer in the world", Duration.ofSeconds(180), () -> playerCount() == 2);
+			waitFor("their game in world mode", Duration.ofSeconds(60),
+					() -> satelliteLog().contains("hearthside controller: world mode"));
+
+			// Their controller drops (review Important 1): with tiled windows nothing draws a reconnect card, so their
+			// pause menu shows, and the chat offers the take-over and says when it happened.
+			int paused = count("hearthside satellite paused");
+			int menus = count("hearthside pause menu opened");
+			int hidden = count("hearthside pause menu hidden");
+			long mark = hostLogLength();
+			PADS.unplug(TILED_PAD);
+			waitFor("their game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > paused);
+			waitFor("their pause menu opened", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > menus);
+			Thread.sleep(500);
+			check(count("hearthside pause menu hidden") == hidden, "their pause menu shows: no card would stand in for it");
+			jumpJoinClock(61);
+			waitFor("the take-over offered in chat", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("[chat] player 2's controller is still disconnected"));
+			PADS.plug(TILED_TAKEOVER_PAD, "fake-tiled-takeover-pad", PadStyle.XBOX);
+			Thread.sleep(300);
+			press(TILED_TAKEOVER_PAD, PadButton.A);
+			waitFor("another controller took over", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("hearthside take-over player=2 controller=fake-tiled-takeover-pad"));
+			waitFor("and the chat says so", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("[chat] player 2 is playing on another controller now"));
 		} finally {
 			onRender(() -> {
 				Party.current().leaveAll();
 				return null;
 			});
 			PADS.unplug(TILED_PAD);
+			PADS.unplug(TILED_TAKEOVER_PAD);
 			waitFor("back to 1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
 		}
 	}
@@ -2696,6 +3029,15 @@ public final class E2eDriver {
 			pressUntil(HOST_PAD, PadButton.DPAD_UP, 6, () -> screen.focusedRow().equals("name"));
 			press(HOST_PAD, PadButton.A);
 			check(onRender(screen::typing), "A on the name opens the keyboard");
+			// Player 1's PC keyboard on it (Spec E section 3.6): a held Backspace deletes three, Enter keeps the name.
+			String before = onRender(screen::worldName);
+			pcHoldKey(InputConstants.KEY_BACKSPACE, 2);
+			pcKey(InputConstants.KEY_RETURN);
+			String kept = onRender(screen::worldName);
+			check(kept.equals(before.substring(0, before.length() - 3)) && !onRender(screen::typing),
+					"a held Backspace deleted three characters and Enter kept the name (" + before + " → " + kept + ")");
+			press(HOST_PAD, PadButton.A);
+			check(onRender(screen::typing), "A on the name opens the keyboard again");
 			press(HOST_PAD, PadButton.B);
 			Thread.sleep(600);
 			check(onRender(() -> minecraft.gui.screen() == screen && !screen.typing()),
@@ -3232,7 +3574,9 @@ public final class E2eDriver {
 
 	/** Moves a seat's carousel to New. */
 	private void toNew(int seat, int pad) throws Exception {
-		for (int i = 0; i < 6 && !onRender(() -> cardShows(seat)).equals("New"); i++) {
+		// New ends the carousel, after however many profiles earlier steps saved.
+		int entries = onRender(() -> card(seat).carousel().entries().size());
+		for (int i = 0; i < entries && !onRender(() -> cardShows(seat)).equals("New"); i++) {
 			press(pad, PadButton.DPAD_RIGHT);
 		}
 		check(onRender(() -> cardShows(seat)).equals("New"), "seat " + seat + " reached New");
@@ -3777,13 +4121,1112 @@ public final class E2eDriver {
 	}
 
 	private void pauseMenuOpensAndCloses() throws Exception {
-		int pausesBefore = count("hearthside controller: menu mode (pausescreen)");
+		// Vanilla's pause screen before Spec E, Hearthside's pause menu after: either is "(pause…".
+		int pausesBefore = count("hearthside controller: menu mode (pause");
 		int worldBefore = count("hearthside controller: world mode");
 		press(102, PadButton.START);
 		waitFor("pause menu on the guest", Duration.ofSeconds(10),
-				() -> count("hearthside controller: menu mode (pausescreen)") > pausesBefore);
+				() -> count("hearthside controller: menu mode (pause") > pausesBefore);
 		press(102, PadButton.B);
 		waitFor("pause menu closed", Duration.ofSeconds(10), () -> count("hearthside controller: world mode") > worldBefore);
+	}
+
+	/**
+	 * N1 (Spec E section 3.1, plan R7): a guest's START opens Hearthside's pause menu in its own game, focus on Resume.
+	 * The D-pad and A open Options… and Game menu…, which are vanilla's screens and come back to the menu; Resume closes
+	 * it. The guest's screens are read from its log.
+	 */
+	private void guestPauseMenu() throws Exception {
+		String entries = "hearthside pause menu opened entries=resume,options…,game menu…,leave game";
+		int opened = count(entries);
+		press(102, PadButton.START);
+		waitFor("Hearthside's pause menu in the guest's game", Duration.ofSeconds(10), () -> count(entries) > opened);
+
+		int options = count("hearthside screen optionsscreen");
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.A);
+		waitFor("vanilla's Options in the guest's game", Duration.ofSeconds(10),
+				() -> count("hearthside screen optionsscreen") > options);
+		int back = count("hearthside screen pausemenuscreen");
+		press(102, PadButton.B);
+		waitFor("B from Options back to Hearthside's menu", Duration.ofSeconds(10),
+				() -> count("hearthside screen pausemenuscreen") > back);
+
+		int vanilla = count("hearthside screen pausescreen");
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.A);
+		waitFor("vanilla's pause screen under Game menu…", Duration.ofSeconds(10),
+				() -> count("hearthside screen pausescreen") > vanilla);
+		int backAgain = count("hearthside screen pausemenuscreen");
+		press(102, PadButton.B);
+		waitFor("B from vanilla's pause screen back to Hearthside's menu", Duration.ofSeconds(10),
+				() -> count("hearthside screen pausemenuscreen") > backAgain);
+
+		int world = count("hearthside controller: world mode");
+		press(102, PadButton.A);
+		waitFor("Resume (focused when the menu opens) closes it", Duration.ofSeconds(10),
+				() -> count("hearthside controller: world mode") > world);
+	}
+
+	/** A stand-in for a mod that adds a button to vanilla's pause screen, as Mod Menu does (Spec E goal 5). */
+	private static final String STAND_IN = "E2E mod button";
+	private static boolean standInRegistered;
+
+	private static void addStandInModButton() {
+		if (standInRegistered) {
+			return;
+		}
+		standInRegistered = true;
+		ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
+			if (screen instanceof PauseScreen) {
+				Screens.getWidgets(screen).add(Button.builder(Component.literal(STAND_IN), b -> {}).bounds(4, 4, 98, 20).build());
+			}
+		});
+	}
+
+	/** The labels of a screen's buttons. Render thread. */
+	private static List<String> buttonLabels(Screen screen) {
+		return screen == null ? List.of() : Screens.getWidgets(screen).stream().map(w -> w.getMessage().getString()).toList();
+	}
+
+	/** Presses the open screen's button labelled {@code label}. Render thread. */
+	private void pressLabelled(String label) {
+		Screens.getWidgets(minecraft.gui.screen()).stream().filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals(label)).map(w -> (AbstractButton) w).findFirst()
+				.orElseThrow(() -> new AssertionError("missing: a button labelled " + label + " on "
+						+ minecraft.gui.screen().getClass().getSimpleName()))
+				.onPress(new KeyEvent(0, 0, 0));
+	}
+
+	private static boolean onPauseMenu(Screen screen) {
+		return screen != null && screen.getClass().getSimpleName().equals("PauseMenuScreen");
+	}
+
+	/** N2 (Spec E section 3.1, goal 5): playing alone, the pause key opens vanilla's pause screen, a mod's button and all. */
+	private void alonePauseIsVanilla() throws Exception {
+		addStandInModButton();
+		waitFor("player 1 in play", Duration.ofSeconds(60), () -> onRender(() -> minecraft.player != null && minecraft.gui.screen() == null));
+		try {
+			Screen opened = onRender(() -> {
+				minecraft.pauseGame(false);
+				return minecraft.gui.screen();
+			});
+			check(opened instanceof PauseScreen, "alone, the pause key opens vanilla's pause screen (got "
+					+ (opened == null ? "nothing" : opened.getClass().getSimpleName()) + ")");
+			check(onRender(() -> buttonLabels(minecraft.gui.screen())).contains(STAND_IN), "with the mod's button on it");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
+	}
+
+	/**
+	 * N2b (Spec E section 3.1, goal 5): in split-screen, player 1's pause key opens Hearthside's menu, which other mods
+	 * still see as a pause screen; Game menu… opens vanilla's pause screen with the mod's button; closing it returns to
+	 * Hearthside's menu.
+	 */
+	private void splitScreenPauseKeepsModButtons() throws Exception {
+		addStandInModButton();
+		long mark = hostLogLength();
+		try {
+			Screen opened = onRender(() -> {
+				minecraft.pauseGame(false);
+				return minecraft.gui.screen();
+			});
+			check(onPauseMenu(opened), "in split-screen, player 1's pause key opens Hearthside's menu (got "
+					+ (opened == null ? "nothing" : opened.getClass().getSimpleName()) + ")");
+			check(opened.isPauseScreen(), "Hearthside's menu still counts as a pause screen for other mods");
+			check(hostLogSince(mark).contains("hearthside pause menu opened entries=") && hostLogSince(mark).contains("game menu…"),
+					"player 1's menu logged its entries, Game menu… among them");
+			onRender(() -> {
+				pressLabelled("Game menu…");
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.screen() instanceof PauseScreen), "Game menu… opens vanilla's pause screen");
+			check(onRender(() -> buttonLabels(minecraft.gui.screen())).contains(STAND_IN), "with the mod's button on it");
+			onRender(() -> {
+				minecraft.gui.screen().onClose();
+				return null;
+			});
+			check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "closing vanilla's pause screen returns to Hearthside's menu");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
+	}
+
+	/** A controller that joins during N3 and is still choosing a profile while everyone in the world is paused. */
+	private static final int PICKING_PAD = 111;
+
+	private static long gameTime(IntegratedServer server) {
+		return server.overworld().getGameTime();
+	}
+
+	/**
+	 * A silent looping sound in player 1's game. Its channel is paused and resumed with every other world sound, so it
+	 * shows whether player 1's game's sounds are paused (N3).
+	 */
+	private static final class SoundProbe extends net.minecraft.client.resources.sounds.AbstractSoundInstance {
+		SoundProbe() {
+			super(net.minecraft.sounds.SoundEvents.MINECART_RIDING, net.minecraft.sounds.SoundSource.AMBIENT,
+					net.minecraft.client.resources.sounds.SoundInstance.createUnseededRandom());
+			looping = true;
+			volume = 0.0F;
+			relative = true;
+			attenuation = Attenuation.NONE;
+		}
+
+		@Override
+		public boolean canStartSilent() {
+			return true;
+		}
+	}
+
+	/** The probe's channel: "playing", "paused", "stopped", or "none" (not started: no sound device). */
+	private String soundState(SoundProbe probe) throws Exception {
+		java.util.concurrent.CompletableFuture<String> state = new java.util.concurrent.CompletableFuture<>();
+		boolean asked = onRender(() -> {
+			var engine = ((dev.hearthside.fabric.client.mixin.SoundManagerAccessor) minecraft.getSoundManager())
+					.hearthside$soundEngine();
+			var handle = ((dev.hearthside.fabric.client.mixin.SoundEngineAccessor) engine).hearthside$instanceToChannel()
+					.get(probe);
+			if (handle == null) {
+				return false;
+			}
+			handle.execute(channel -> state.complete(channel.playing() ? "playing" : channel.stopped() ? "stopped" : "paused"));
+			return true;
+		});
+		return asked ? state.completeOnTimeout("none", 2, TimeUnit.SECONDS).get() : "none";
+	}
+
+	/** Whether a menu's drawn status lines are {@code expected} whole: every word there, nothing cut short. */
+	private static boolean wholeStatus(List<String> drawn, String expected) {
+		return drawn != null && String.join(" ", drawn).replace(" ", "").toLowerCase(Locale.ROOT)
+				.equals(expected.replace(" ", "").toLowerCase(Locale.ROOT));
+	}
+
+	/** Player 1's open pause menu draws {@code expected} as its status, whole (wrapped as it needs, never cut). */
+	private void waitForMenuStatusDrawnWhole(String expected) throws Exception {
+		List<String>[] drawn = new List[1];
+		try {
+			waitFor("player 1's menu draws \"" + expected + "\" whole", Duration.ofSeconds(3), () -> {
+				drawn[0] = onRender(() -> dev.hearthside.fabric.client.menu.PauseMenuScreen.e2eDrawnStatus(minecraft));
+				return wholeStatus(drawn[0], expected);
+			});
+		} catch (AssertionError e) {
+			throw new AssertionError(e.getMessage() + " (drawn " + drawn[0] + ")");
+		}
+	}
+
+	/**
+	 * A guest's pause-menu layouts logged after its {@code skip} first ones, each as its drawn lines: only those not cut
+	 * short (the satellite logs them in E2E runs).
+	 */
+	private static List<List<String>> drawnStatuses(String satelliteLog, int skip) {
+		return drawnStatuses(satelliteLog, skip, false);
+	}
+
+	/** As {@link #drawnStatuses(String, int)}, with the layouts cut short too if {@code evenCut}. */
+	private static List<List<String>> drawnStatuses(String satelliteLog, int skip, boolean evenCut) {
+		Matcher m = Pattern.compile("hearthside pause status lines=\\d+ truncated=(true|false) drawn=([^\\r\\n]*)")
+				.matcher(satelliteLog);
+		List<List<String>> layouts = new ArrayList<>();
+		for (int n = 0; m.find(); n++) {
+			if (n >= skip && (evenCut || m.group(1).equals("false"))) {
+				layouts.add(List.of(m.group(2).split("\\|")));
+			}
+		}
+		return layouts;
+	}
+
+	/**
+	 * A player's own menu never names them as still playing (final review M1): of Player2's menu's layouts after its
+	 * {@code skip} first ones, those naming Player2 (the log is lower case).
+	 */
+	private List<String> guestMenusNamingTheGuest(int skip) throws IOException {
+		return drawnStatuses(satelliteLog(), skip, true).stream().map(d -> String.join(" ", d))
+				.filter(line -> line.contains("player2")).toList();
+	}
+
+	/** The open screen's narration, which carries the pause menu's status line. Render thread. */
+	private String narration() {
+		Screen screen = minecraft.gui.screen();
+		return screen == null ? "" : screen.getNarrationMessage().getString();
+	}
+
+	/**
+	 * N3 (Spec E section 3.2, plan R5): the world freezes only when everyone in it is paused. (a) Player 1 paused while
+	 * Player2 plays: the world runs and player 1's menu says who is still playing. (b) Player2 pausing too freezes it
+	 * within a second, and both menus say so; (d) a newcomer still choosing a profile doesn't count. (c) Player2 resuming
+	 * starts it again. Player 1's status is read from their menu's narration, Player2's from its log. First, Player2
+	 * pauses alone (START, then B) while player 1 plays: their menu draws "The world keeps going — <player 1> is still
+	 * playing" whole, wrapped as it needs and never cut short (from its layout log line; the status-line screenshot), and
+	 * player 1's menu draws its own status whole at (a) and (b), in player 1's quarter view once the newcomer's view
+	 * makes three (the cramped case: broken after the em dash; the pause-menu-cramped screenshot).
+	 */
+	private void pauseTogether() throws Exception {
+		IntegratedServer server = minecraft.getSingleplayerServer();
+		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		SoundProbe probe = new SoundProbe();
+		boolean hostPadClaimed = false;
+		try {
+			// Player 1's game is the couch's only audio (guests are muted): its sounds follow the world, not their menu.
+			onRender(() -> {
+				minecraft.getSoundManager().play(probe);
+				return null;
+			});
+			long probeUntil = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+			while (!soundState(probe).equals("playing") && System.nanoTime() < probeUntil) {
+				Thread.sleep(100);
+			}
+			boolean sound = soundState(probe).equals("playing");
+			if (!sound) {
+				log("   no sound device: N3's sound checks are skipped");
+			}
+			// Player2 paused while player 1 plays: their menu's status names player 1 in full, wrapped, never cut short.
+			String host = minecraft.getUser().getName();
+			int statusLines = count("hearthside pause status lines=");
+			int ownPaused = count("hearthside pause state paused");
+			press(102, PadButton.START);
+			waitFor("Player2's game says it's paused", Duration.ofSeconds(10),
+					() -> count("hearthside pause state paused") > ownPaused);
+			String guestLine = "The world keeps going — " + host + " is still playing";
+			waitFor("Player2's menu laid out for \"" + guestLine + "\"", Duration.ofSeconds(10),
+					() -> drawnStatuses(satelliteLog(), statusLines).stream().anyMatch(d -> wholeStatus(d, guestLine)));
+			windowShot("status-line");
+			List<String> naming = guestMenusNamingTheGuest(statusLines);
+			check(naming.isEmpty(), "Player2's menu never names Player2 as still playing, even as it opens (drew " + naming + ")");
+			int ownPlaying = count("hearthside pause state playing");
+			press(102, PadButton.B);
+			waitFor("Player2's game says it's playing", Duration.ofSeconds(10),
+					() -> count("hearthside pause state playing") > ownPlaying);
+
+			press(PICKING_PAD, PadButton.A);
+			press(PICKING_PAD, PadButton.A);
+			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+			// Their view makes three: player 1's is a quarter of the E2E's 854×480 window, 426×239 GUI px, the most cramped
+			// view player 1's six-entry menu has in a run. Its status must still be drawn whole there.
+			waitFor("player 1's view a quarter of the window", Duration.ofSeconds(10),
+					() -> onRender(() -> minecraft.getWindow().getGuiScaledHeight() < 250));
+			log("   player 1's GUI " + onRender(() -> minecraft.getWindow().getGuiScaledWidth() + "×"
+					+ minecraft.getWindow().getGuiScaledHeight()));
+			// On a controller, so the menu shows its hints too (in play: the claiming A only jumps).
+			claimHostPad();
+			hostPadClaimed = true;
+
+			long mark = hostLogLength();
+			onRender(() -> {
+				minecraft.pauseGame(false);
+				return null;
+			});
+			check(onRender(() -> minecraft.gui.isPausing()), "player 1 paused");
+			Thread.sleep(500);
+			long running = gameTime(server);
+			Thread.sleep(1000);
+			check(gameTime(server) > running, "(a) player 1 paused while Player2 plays: the world keeps going");
+			check(hostLogSince(mark).contains("hearthside world running still playing=player2"),
+					"player 1's game logs that Player2 is still playing");
+			check(onRender(this::narration).contains("The world keeps going — Player2 is still playing"),
+					"player 1's menu says Player2 is still playing (got \"" + onRender(this::narration) + "\")");
+			waitForMenuStatusDrawnWhole("The world keeps going — Player2 is still playing");
+			// Two lines, broken after the em dash rather than mid-phrase.
+			List<String> drawn = onRender(() -> dev.hearthside.fabric.client.menu.PauseMenuScreen.e2eDrawnStatus(minecraft));
+			check(List.of("The world keeps going —", "Player2 is still playing").equals(drawn),
+					"player 1's menu breaks its status after the em dash (drawn " + drawn + ")");
+			onRender(() -> {
+				// Only the menu in the picture: not the claim's "Controller assigned to you." under its hints.
+				minecraft.gui.hud.getChat().clearMessages(false);
+				return null;
+			});
+			windowShot("pause-menu-cramped");
+			if (sound) {
+				String state = soundState(probe);
+				check(state.equals("playing"), "player 1's game's sounds play on while the world runs (got " + state + ")");
+			}
+
+			int pausedLines = count("hearthside pause state paused");
+			int frozenLines = count("hearthside world frozen");
+			press(102, PadButton.START);
+			waitFor("Player2's game says it's paused", Duration.ofSeconds(10),
+					() -> count("hearthside pause state paused") > pausedLines);
+			Thread.sleep(1000);
+			long frozen = gameTime(server);
+			Thread.sleep(1000);
+			check(gameTime(server) == frozen, "(b) everyone in the world paused: the world froze within a second");
+			check(onRender(() -> card(2) != null), "(d) though a newcomer is still choosing a profile");
+			check(hostLogSince(mark).contains("hearthside world frozen"), "player 1's game logs the world frozen");
+			check(onRender(this::narration).contains("Everyone's paused — the world is frozen"),
+					"player 1's menu says the world is frozen (got \"" + onRender(this::narration) + "\")");
+			waitForMenuStatusDrawnWhole("Everyone's paused — the world is frozen");
+			if (sound) {
+				String state = soundState(probe);
+				check(state.equals("paused"), "player 1's game's sounds pause with the world (got " + state + ")");
+			}
+			waitFor("Player2's menu told the world is frozen", Duration.ofSeconds(5),
+					() -> count("hearthside world frozen") > frozenLines);
+
+			int playingLines = count("hearthside pause state playing");
+			press(102, PadButton.A); // Resume, focused whenever the menu opens
+			waitFor("Player2's game says it's playing", Duration.ofSeconds(10),
+					() -> count("hearthside pause state playing") > playingLines);
+			Thread.sleep(500);
+			long resumed = gameTime(server);
+			Thread.sleep(1000);
+			check(gameTime(server) > resumed, "(c) Player2 resuming starts the world again");
+			check(onRender(this::narration).contains("Player2 is still playing"), "and player 1's menu says so");
+			// Player2's START at (b) opened their menu while the host's last word still had Player2 playing.
+			List<String> namingAfter = guestMenusNamingTheGuest(statusLines);
+			check(namingAfter.isEmpty(), "nor when Player2 pauses after player 1 (drew " + namingAfter + ")");
+			if (sound) {
+				String state = soundState(probe);
+				check(state.equals("playing"),
+						"player 1's game's sounds play again with the world, their menu still open (got " + state + ")");
+			}
+		} finally {
+			if (hostPadClaimed) {
+				releaseHostPad();
+			}
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				minecraft.getSoundManager().stop(probe);
+				return null;
+			});
+			if (onRender(() -> card(2) != null)) {
+				press(PICKING_PAD, PadButton.B);
+			}
+			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+			PADS.unplug(PICKING_PAD);
+		}
+	}
+
+	/** The controller that takes Player2 over in N5. */
+	private static final int TAKEOVER_PAD = 112;
+	private static final String TAKEOVER_GUID = "fake-takeover-pad";
+
+	/** The guest's view's top-left corner, inside the magenta patch its game paints there in E2E runs (framebuffer). */
+	private int[] guestCorner() throws Exception {
+		Rect r = onRender(() -> Compositor.active().overlayViews().stream().filter(v -> v.seat() == 1).findFirst()
+				.orElseThrow(() -> new AssertionError("missing: seat 1's view")).rect());
+		return new int[] {r.x() + 4, r.y() + 4};
+	}
+
+	private static boolean dimmedMagenta(int rgb) {
+		return rgb != 0xFF00FF && (rgb >> 16 & 0xFF) < 0xC0 && (rgb & 0xFF) < 0xC0 && (rgb >> 8 & 0xFF) < 0x40;
+	}
+
+	/** Jumps the party's join clock {@code seconds} ahead. Never back: the flow's deadlines only move forward. */
+	private void jumpJoinClock(long seconds) {
+		Party.e2eTimeShift = Party.e2eTimeShift.plusSeconds(seconds);
+	}
+
+	/** The controller that answers Add player in N6. */
+	private static final int ADD_PAD = 113;
+
+	/** Player 1's pause menu, then its Add player entry, as player 1 would choose it. */
+	private void chooseAddPlayer() throws Exception {
+		onRender(() -> {
+			minecraft.pauseGame(false);
+			pressLabelled("Add player");
+			return null;
+		});
+		check(onRender(() -> minecraft.gui.screen() == null), "Add player closes the menu");
+	}
+
+	/** The join prompt as last drawn overlaps none of Minecraft's toasts in player 1's view (it sits below them). */
+	private void promptClearOfToasts(String shot) throws Exception {
+		var toast = onRender(() -> Party.current().joinToast());
+		var drawn = onRender(toast::e2eDrawn);
+		var toasts = onRender(toast::e2eToasts);
+		HearthsideMod.LOGGER.info("Hearthside E2E {} prompt={} toasts={}", shot, drawn, toasts);
+		check(drawn != null, shot + ": the prompt was drawn");
+		check(!toasts.isEmpty(), shot + ": it saw the tutorial toast");
+		check(toasts.stream().noneMatch(drawn::intersects), shot + ": the prompt " + drawn + " overlaps a toast " + toasts);
+		// The mapping itself: the tutorial toast sits at the right edge of player 1's view.
+		var view = onRender(toast::e2eView);
+		check(view != null, shot + ": mapped from player 1's view");
+		int right = view.x() + view.width();
+		check(toasts.stream().anyMatch(t -> Math.abs(t.x() + t.width() - right) <= 1),
+				shot + ": a toast's right edge on player 1's view's right edge " + right + " " + toasts);
+	}
+
+	/** Backs a newcomer out of their profile picker and waits until their seat is free. */
+	private void backOut(int pad) throws Exception {
+		if (onRender(() -> card(2) != null)) {
+			press(pad, PadButton.B);
+		}
+		waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+	}
+
+	/**
+	 * N6 (Spec E section 3.4, Review Focus 5): player 1's Add player closes the menu and shows the prompt for 15 s (the
+	 * join clock jumped past it). Then one A on a free controller joins, without the usual second A, even from a controller
+	 * whose own double-A prompt was pending. Esc on player 1's keyboard cancels the prompt without opening the menu.
+	 */
+	private void addPlayer() throws Exception {
+		long mark = hostLogLength();
+		// Minecraft's keyboard tutorial toast in player 1's view, by the window's centre where the prompt hangs: the prompt
+		// sits below it, never over it. The new world's own is still up unless an earlier step took a controller.
+		TutorialToast tutorial = onRender(() -> {
+			if (hasTutorialToast()) {
+				return null;
+			}
+			TutorialToast t = new TutorialToast(minecraft.font, TutorialToast.Icons.MOVEMENT_KEYS,
+					Component.literal("Move with W, A, S and D"), Component.literal("Jump with Space"), false);
+			minecraft.gui.toastManager().addToast(t);
+			return t;
+		});
+		waitFor("the keyboard tutorial toast showing", Duration.ofSeconds(3), () -> onRender(this::hasTutorialToast));
+		Thread.sleep(1000); // slid in
+		try {
+			// (b) The prompt expires after 15 s.
+			chooseAddPlayer();
+			waitFor("the add-player prompt", Duration.ofSeconds(5), () -> hostLogSince(mark).contains("hearthside add player prompt shown"));
+			Thread.sleep(50);
+			promptClearOfToasts("add-player coming in"); // its slide doesn't cross the tutorial toast either
+			Thread.sleep(400); // in place
+			windowShot("add-player-connect"); // no free controller yet: "Connect a controller, then press A"
+			promptClearOfToasts("add-player-connect");
+			jumpJoinClock(16);
+			// Its time is up: Esc at once is the pause key again, not a cancel (P-9: only while the prompt shows).
+			long expiry = hostLogLength();
+			pcKey(InputConstants.KEY_ESCAPE);
+			check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "(b) Esc as the prompt runs out opens the pause menu");
+			check(!hostLogSince(expiry).contains("hearthside add player prompt cancelled"), "(b) and cancels nothing");
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+			waitFor("(b) the prompt expired", Duration.ofSeconds(5),
+					() -> hostLogSince(mark).contains("hearthside add player prompt expired"));
+
+			// (a) One A on a free controller joins.
+			PADS.plug(ADD_PAD, "fake-add-pad", PadStyle.XBOX);
+			Thread.sleep(300);
+			long joined = hostLogLength();
+			chooseAddPlayer();
+			Thread.sleep(400);
+			windowShot("add-player"); // "Press A on a new controller to join"
+			promptClearOfToasts("add-player");
+			press(ADD_PAD, PadButton.A);
+			waitFor("(a) one A joins: a newcomer choosing a profile", Duration.ofSeconds(5),
+					() -> onRender(() -> card(2) != null));
+			check(hostLogSince(joined).contains("hearthside add player prompt joined"), "and the prompt says so");
+			backOut(ADD_PAD);
+
+			// (c) A controller whose double-A prompt is pending joins with its next A once player 1 asks.
+			press(ADD_PAD, PadButton.A); // its own join prompt: "press A again"
+			long pending = hostLogLength();
+			chooseAddPlayer();
+			press(ADD_PAD, PadButton.A);
+			waitFor("(c) the pending controller joined", Duration.ofSeconds(5), () -> onRender(() -> card(2) != null));
+			check(hostLogSince(pending).contains("hearthside add player prompt joined"), "through Add player");
+			backOut(ADD_PAD);
+
+			// (d) While a dropped Player2 is offered for take-over, a free controller's A takes them over (that beats Add
+			// player): the prompt says so, and says join again once their controller is back.
+			int paused = count("hearthside satellite paused");
+			long offered = hostLogLength();
+			PADS.unplug(102);
+			try {
+				waitFor("(d) Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > paused);
+				jumpJoinClock(61);
+				waitFor("(d) the take-over offered", Duration.ofSeconds(5),
+						() -> hostLogSince(offered).contains("hearthside take-over offered player=2"));
+				chooseAddPlayer();
+				waitFor("(d) the prompt offers the take-over", Duration.ofSeconds(3),
+						() -> onRender(() -> Party.current().joinToast().e2eLine())
+								.equals("Press A on a new controller to take over Player2"));
+				Thread.sleep(300);
+				windowShot("add-player-take-over");
+			} finally {
+				PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+				PADS.set(102, InputFrame.NEUTRAL);
+			}
+			waitFor("(d) back to joining once Player2's controller is back", Duration.ofSeconds(5),
+					() -> onRender(() -> Party.current().joinToast().e2eLine()).equals("Press A on a new controller to join"));
+
+			// Esc on player 1's keyboard cancels the prompt, and only that.
+			long cancel = hostLogLength();
+			chooseAddPlayer();
+			pcKey(InputConstants.KEY_ESCAPE);
+			waitFor("Esc cancelled the prompt", Duration.ofSeconds(5),
+					() -> hostLogSince(cancel).contains("hearthside add player prompt cancelled"));
+			check(onRender(() -> minecraft.gui.screen() == null), "and didn't open the pause menu");
+
+			// B on player 1's controller cancels it too (after the screenshots: taking a controller clears the keyboard
+			// tutorial toast).
+			claimHostPad();
+			try {
+				long padCancel = hostLogLength();
+				chooseAddPlayer();
+				press(HOST_PAD, PadButton.B);
+				waitFor("B on player 1's controller cancelled the prompt", Duration.ofSeconds(5),
+						() -> hostLogSince(padCancel).contains("hearthside add player prompt cancelled"));
+				check(onRender(() -> minecraft.gui.screen() == null && !Party.current().addPlayerShowing()),
+						"and opened nothing");
+			} finally {
+				releaseHostPad();
+			}
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				if (tutorial != null) {
+					tutorial.hide();
+				}
+				return null;
+			});
+			backOut(ADD_PAD);
+			PADS.unplug(ADD_PAD);
+			jumpJoinClock(16); // any prompt still showing has expired
+			Thread.sleep(1000); // the views settle back before the next step
+		}
+	}
+
+	/** N6b (plan R3): with four players, player 1's Add player is greyed out. */
+	private void addPlayerGreyedWhenFull() throws Exception {
+		check(playerCount() == 4, "four players");
+		try {
+			boolean active = onRender(() -> {
+				minecraft.pauseGame(false);
+				return Screens.getWidgets(minecraft.gui.screen()).stream()
+						.filter(w -> w instanceof AbstractButton && w.getMessage().getString().equals("Add player"))
+						.findFirst().orElseThrow(() -> new AssertionError("missing: Add player in player 1's menu")).active;
+			});
+			check(!active, "Add player is greyed out with four players");
+		} finally {
+			onRender(() -> {
+				minecraft.gui.setScreen(null);
+				return null;
+			});
+		}
+	}
+
+	/** Takes Player2 over with a newly plugged controller, after a dropped one's minute has passed. */
+	private void takeOverWith(int pad, String guid, PadStyle style) throws Exception {
+		long mark = hostLogLength();
+		jumpJoinClock(61);
+		waitFor("the take-over offered", Duration.ofSeconds(5),
+				() -> hostLogSince(mark).contains("hearthside take-over offered player=2"));
+		int resumed = count("hearthside satellite resumed");
+		PADS.plug(pad, guid, style);
+		Thread.sleep(300);
+		if (pad == TAKEOVER_PAD) {
+			windowShot("take-over"); // the card's take-over line, with the new controller's A
+		}
+		press(pad, PadButton.A);
+		waitFor("the new controller took Player2 over", Duration.ofSeconds(5),
+				() -> hostLogSince(mark).contains("hearthside take-over player=2 controller=" + guid));
+		waitFor("Player2's game resumed", Duration.ofSeconds(10), () -> count("hearthside satellite resumed") > resumed);
+	}
+
+	/**
+	 * N5 (Spec E section 3.3, Review Focus 1): unplugging a guest's controller dims their view behind a card and opens
+	 * their pause menu; replugging undoes both, but leaves a menu they had opened themselves. After a minute (the join
+	 * clock jumped ahead) a new controller's single A takes the player over where they stand, and becomes their
+	 * profile's controller. Pad 102 takes Player2 back the same way, for the steps after.
+	 */
+	private void droppedController() throws Exception {
+		int[] corner = guestCorner();
+		check(probePixel(corner[0], corner[1]) == 0xFF00FF, "the guest's view is bright before the drop");
+
+		// The drop, and the same controller coming back.
+		int paused = count("hearthside satellite paused");
+		int menus = count("hearthside pause menu opened");
+		PADS.unplug(102);
+		waitFor("Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > paused);
+		waitFor("Player2's pause menu opened", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > menus);
+		int veiled = probePixel(corner[0], corner[1]);
+		check(dimmedMagenta(veiled), "the reconnect card dims the guest's view (corner " + Integer.toHexString(veiled) + ")");
+		windowShot("reconnect-card");
+		int world = count("hearthside controller: world mode");
+		PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+		waitFor("(a) replugging closes the menu the drop opened", Duration.ofSeconds(10),
+				() -> count("hearthside controller: world mode") > world);
+		waitFor("(a) and the card", Duration.ofSeconds(5), () -> probePixel(corner[0], corner[1]) == 0xFF00FF);
+
+		// (b) A menu Player2 opened themselves stays open through a drop and a reconnect.
+		int own = count("hearthside pause menu opened");
+		press(102, PadButton.START);
+		waitFor("Player2's own pause menu", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > own);
+		int resumed = count("hearthside satellite resumed");
+		PADS.unplug(102);
+		Thread.sleep(500);
+		PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+		waitFor("Player2's game resumed", Duration.ofSeconds(10), () -> count("hearthside satellite resumed") > resumed);
+		int stillOpen = count("hearthside controller: world mode");
+		Thread.sleep(1500);
+		check(count("hearthside controller: world mode") == stillOpen, "(b) their own menu is still open after the reconnect");
+		press(102, PadButton.B);
+		waitFor("B closes it", Duration.ofSeconds(10), () -> count("hearthside controller: world mode") > stillOpen);
+
+		// (c) A minute later, another controller takes over.
+		ServerPlayer guest = guest("Player2");
+		Vec3 where = guest.position();
+		int dropped = count("hearthside satellite paused");
+		long takeoverMark = hostLogLength();
+		PADS.unplug(102);
+		waitFor("Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > dropped);
+		try {
+			int aPresses = count("hearthside input a down");
+			takeOverWith(TAKEOVER_PAD, TAKEOVER_GUID, PadStyle.XBOX);
+			waitFor("(c) Player2's game got the new controller's style", Duration.ofSeconds(5),
+					() -> satelliteLog().contains("hearthside setpadstyle xbox"));
+			Thread.sleep(500);
+			check(count("hearthside input a down") == aPresses,
+					"(c) the A that took Player2 over never pressed anything in their game");
+			check(guest("Player2").position().distanceTo(where) < 0.5, "(c) Player2 is where they were");
+			GuestProfile profile = profiles().load().stream().filter(p -> p.name().equals("Player2")).findFirst().orElseThrow();
+			check(TAKEOVER_GUID.equals(profile.preferredControllerGuid()), "(c) and the new controller is now their profile's");
+			Vec3 start = guest("Player2").position();
+			PADS.set(TAKEOVER_PAD, new InputFrame(0, 0, 0, -1, 0, 0, 0, 0));
+			Thread.sleep(2000);
+			PADS.set(TAKEOVER_PAD, InputFrame.NEUTRAL);
+			check(guest("Player2").position().distanceTo(start) > 1, "(c) the new controller moves Player2");
+		} finally {
+			if (hostLogSince(takeoverMark).contains("hearthside take-over player=2 controller=" + TAKEOVER_GUID)) {
+				// Pad 102 takes Player2 back the same way.
+				int away = count("hearthside satellite paused");
+				PADS.unplug(TAKEOVER_PAD);
+				waitFor("Player2's game paused", Duration.ofSeconds(10), () -> count("hearthside satellite paused") > away);
+				takeOverWith(102, PAD_GUID, PadStyle.PLAYSTATION);
+			} else {
+				// No take-over: pad 102 simply reconnects.
+				PADS.unplug(TAKEOVER_PAD);
+				PADS.plug(102, PAD_GUID, PadStyle.PLAYSTATION);
+			}
+			PADS.set(102, InputFrame.NEUTRAL);
+		}
+	}
+
+	/**
+	 * N5b (review Minor 2): a newcomer's controller dropping while they pick a profile in their own view dims their
+	 * picker under the same reconnect card, so a take-over of their seat is never unseen; replugging it brings it back.
+	 */
+	private void droppedWhilePicking() throws Exception {
+		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		try {
+			press(PICKING_PAD, PadButton.A);
+			press(PICKING_PAD, PadButton.A);
+			waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+			Thread.sleep(1500); // their view glides in and fades up
+			Rect r = onRender(() -> Compositor.active().overlayViews().stream().filter(v -> v.seat() == 2).findFirst()
+					.orElseThrow(() -> new AssertionError("missing: seat 2's view")).rect());
+			int x = r.x() + 8, y = r.y() + 8;
+			int bright = probePixel(x, y);
+			check(luminance(bright) > 15, "the picker's corner shows the plank wall (" + Integer.toHexString(bright) + ")");
+			PADS.unplug(PICKING_PAD);
+			waitFor("the picker dimmed under the reconnect card", Duration.ofSeconds(5),
+					() -> luminance(probePixel(x, y)) < 0.6 * luminance(bright));
+			windowShot("reconnect-over-picker");
+			PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+			waitFor("the picker bright again", Duration.ofSeconds(5),
+					() -> luminance(probePixel(x, y)) > 0.85 * luminance(bright));
+		} finally {
+			PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX); // back, if a failed check left it out
+			Thread.sleep(300);
+			if (onRender(() -> card(2) != null)) {
+				press(PICKING_PAD, PadButton.B);
+			}
+			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+			PADS.unplug(PICKING_PAD);
+			Thread.sleep(1000); // the views settle back before the next step
+		}
+	}
+
+	private static double luminance(int rgb) {
+		return 0.2126 * (rgb >> 16 & 0xFF) + 0.7152 * (rgb >> 8 & 0xFF) + 0.0722 * (rgb & 0xFF);
+	}
+
+	/**
+	 * N9 (Spec E section 3.7, M4): while a newcomer's view fades in under their card (player 1's view gliding out of its
+	 * way), player 1's border keeps its brightness, sampled every frame where it meets the newcomer's view.
+	 */
+	private void joinFadeKeepsBorders() throws Exception {
+		PADS.plug(PICKING_PAD, "fake-picking-pad", PadStyle.XBOX);
+		Thread.sleep(300);
+		long mark = hostLogLength();
+		try {
+			Compositor.e2eBorderSampling = true;
+			try {
+				press(PICKING_PAD, PadButton.A);
+				press(PICKING_PAD, PadButton.A);
+				waitFor("a newcomer choosing a profile", Duration.ofSeconds(10), () -> onRender(() -> card(2) != null));
+				Thread.sleep(1500); // through the glide and the fade
+			} finally {
+				Compositor.e2eBorderSampling = false;
+			}
+			// Three views: player 1 top-left, the newcomer below them. Their shared edge is player 1's bottom border.
+			Matcher m = Pattern.compile("hearthside border probe seat=0 edge=bottom rgb=([0-9a-f]{6})").matcher(hostLogSince(mark));
+			List<Integer> samples = new ArrayList<>();
+			while (m.find()) {
+				samples.add(Integer.parseInt(m.group(1), 16));
+			}
+			int mine = onRender(() -> Party.current().colorOf(0)) & 0xFFFFFF;
+			int theirs = onRender(() -> Party.current().colorOf(2)) & 0xFFFFFF;
+			double floor = 0.6 * 0.85 * Math.min(luminance(mine), luminance(theirs));
+			double darkest = samples.stream().mapToDouble(E2eDriver::luminance).min().orElse(-1);
+			log("   " + samples.size() + " border samples, darkest " + String.format("%.0f", darkest) + ", floor "
+					+ String.format("%.0f", floor));
+			check(samples.size() >= 20, "player 1's border sampled through the fade (" + samples.size() + " frames)");
+			check(darkest >= floor, "player 1's border kept its brightness through the newcomer's fade");
+		} finally {
+			if (onRender(() -> card(2) != null)) {
+				press(PICKING_PAD, PadButton.B);
+			}
+			waitFor("the newcomer gone", Duration.ofSeconds(10), () -> onRender(() -> card(2) == null));
+			PADS.unplug(PICKING_PAD);
+			Thread.sleep(1000); // the views settle back before the next step
+		}
+	}
+
+	/**
+	 * N1b (Spec E section 3.1, task 2 review M7): in split-screen, player 1's controller drives their own pause menu by
+	 * focus. START opens it on Resume; D-pad down and A open vanilla's Options, B comes back to the menu (on Resume
+	 * again); on the Leave confirm B is Keep playing; B on the menu resumes.
+	 */
+	private void hostPadPauseMenu() throws Exception {
+		waitFor("player 1 in play", Duration.ofSeconds(10), () -> onRender(() -> minecraft.gui.screen() == null));
+		claimHostPad();
+		try {
+			press(HOST_PAD, PadButton.START);
+			waitFor("player 1's pause menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
+			check(onRender(this::focusedLabel).equals("Resume"), "it opens on Resume (got " + onRender(this::focusedLabel) + ")");
+			// Player 1's menu has Add player, then Split-screen…, between Resume and Options… (Spec E sections 3.4, 3.5).
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check(onRender(this::focusedLabel).equals("Add player"), "the D-pad moves to Add player (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check(onRender(this::focusedLabel).equals("Split-screen…"), "then Split-screen… (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.DPAD_DOWN);
+			check(onRender(this::focusedLabel).equals("Options…"), "and on to Options… (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.A);
+			waitFor("vanilla's Options", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() instanceof OptionsScreen));
+			press(HOST_PAD, PadButton.B);
+			waitFor("B from Options back to the menu", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
+			check(onRender(this::focusedLabel).equals("Resume"), "back on Resume (got " + onRender(this::focusedLabel) + ")");
+
+			for (int i = 0; i < 5; i++) {
+				press(HOST_PAD, PadButton.DPAD_DOWN);
+			}
+			check(onRender(this::focusedLabel).equals("Leave game"), "the D-pad reaches Leave game (got " + onRender(this::focusedLabel) + ")");
+			press(HOST_PAD, PadButton.A);
+			waitFor("the Leave confirm", Duration.ofSeconds(5),
+					() -> onRender(() -> buttonLabels(minecraft.gui.screen()).contains("Keep playing")));
+			check(onRender(this::focusedLabel).equals("Keep playing"), "the confirm opens on Keep playing");
+			press(HOST_PAD, PadButton.B);
+			waitFor("B on the confirm is Keep playing", Duration.ofSeconds(5), () -> onRender(() -> onPauseMenu(minecraft.gui.screen())));
+
+			press(HOST_PAD, PadButton.B);
+			waitFor("B resumes", Duration.ofSeconds(5), () -> onRender(() -> minecraft.gui.screen() == null));
+		} finally {
+			releaseHostPad();
+		}
+	}
+
+	/**
+	 * N4 (Spec E section 3.1): player 1's Leave game asks first ("Keep playing" goes back); a guest's Leave game (D-pad
+	 * to it, A) takes them out of the world and closes their game.
+	 */
+	private void leaveGame() throws Exception {
+		onRender(() -> {
+			minecraft.pauseGame(false);
+			return null;
+		});
+		check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "player 1's pause menu is Hearthside's");
+		onRender(() -> {
+			pressLabelled("Leave game");
+			return null;
+		});
+		check(onRender(() -> buttonLabels(minecraft.gui.screen())).containsAll(List.of("Leave", "Keep playing")),
+				"player 1's Leave game asks first");
+		check(onRender(() -> minecraft.gui.screen().getTitle().getString()).contains("Leave the world? Everyone's game will close."),
+				"and says everyone's game will close");
+		onRender(() -> {
+			pressLabelled("Keep playing");
+			return null;
+		});
+		check(onRender(() -> onPauseMenu(minecraft.gui.screen())), "Keep playing goes back to the pause menu");
+		onRender(() -> {
+			minecraft.gui.setScreen(null);
+			return null;
+		});
+
+		int menus = count("hearthside pause menu opened");
+		press(102, PadButton.START);
+		waitFor("the guest's pause menu", Duration.ofSeconds(10), () -> count("hearthside pause menu opened") > menus);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.DPAD_DOWN);
+		press(102, PadButton.A);
+		waitFor("Player2 out of the world", Duration.ofSeconds(30), () -> playerCount() == 1);
+		waitFor("Player2's game closed", Duration.ofSeconds(15), () -> satellites().isEmpty());
+	}
+
+	/**
+	 * N8, the lobby half (Spec E section 3.6): player 1's PC keyboard types into a lobby card's name keyboard alongside
+	 * the controller. Letters replace the suggestion, Backspace deletes, a character a name can't have changes nothing,
+	 * Enter accepts the name. SDL text input is on while the card types (else no characters arrive), a space never presses
+	 * a focused lobby button, a held Backspace keeps deleting and a held Esc backs out of the keyboard once. The in-world
+	 * half is N8b.
+	 */
+	private void pcKeyboardTypesIntoTheLobbyCard() throws Exception {
+		PADS.plug(LOBBY_PAD, LOBBY_GUID, PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		openLobby();
+		try {
+			press(LOBBY_PAD, PadButton.A);
+			waitFor("a card for the seat", Duration.ofSeconds(10), () -> onRender(() -> card(1) != null));
+			toNew(1, LOBBY_PAD);
+			press(LOBBY_PAD, PadButton.A);
+			waitFor("the name keyboard", Duration.ofSeconds(5), () -> onRender(() -> card(1) != null && card(1).keyboard() != null));
+			// Characters arrive from the OS only while SDL text input is on (vanilla turns it on for a focused text box).
+			waitFor("text input on while the card types", Duration.ofSeconds(2), this::textInputActive);
+			pcType("Robin");
+			// A space is "_" in the name, and nothing else: not a press of the lobby button that has vanilla's focus.
+			onRender(() -> {
+				minecraft.gui.screen().setFocused(widgetLabelled("+ Controller"));
+				return null;
+			});
+			pcKey(InputConstants.KEY_SPACE);
+			pcType(" ");
+			String spaced = onRender(() -> card(1).keyboard().text());
+			check(spaced.equals("Robin_"), "a space typed _ into the name (got " + spaced + ")");
+			check(!onRender(() -> Party.current().hostClaimArmed() || Party.current().hostHasController()),
+					"and didn't press + Controller, which had focus");
+			// Held Backspace: a press and two repeats delete three characters, as in a text box.
+			pcHoldKey(InputConstants.KEY_BACKSPACE, 2);
+			String held = onRender(() -> card(1).keyboard().text());
+			check(held.equals("Rob"), "a held Backspace (a press, two repeats) deleted three characters (got " + held + ")");
+			pcType("i#");
+			String typed = onRender(() -> card(1).keyboard().text());
+			check(typed.equals("Robi"), "the PC keyboard typed i and refused # (got " + typed + ")");
+			pcKey(InputConstants.KEY_RETURN);
+			check(onRender(() -> card(1).setup().step()) == QuickSetup.Step.SKIN, "Enter accepts the typed name");
+			waitFor("text input off once the keyboard closed", Duration.ofSeconds(2), () -> !textInputActive());
+			// Held Esc: one press, two repeats and the release back out of the keyboard once, not the lobby too.
+			press(LOBBY_PAD, PadButton.B);
+			check(onRender(() -> card(1).keyboard() != null && card(1).setup().step() == QuickSetup.Step.NAME),
+					"B on Skin goes back to the name keyboard");
+			// The screen after each event (a second repeat would answer "End the party?" itself, hiding the first).
+			List<String> screens = onRender(() -> {
+				long window = minecraft.getWindow().handle();
+				KeyEvent esc = new KeyEvent(InputConstants.KEY_ESCAPE, 0, 0);
+				List<String> seen = new ArrayList<>();
+				for (int action : new int[] {InputConstants.PRESS, InputConstants.REPEAT, InputConstants.REPEAT,
+						InputConstants.RELEASE}) {
+					minecraft.keyboardHandler.keyPress(window, action, esc);
+					seen.add(minecraft.gui.screen().getClass().getSimpleName());
+				}
+				return seen;
+			});
+			Thread.sleep(200);
+			check(onRender(() -> card(1) != null && card(1).stage() == SeatCard.Stage.CAROUSEL),
+					"a held Esc closes the keyboard");
+			check(screens.stream().allMatch("LobbyScreen"::equals),
+					"and only that: no \"End the party?\" (screens " + screens + ")");
+		} finally {
+			for (int i = 0; i < 5 && onRender(() -> Party.current() != null && Party.current().seatedCount() > 0); i++) {
+				press(LOBBY_PAD, PadButton.B);
+			}
+			waitFor("the seat given up", Duration.ofSeconds(30),
+					() -> satellites().isEmpty() && onRender(() -> Party.current() == null || Party.current().seatedCount() == 0));
+			Files.deleteIfExists(satelliteLogFile());
+			if (onRender(() -> minecraft.gui.screen() instanceof LobbyScreen)) {
+				leaveLobby();
+			}
+			PADS.unplug(LOBBY_PAD);
+		}
+	}
+
+	/**
+	 * N8b, the in-world half (Spec E section 3.6, ruling R8): a newcomer's name keyboard in their own view takes player
+	 * 1's PC keyboard only while player 1 plays on a controller with no screen open. On keyboard and mouse (with no
+	 * controller, or holding one but looking with the mouse) their keys stay theirs: W reaches their forward key and nothing
+	 * is typed. Once the controller is used again W never reaches it; characters type,
+	 * Backspace deletes, and Esc closes the keyboard as B does (no pause menu); function keys stay player 1's, and SDL text
+	 * input is on only while the keyboard takes their keys (ruling P-12).
+	 */
+	private void pcKeyboardTypesIntoANewcomersKeyboard() throws Exception {
+		onRender(() -> {
+			if (minecraft.gui.screen() != null) {
+				minecraft.gui.setScreen(null);
+			}
+			return null;
+		});
+		// Its own controller, so the step works whoever else is in the party (Player2 is still there in a focused run).
+		int gamesBefore = satellites().size();
+		int cardsBefore = onRender(() -> newCardSeats(0));
+		PADS.plug(N8B_PAD, "fake-n8b-pad", PadStyle.PLAYSTATION);
+		Thread.sleep(300);
+		int seat = 0;
+		try {
+			press(N8B_PAD, PadButton.A);
+			press(N8B_PAD, PadButton.A);
+			waitFor("the newcomer's card", Duration.ofSeconds(10), () -> onRender(() -> newCardSeats(cardsBefore)) != 0);
+			seat = Integer.numberOfTrailingZeros(onRender(() -> newCardSeats(cardsBefore)));
+			int s = seat;
+			toNew(s, N8B_PAD);
+			press(N8B_PAD, PadButton.A);
+			waitFor("the newcomer's name keyboard", Duration.ofSeconds(5),
+					() -> onRender(() -> card(s) != null && card(s).keyboard() != null));
+			String suggested = onRender(() -> card(s).keyboard().text());
+
+			check(!onRender(() -> Party.current().hostHasController()), "player 1 is on keyboard and mouse");
+			check(pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
+					"on keyboard and mouse, W reaches player 1's forward key");
+			pcType("w");
+			String kept = onRender(() -> card(s).keyboard().text());
+			check(kept.equals(suggested), "and nothing is typed into the newcomer's keyboard (got " + kept + ")");
+			Thread.sleep(200);
+			check(!textInputActive(), "and text input stays off");
+
+			// Player 1 holds a controller but plays on keyboard and mouse (review I1): mouse-look takes their screen back
+			// from the controller, and their keys stay theirs.
+			claimHostPad();
+			check(onRender(() -> minecraft.gui.screen() == null), "player 1 holds a controller with no screen open");
+			osLook(6, 2);
+			osLook(6, 2);
+			check(pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
+					"holding a controller but playing on the mouse, W reaches player 1's forward key");
+			pcType("w");
+			String stillKept = onRender(() -> card(s).keyboard().text());
+			check(stillKept.equals(suggested), "and nothing is typed into the newcomer's keyboard (got " + stillKept + ")");
+			waitFor("text input off while player 1 plays on the mouse", Duration.ofSeconds(2), () -> !textInputActive());
+
+			// The controller used again: the keyboard is free, and typing goes to the newcomer once more.
+			nudgeHostPad();
+			check(!pcPressReaches(InputConstants.KEY_W, minecraft.options.keyUp),
+					"on a controller, W doesn't reach player 1's forward key");
+			// Function keys never type: they stay player 1's (F5 changes the camera; put back after).
+			boolean f5 = pcPressReaches(InputConstants.KEY_F5, minecraft.options.keyTogglePerspective);
+			Thread.sleep(200);
+			onRender(() -> {
+				minecraft.options.setCameraType(CameraType.FIRST_PERSON);
+				return null;
+			});
+			check(f5, "F5 still reaches player 1's camera key");
+			waitFor("text input on while the newcomer's keyboard takes player 1's keys", Duration.ofSeconds(2),
+					this::textInputActive);
+			pcType("Robin");
+			pcKey(InputConstants.KEY_BACKSPACE);
+			String typed = onRender(() -> card(s).keyboard().text());
+			check(typed.equals("Robi"), "the PC keyboard typed Robin into the newcomer's keyboard and deleted the n (got "
+					+ typed + ")");
+			pcKey(InputConstants.KEY_ESCAPE);
+			check(onRender(() -> card(s) != null && card(s).stage() == SeatCard.Stage.CAROUSEL),
+					"Esc closes the newcomer's keyboard, as B does");
+			check(onRender(() -> minecraft.gui.screen() == null), "and doesn't pause player 1's game");
+			waitFor("text input off once the newcomer's keyboard closed", Duration.ofSeconds(2), () -> !textInputActive());
+		} finally {
+			if (onRender(() -> Party.current().hostHasController())) {
+				releaseHostPad();
+			}
+			// The newcomer backs out (B closes their keyboard, B again leaves), as before the step.
+			int s = seat;
+			for (int i = 0; i < 3 && s > 0 && onRender(() -> card(s) != null); i++) {
+				press(N8B_PAD, PadButton.B);
+			}
+			PADS.unplug(N8B_PAD);
+			waitFor("the newcomer gone", Duration.ofSeconds(30),
+					() -> satellites().size() <= gamesBefore && onRender(() -> s == 0 || card(s) == null));
+		}
+	}
+
+	private static final int N8B_PAD = 114;
+
+	/** Player 1's mouse-look in play: an OS move with relative motion, as SDL sends it while the cursor is held. */
+	private void osLook(double dx, double dy) throws Exception {
+		onRender(() -> {
+			var window = minecraft.getWindow();
+			// Well away from the centre, where grabbing the cursor warped it, so it's never mistaken for that warp's echo.
+			double x = window.getScreenWidth() / 2.0 + 40 + dx, y = window.getScreenHeight() / 2.0 + 40 + dy;
+			minecraft.mouseHandler.onMove(window.handle(), x, y, dx, dy);
+			return null;
+		});
+		Thread.sleep(50);
+	}
+
+	/**
+	 * Player 1's right stick nudged in play, held until the game has seen it (a fixed few ms could fall between two slow
+	 * frames under Vulkan validation): the controller is what they play on again.
+	 */
+	private void nudgeHostPad() throws Exception {
+		PADS.set(HOST_PAD, new InputFrame(0, 0, 0, 0, 0.5f, 0, 0, 0));
+		try {
+			Thread.sleep(60);
+			waitFor("player 1's controller used", Duration.ofSeconds(2),
+					() -> onRender(() -> RealMouse.handOff().owner() == PointerHandOff.Owner.PAD));
+		} finally {
+			PADS.set(HOST_PAD, InputFrame.NEUTRAL);
+		}
+		Thread.sleep(150);
+	}
+
+	/** Seats with a card open (newcomers choosing) and not in {@code known}, as bits by seat. Render thread. */
+	private int newCardSeats(int known) {
+		int seats = 0;
+		for (int seat = 1; seat < 4; seat++) {
+			if (card(seat) != null && (known & 1 << seat) == 0) {
+				seats |= 1 << seat;
+			}
+		}
+		return seats;
+	}
+
+	/** Player 1's PC keyboard holding {@code key} down: its press, {@code repeats} of the OS's key repeats, its release. */
+	private void pcHoldKey(int key, int repeats) throws Exception {
+		onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, new KeyEvent(key, 0, 0));
+			for (int i = 0; i < repeats; i++) {
+				minecraft.keyboardHandler.keyPress(window, InputConstants.REPEAT, new KeyEvent(key, 0, 0));
+			}
+			minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, new KeyEvent(key, 0, 0));
+			return null;
+		});
+		Thread.sleep(100);
+	}
+
+	/** Whether SDL delivers typed characters to player 1's window now (text input on). */
+	private boolean textInputActive() throws Exception {
+		return onRender(() -> SDLKeyboard.SDL_TextInputActive(minecraft.getWindow().handle()));
+	}
+
+	/** Player 1's PC keyboard pressing {@code key}: whether {@code mapping} went down. Then the key is let go. */
+	private boolean pcPressReaches(int key, KeyMapping mapping) throws Exception {
+		return onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, new KeyEvent(key, 0, 0));
+			boolean down = mapping.isDown();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, new KeyEvent(key, 0, 0));
+			return down;
+		});
+	}
+
+	/** Player 1's PC keyboard typing {@code text}, as the window's character events arrive. */
+	private void pcType(String text) throws Exception {
+		onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			text.chars().forEach(c -> minecraft.keyboardHandler.charTyped(window, new CharacterEvent(c)));
+			return null;
+		});
+		Thread.sleep(100);
+	}
+
+	/** Player 1's PC keyboard pressing and releasing {@code key}. */
+	private void pcKey(int key) throws Exception {
+		onRender(() -> {
+			long window = minecraft.getWindow().handle();
+			minecraft.keyboardHandler.keyPress(window, InputConstants.PRESS, new KeyEvent(key, 0, 0));
+			minecraft.keyboardHandler.keyPress(window, InputConstants.RELEASE, new KeyEvent(key, 0, 0));
+			return null;
+		});
+		Thread.sleep(100);
 	}
 
 	/** Survival on a cleared platform, looking 30° down at the block two ahead (0 250 2). */
@@ -4566,10 +6009,13 @@ public final class E2eDriver {
 	}
 
 	private void player2Leaves() throws Exception {
-		onRender(() -> {
-			Party.current().leave("Player2");
-			return null;
-		});
+		// N4 may already have taken Player2 out through their own Leave game.
+		if (guest("Player2") != null) {
+			onRender(() -> {
+				Party.current().leave("Player2");
+				return null;
+			});
+		}
 		PADS.unplug(102);
 		waitFor("1 player", Duration.ofSeconds(30), () -> playerCount() == 1);
 		waitFor("satellite exit", Duration.ofSeconds(15), () -> satellites().isEmpty());

@@ -34,8 +34,15 @@ public final class OverlayPass {
 	private static boolean drawn;
 	private static boolean failed;
 	private static volatile boolean reduceMotion;
+	/** The GUI scale the overlay was last drawn at (0 before it first was). */
+	private static int lastScale;
 
 	private OverlayPass() {}
+
+	/** The GUI scale the overlay was last drawn at, 0 before it first was. Render thread. */
+	static int lastScale() {
+		return lastScale;
+	}
 
 	public static void register(OverlayLayer layer) {
 		if (!LAYERS.contains(layer)) {
@@ -65,6 +72,19 @@ public final class OverlayPass {
 	/** The texture holding this frame's overlay, or empty when nothing was drawn. */
 	public static Optional<GpuTextureView> texture() {
 		return drawn && target != null ? Optional.ofNullable(target.getColorTextureView()) : Optional.empty();
+	}
+
+	/**
+	 * Lets go of the overlay's target (made again by the next pass that needs it): Minecraft is stopping, and its GPU
+	 * device must not go with the target still alive. Render thread.
+	 */
+	public static void release() {
+		TextureTarget old = target;
+		target = null;
+		drawn = false;
+		if (old != null) {
+			old.destroyBuffers();
+		}
 	}
 
 	/** At the end of the host's frame: renders every layer at the window's size, while compositing. */
@@ -98,6 +118,7 @@ public final class OverlayPass {
 		window.width = width;
 		window.height = height;
 		window.guiScale = scale;
+		lastScale = scale;
 		active = true;
 		try {
 			var graphics = new GuiGraphicsExtractor(minecraft, gameRenderer.gameRenderState().guiRenderState, -1, -1);

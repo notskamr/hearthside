@@ -477,6 +477,12 @@ public final class Compositor {
 	/** E2E: while set, every view's centre is read each frame and a bare divider colour is logged as a gap. */
 	public static volatile boolean e2eGapSampling;
 
+	/**
+	 * E2E: while set, every frame the middle of each of player 1's four border edges is read, as the overlay draws
+	 * them, and logged.
+	 */
+	public static volatile boolean e2eBorderSampling;
+
 	/** E2E: a window point (pixels from the top-left) whose composited colour is logged too, or null. */
 	public static volatile int[] e2eProbePoint;
 }
