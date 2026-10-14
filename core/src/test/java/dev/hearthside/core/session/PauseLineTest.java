@@ -37,4 +37,20 @@ class PauseLineTest {
 		// e.g. a player from another machine is connected over LAN: the world never freezes.
 		assertThat(PauseLine.of(playing())).isEqualTo("The world keeps going");
 	}
+
+	@Test
+	void aPlayersOwnMenuNeverNamesThem() {
+		// A guest's menu opens before player 1's game has heard that guest paused (final review M1).
+		assertThat(PauseLine.forPlayer(playing("Alex", "Sam"), "Sam")).isEqualTo("The world keeps going — Alex is still playing");
+		assertThat(PauseLine.forPlayer(playing("Sam"), "Sam")).isEqualTo("The world keeps going");
+		assertThat(PauseLine.forPlayer(playing("Alex", "Sam", "Kai"), "Alex"))
+				.isEqualTo("The world keeps going — Sam and Kai are still playing");
+	}
+
+	@Test
+	void anotherPlayersNameAndTheFrozenLineAreKept() {
+		assertThat(PauseLine.forPlayer(playing("Alex"), "Sam")).isEqualTo("The world keeps going — Alex is still playing");
+		assertThat(PauseLine.forPlayer(new PausePolicy.Decision(true, List.of()), "Sam"))
+				.isEqualTo("Everyone's paused — the world is frozen");
+	}
 }
