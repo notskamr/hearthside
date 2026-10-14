@@ -589,6 +589,39 @@ public final class Party {
 				session.close();
 			}
 		});
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+			Party party = current;
+			if (party != null) {
+				party.gameStopping();
+			}
+			// Kept from party to party, so let go of even with none open.
+			try {
+				OverlayPass.release();
+			} catch (RuntimeException e) {
+				HearthsideMod.LOGGER.error("Hearthside couldn't let go of its overlay as the game stopped", e);
+			}
+		});
+	}
+
+	/** Minecraft is stopping: split-screen ends now, and doesn't start again. Render thread. */
+	private boolean stopping;
+
+	/**
+	 * Minecraft is stopping (render thread, before it leaves the world and tears its GPU device down): the views'
+	 * imported frames, the canvas and the party map are let go now. The party closing with the world would only queue
+	 * that for a frame that never comes, and the device would go with them still alive. If that fails, Minecraft stops
+	 * regardless.
+	 */
+	private void gameStopping() {
+		stopping = true;
+		try {
+			leaveSplitScreen();
+			if (Compositor.active() != null) {
+				Compositor.deactivate(minecraft);
+			}
+		} catch (RuntimeException e) {
+			HearthsideMod.LOGGER.error("Hearthside couldn't let go of the views' frames as the game stopped", e);
+		}
 	}
 
 	/** The party for the co-op lobby: the current one, or a new one waiting for a world. Render thread. */
@@ -2412,6 +2445,9 @@ public final class Party {
 
 	/** Re-lays out the views, or leaves split-screen mode when the last guest has gone. Render thread. */
 	private void afterGuestsChanged() {
+		if (stopping) {
+			return; // nothing is laid out again as Minecraft stops
+		}
 		List<Slot> guests = new ArrayList<>(slots.values());
 		if (world == null) {
 			// In the lobby guests' games wait hidden; views are laid out once a world is open.
