@@ -13,9 +13,6 @@ fi
 NAME=$1
 shift
 cd "$(dirname "$0")/../.." || exit 1
-if [ -z "$JAVA_HOME" ] && [ -f .superpowers/env.sh ]; then
-  source .superpowers/env.sh
-fi
 case "$(uname -s)" in
   MINGW*|MSYS*) WINDOWS=1 ;;
   *) WINDOWS= ;;
@@ -32,7 +29,7 @@ until mkdir "$LOCK" 2>/dev/null; do
   sleep 15
 done
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-LOGS=.superpowers/e2e-logs
+LOGS=build/e2e-logs
 mkdir -p "$LOGS"
 R=fabric/run-e2e/hearthside-e2e-report.txt
 rm -f "$R"

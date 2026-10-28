@@ -24,9 +24,8 @@ The range lives in `SodiumVersion.TESTED`.
 
 `tools/e2e/run-e2e.sh <log name> [-P…]` runs the E2E from Git Bash on Windows or from a macOS shell:
 
-- It finds the repository from its own location. It uses `JAVA_HOME` if set, else sources `.superpowers/env.sh` if
-  present.
-- It passes its extra arguments to Gradle and writes Gradle's output to `.superpowers/e2e-logs/<log name>.log`.
+- It finds the repository from its own location. Gradle needs Java 25: set `JAVA_HOME` first if it isn't the default.
+- It passes its extra arguments to Gradle and writes Gradle's output to `build/e2e-logs/<log name>.log`.
 - It stops the run as soon as the report ends with `DONE`, `READY_FOR_HOST_KILL host=… satellite=…` or `ABORTED …`.
 - On `READY_FOR_HOST_KILL` it performs step 7: it force-kills the host and prints `STEP 7 PASS` once the guest's
   game exits by itself (or `STEP 7 FAIL` after 15 s).
@@ -291,7 +290,7 @@ Found while building this:
 
 ## Laptops and performance (Spec D) — 2026-10-12, same machine
 
-After the first friend-laptop test (Intel integrated graphics, a TV, three players): copied frames hardened and moved
+After the first laptop test (Intel integrated graphics, a TV, three players): copied frames hardened and moved
 to shared memory, performance presets, one GUI size for every view, the Vulkan offer, and hints that toasts never
 cover. New switches: `-Pe2eForceCopy=true` (every frame copied, as on Intel's OpenGL) and `-Pe2ePreset=<name>` (every
 party on that preset). This desktop's real Vulkan probe reports "AMD Radeon RX 9060 XT can share frames", and Auto

@@ -4,7 +4,11 @@ run/
 out/
 .idea/
 *.iml
-.superpowers/
 run-satellite/
 run-e2e/
+logs/
+crash-reports/
+.jqwik-database
+.DS_Store
 .claude/worktrees/
+.claude/settings.local.json

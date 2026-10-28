@@ -1,14 +1,23 @@
 # Hearthside
 
-Couch co-op split-screen for Minecraft Java Edition: up to four players on one PC, each with their own controller,
-profile and view, in one window. Every player runs a real Minecraft game side by side (hidden), and player 1's window
-composites them — on OpenGL or Vulkan — so Sodium, Iris and other mods behave as they do alone.
+Couch co-op split-screen for Minecraft: Java Edition. Up to four players on one PC, each with their own controller,
+profile and view, in one window. Every player runs a real Minecraft game in the background and player 1's window shows
+them all, on OpenGL or Vulkan, so Sodium, Iris and other mods behave as they do when you play alone.
 
-- **Play it:** [docs/install.md](docs/install.md) — requirements, install, how to start a party, settings and known
+Hearthside is an early alpha for Minecraft 26.3 on Fabric.
+
+- **Play it:** [docs/install.md](docs/install.md) covers requirements, install, starting a party, settings and known
   limitations.
-- **Status and plans:** [docs/backlog.md](docs/backlog.md).
-- **How it's built:** the specs in [docs/superpowers/specs/](docs/superpowers/specs/) (the original design, the
-  compositor, the co-op experience and "one window everywhere").
-- **Testing:** [docs/testing/e2e.md](docs/testing/e2e.md) — the desktop end-to-end run and its results.
+- **What's next:** planned work and known bugs live in [GitHub issues](https://github.com/notskamr/hearthside/issues).
+- **Testing:** [docs/testing/e2e.md](docs/testing/e2e.md) describes the desktop end-to-end run and its results.
 
-Minecraft Java 26.3, Fabric. Build with `./gradlew build` (Java 25); the mod jar is `fabric/build/libs/hearthside-<version>.jar`.
+## Building
+
+`./gradlew build` with Java 25. The mod jar is `fabric/build/libs/hearthside-<version>.jar`.
+
+## License
+
+Hearthside is licensed under the GNU Lesser General Public License v3.0 only ([COPYING.LESSER](COPYING.LESSER), which
+builds on the GPL v3.0 in [COPYING](COPYING)).
+
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.

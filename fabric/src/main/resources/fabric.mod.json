@@ -4,7 +4,13 @@
 	"version": "${version}",
 	"name": "Hearthside",
 	"description": "Seamless local split-screen co-op.",
-	"license": "All-Rights-Reserved",
+	"authors": ["Varun Sahni"],
+	"contact": {
+		"homepage": "https://github.com/notskamr/hearthside",
+		"sources": "https://github.com/notskamr/hearthside",
+		"issues": "https://github.com/notskamr/hearthside/issues"
+	},
+	"license": "LGPL-3.0-only",
 	"environment": "*",
 	"entrypoints": {
 		"main": ["dev.hearthside.fabric.HearthsideMod"],
